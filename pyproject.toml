@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "merfish_pipeline"
+version = "0.1.0"
+description = "End-to-end pipeline for MERFISH experiment setup and analysis"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Leonardo Sepulveda", email = "leonardosepulveda@gmail.com" }]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-image",
+    "Pillow",
+    "shapely",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
