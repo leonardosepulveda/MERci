@@ -1,0 +1,15 @@
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Packaging metadata
+*.egg-info/
+*.egg
+dist/
+build/
+
+# output 
+output/
