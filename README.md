@@ -10,17 +10,25 @@ It generates the configuration files consumed by HAL (imaging), Kilroy (fluidics
 
 MERci is cloned directly into the experiment folder — no package installation is needed.
 
-**Create the conda environment** (one-time, per computer):
+**Install Miniforge** (one-time, per computer): download and run the installer from
+`https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe`
+
+Miniforge provides `mamba`, a fast drop-in replacement for `conda`.
+
+**Create the environment** (one-time, per computer):
 
 ```bash
-conda env create -f environment.yml
+mamba env create -f environment.yml
 ```
 
-Activate it before opening any notebook:
+**Open the notebooks:**
 
 ```bash
-conda activate merci_env
+mamba activate merci_env
+jupyter lab
 ```
+
+Then navigate to `MERci/notebooks/` in the JupyterLab file browser. Open notebooks from that folder so that `SAMPLE_DIR` is auto-detected correctly.
 
 ---
 
