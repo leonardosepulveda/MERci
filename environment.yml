@@ -4,11 +4,13 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
-  - numpy
-  - pandas
-  - matplotlib
-  - shapely
-  - pillow
-  - scikit-image
-  - jupyterlab
-  - ipykernel
+  - pip
+  - pip:
+    - numpy
+    - pandas
+    - matplotlib
+    - shapely
+    - pillow
+    - scikit-image
+    - jupyterlab
+    - ipykernel
