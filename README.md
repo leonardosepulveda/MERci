@@ -63,7 +63,7 @@ Key parameters to set:
 
 | Variable | Description | Example |
 |---|---|---|
-| `MICROSCOPE` | Microscope identifier | `"MF3"` |
+| `MICROSCOPE` | Microscope identifier | `"my_scope"` |
 | `z_bead` | z position for fiducial bead frames (µm) | `0` |
 | `bead_seq` | Laser colours for bead frames | `[488, np.nan]` |
 | `color_seq` | Laser colours for data frames | `[560, 650]` |
@@ -111,7 +111,7 @@ Key parameters to set:
 
 | Variable | Description | Example |
 |---|---|---|
-| `MICROSCOPE` | Microscope identifier | `"MF3"` |
+| `MICROSCOPE` | Microscope identifier | `"my_scope"` |
 | `N_BITS` | Number of hybridisation rounds | `8` |
 | `BITS_HAL_CONFIG` | HAL config for bits rounds | auto-detected |
 | `CELLS_HAL_CONFIG` | HAL config for cells round | auto-detected |
@@ -240,4 +240,4 @@ Raw uint16 binary image stacks written by HAL.  Frame dimensions are read from t
 | 405 | 4 |
 | blank | NaN |
 
-Same mapping for both MF3 and MF5.
+This is the default mapping; it can be extended in `acquisition/configs.py` for other microscopes.
