@@ -5,10 +5,12 @@ Generate FOV grids and optimised scanning paths for stage-based MERFISH imaging.
 Typical workflow
 ----------------
 1. Define the tissue boundary and any excluded regions (holes).
-2. ``create_grid_positions`` – build a regular ``(H, W, 2)`` grid.
+2. ``create_grid_positions`` – build a regular ``(H, W, 2)`` grid with an odd
+   number of rows and columns, centred on the midpoint of the boundary bounding box.
 3. ``generate_scanning_path`` – order grid points in a boustrophedon pattern.
 4. ``load_hole_polygons`` – load polygon masks for excluded areas.
-5. ``filter_scanning_path`` – remove FOVs outside the boundary or inside holes.
+5. ``filter_scanning_path`` – keep FOVs whose camera frame overlaps the boundary;
+   remove FOVs whose camera frame overlaps any hole.
 6. ``close_scanning_path`` – move the "return" points to the end of the path.
 7. ``get_path_stats`` – inspect total travel distance and largest single step.
 8. ``merfish_pipeline.common.io.save_positions_array`` – write positions.txt.
@@ -21,65 +23,57 @@ from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Polygon, box as shapely_box
 
 log = logging.getLogger(__name__)
 
 
 # ── Grid construction ─────────────────────────────────────────────────────────
 
-def _even_1d_coords(
-    center: float,
-    d_min:  float,
-    d_max:  float,
-    step:   float,
-) -> np.ndarray:
+def _odd_1d_coords(center: float, d_min: float, d_max: float, step: float) -> np.ndarray:
     """
-    Return evenly-spaced 1-D coordinates centred near *center*.
+    Return evenly-spaced 1-D coordinates centred exactly on *center*.
 
-    The count is rounded to the nearest even number and the bounds are
-    adjusted symmetrically so that the spacing is exact.
+    The count is the smallest odd number such that the coordinates span at
+    least [d_min, d_max].
     """
-    span = d_max - d_min
-    n    = int(round(span / step))
-    if n % 2 == 1:
-        n += 1
-    if n == 0:
-        return np.array([])
-
-    extra  = n * step - span
-    d_min -= extra / 2
-    d_max += extra / 2
-    return np.arange(d_min, d_max, step)
+    span   = d_max - d_min
+    n      = int(np.ceil(span / step))
+    if n % 2 == 0:
+        n += 1                          # ensure odd
+    n_half = (n - 1) // 2
+    return center + np.arange(-n_half, n_half + 1) * step
 
 
 def create_grid_positions(
-    cx:        float,
-    cy:        float,
-    xmin:      float,
-    ymin:      float,
-    xmax:      float,
-    ymax:      float,
-    step_size: float,
+    boundary_polygon: Polygon,
+    step_size:        float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Build a regular 2-D grid of stage coordinates.
+    Build a regular 2-D grid centred on the midpoint of *boundary_polygon*'s
+    bounding box.
+
+    The grid has an odd number of rows (H) and columns (W), so there is always
+    one cell exactly at the centre.  The grid is large enough to cover the full
+    bounding box of the boundary.
 
     Parameters
     ----------
-    cx, cy     : centroid of the bounding box (grid centred on this)
-    xmin, ymin : lower-left corner of the bounding box
-    xmax, ymax : upper-right corner of the bounding box
-    step_size  : distance between adjacent grid points (µm)
+    boundary_polygon : Shapely Polygon of the tissue boundary
+    step_size        : distance between adjacent grid points (µm)
 
     Returns
     -------
     grid : ``(H, W, 2)`` array of ``(x, y)`` coordinates
-    xs   : 1-D x-coordinates
-    ys   : 1-D y-coordinates
+    xs   : 1-D x-coordinates (length W, odd)
+    ys   : 1-D y-coordinates (length H, odd)
     """
-    xs = _even_1d_coords(cx, xmin, xmax, step_size)
-    ys = _even_1d_coords(cy, ymin, ymax, step_size)
+    xmin, ymin, xmax, ymax = boundary_polygon.bounds
+    cx = (xmin + xmax) / 2.0
+    cy = (ymin + ymax) / 2.0
+
+    xs = _odd_1d_coords(cx, xmin, xmax, step_size)
+    ys = _odd_1d_coords(cy, ymin, ymax, step_size)
 
     Xg, Yg = np.meshgrid(xs, ys)
     grid   = np.stack([Xg, Yg], axis=-1)   # (H, W, 2)
@@ -181,37 +175,46 @@ def filter_scanning_path(
     coords:           np.ndarray,
     boundary_polygon: Polygon,
     hole_polygons:    List[Polygon],
-    dilate:           float = 0.0,
+    fov_size_um:      float,
 ) -> np.ndarray:
     """
-    Keep only FOV coordinates that are inside the tissue boundary and
-    outside every hole region.
+    Keep FOVs whose camera frame overlaps the tissue boundary; exclude any
+    that are fully contained within a hole region.
+
+    Each FOV is modelled as a square of side *fov_size_um* centred at its
+    stage coordinate (``pixel_size_um × image_size_px``).  A FOV is kept when:
+
+    * its square has **any** overlap with *boundary_polygon*, **and**
+    * no hole polygon **fully contains** its square.
+
+    A FOV that only partially overlaps a hole is kept — it still captures
+    tissue outside the hole.
 
     Parameters
     ----------
-    coords           : ``(N, 2)`` candidate coordinates
+    coords           : ``(N, 2)`` candidate stage coordinates
     boundary_polygon : outer tissue boundary
     hole_polygons    : list of Shapely Polygons to exclude
-    dilate           : buffer distance applied to the boundary before testing
-                       (positive = expand, negative = shrink, in stage units)
+    fov_size_um      : camera FOV side length in stage units
+                       (``pixel_size_um × image_size_px``)
 
     Returns
     -------
     ``(M, 2)`` array of accepted coordinates in their original order.
     """
-    coords   = np.asarray(coords, dtype=float)
-    boundary = boundary_polygon.buffer(dilate) if dilate != 0.0 else boundary_polygon
+    coords = np.asarray(coords, dtype=float)
+    half   = fov_size_um / 2.0
 
     kept = []
     for x, y in coords:
-        p = Point(x, y)
-        if not boundary.covers(p):
+        fov_poly = shapely_box(x - half, y - half, x + half, y + half)
+        if not fov_poly.intersects(boundary_polygon):
             continue
-        if any(hole.covers(p) for hole in hole_polygons):
+        if any(hole.contains(fov_poly) for hole in hole_polygons):
             continue
         kept.append((x, y))
 
-    return np.array(kept)
+    return np.array(kept) if kept else np.empty((0, 2))
 
 
 # ── Loop closure ───────────────────────────────────────────────────────────────

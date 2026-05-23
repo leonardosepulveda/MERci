@@ -28,7 +28,7 @@ from .analysis.fov    import (
     measure_stats,
     get_histogram,
 )
-from .analysis_round    import create_mosaic, load_thumbnails_for_round
+from .analysis.round    import create_mosaic, load_thumbnails_for_round
 
 log = logging.getLogger(__name__)
 

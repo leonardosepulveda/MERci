@@ -33,19 +33,23 @@ class SeriesInfo:
     Attributes
     ----------
     name          : series pattern, e.g. ``hal-mf3-epi_{fov:03d}_00``
-    round_id      : explicit imaging round number
+    round_id      : explicit imaging round number (``imaging_round`` column)
     imaging_type  : optional label such as ``"bits"`` or ``"cells"``
     hal_config    : optional HAL config filename for this series
     shutter_file  : optional shutter XML filename for this series
+    dir           : optional per-round data directory; when set, image paths
+                    are resolved relative to this directory instead of the
+                    top-level ``data_dir``
     extra_meta    : all remaining CSV columns as a plain dict
     """
 
     name:          str
     round_id:      int
-    imaging_type:  Optional[str] = None
-    hal_config:    Optional[str] = None
-    shutter_file:  Optional[str] = None
-    extra_meta:    Dict          = field(default_factory=dict)
+    imaging_type:  Optional[str]  = None
+    hal_config:    Optional[str]  = None
+    shutter_file:  Optional[str]  = None
+    dir:           Optional[Path] = None
+    extra_meta:    Dict           = field(default_factory=dict)
 
     _regex: "re.Pattern" = field(init=False, repr=False)
 
@@ -214,10 +218,13 @@ def _read_round_info(csv_path: Path) -> pd.DataFrame:
     """
     Load ``round_info.csv``.
 
-    Required columns: ``round_id``, ``series``
-    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, others
+    Required columns: ``imaging_round`` (or legacy ``round_id``), ``series``
+    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, ``dir``, others
     """
     df = pd.read_csv(csv_path)
+    # Accept 'imaging_round' (new) or 'round_id' (legacy)
+    if "imaging_round" in df.columns and "round_id" not in df.columns:
+        df = df.rename(columns={"imaging_round": "round_id"})
     for col in ("round_id", "series"):
         if col not in df.columns:
             raise ValueError(
@@ -262,19 +269,22 @@ def _read_positions(pos_path: Path) -> Dict[int, Tuple[float, float]]:
 
 
 def _parse_series_row(row: pd.Series) -> SeriesInfo:
-    reserved = {"round_id", "series", "imaging_type", "hal_config", "shutter_file"}
+    reserved = {"round_id", "imaging_round", "series", "imaging_type",
+                "hal_config", "shutter_file", "dir"}
     extra    = {k: v for k, v in row.items() if k not in reserved}
 
     def _opt(key: str) -> Optional[str]:
         val = row.get(key)
         return str(val).strip() if pd.notna(val) else None
 
+    dir_str = _opt("dir")
     return SeriesInfo(
         name         = str(row["series"]),
         round_id     = int(row["round_id"]),
         imaging_type = _opt("imaging_type"),
         hal_config   = _opt("hal_config"),
         shutter_file = _opt("shutter_file"),
+        dir          = Path(dir_str) if dir_str else None,
         extra_meta   = extra,
     )
 
@@ -316,7 +326,8 @@ def _build_metadata(
                 )
                 continue
 
-            fpath = data_dir / fname
+            base_dir = s.dir if s.dir is not None else data_dir
+            fpath = base_dir / fname
             fovs[fov_id].files[s.name] = fpath
             if rid not in fovs[fov_id].round_ids:
                 fovs[fov_id].round_ids.append(rid)
