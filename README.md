@@ -1,6 +1,6 @@
 # MERci
 
-**MERci** (MERFISH acquisition + quality control) is a Python toolkit for planning and monitoring MERFISH spatial transcriptomics experiments on MF3/MF5 microscopes.
+**MERci** (MERFISH acquisition + quality control) is a Python toolkit for planning and monitoring MERFISH spatial transcriptomics experiments on any microscope running the HAL/Dave/Kilroy/Steve software stack.
 
 It generates the configuration files consumed by HAL (imaging), Kilroy (fluidics), and Dave (experiment orchestration), and runs a lightweight online quality-control analysis while the experiment is running.
 
