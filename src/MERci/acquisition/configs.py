@@ -252,14 +252,17 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
     Build the text content of the ``<z_offsets>`` XML element from
     ``frame_table["z"]``.
 
-    Each z value is repeated ``group_size`` times (once per colour in the
-    sequence), and values are laid out in rows of ``group_size`` with a comma
-    after every value except the very last.
+    Values are laid out in rows matching the colour sequence length (the most
+    common consecutive-run length), with a comma after every value except the
+    last.  Bead and end frames with a different run length are handled gracefully.
     """
-    z_vals = frame_table["z"].astype(float).tolist()
+    from collections import Counter
 
-    # Compute run lengths (how many consecutive frames share the same z)
-    run_lengths = []
+    z_vals = frame_table["z"].astype(float).tolist()
+    n      = len(z_vals)
+
+    # Determine row width from the most common consecutive run length
+    run_lengths: List[int] = []
     count, last = 0, object()
     for val in z_vals:
         if val == last:
@@ -271,32 +274,15 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
     if count:
         run_lengths.append(count)
 
-    group_size = run_lengths[0]
-    if not all(rl == group_size for rl in run_lengths):
-        raise ValueError(
-            f"Inconsistent run lengths in frame_table z column: {run_lengths}. "
-            "All z groups must have the same number of frames."
-        )
+    group_size = Counter(run_lengths).most_common(1)[0][0] if run_lengths else 1
 
-    # Unique z values in original order
-    unique_z: List[float] = []
-    last = object()
-    for val in z_vals:
-        if val != last:
-            unique_z.append(val)
-            last = val
-
-    # Flat list: each z repeated group_size times
-    values = [v for v in unique_z for _ in range(group_size)]
-
-    # Format into rows of group_size; comma after every value except the last
+    # Format all z values in rows of group_size
     indent  = "         "
-    total   = len(values)
     lines:  List[str] = []
     row_buf: List[str] = []
 
-    for i, val in enumerate(values):
-        suffix  = "" if i == total - 1 else ","
+    for i, val in enumerate(z_vals):
+        suffix = "," if i < n - 1 else ""
         row_buf.append(f"{val:.1f}{suffix}")
         if len(row_buf) == group_size:
             lines.append(indent + "  ".join(row_buf))
