@@ -37,7 +37,7 @@ class SeriesInfo:
     imaging_type  : optional label such as ``"bits"`` or ``"cells"``
     hal_config    : optional HAL config filename for this series
     shutter_file  : optional shutter XML filename for this series
-    dir           : optional per-round data directory; when set, image paths
+    data_dir      : optional per-round data directory; when set, image paths
                     are resolved relative to this directory instead of the
                     top-level ``data_dir``
     extra_meta    : all remaining CSV columns as a plain dict
@@ -48,7 +48,7 @@ class SeriesInfo:
     imaging_type:  Optional[str]  = None
     hal_config:    Optional[str]  = None
     shutter_file:  Optional[str]  = None
-    dir:           Optional[Path] = None
+    data_dir:      Optional[Path] = None
     extra_meta:    Dict           = field(default_factory=dict)
 
     _regex: "re.Pattern" = field(init=False, repr=False)
@@ -270,21 +270,22 @@ def _read_positions(pos_path: Path) -> Dict[int, Tuple[float, float]]:
 
 def _parse_series_row(row: pd.Series) -> SeriesInfo:
     reserved = {"round_id", "imaging_round", "series", "imaging_type",
-                "hal_config", "shutter_file", "dir"}
+                "hal_config", "shutter_file", "data_dir", "dir"}
     extra    = {k: v for k, v in row.items() if k not in reserved}
 
     def _opt(key: str) -> Optional[str]:
         val = row.get(key)
         return str(val).strip() if pd.notna(val) else None
 
-    dir_str = _opt("dir")
+    # Accept data_dir (new) or dir (legacy)
+    dir_str = _opt("data_dir") or _opt("dir")
     return SeriesInfo(
         name         = str(row["series"]),
         round_id     = int(row["round_id"]),
         imaging_type = _opt("imaging_type"),
         hal_config   = _opt("hal_config"),
         shutter_file = _opt("shutter_file"),
-        dir          = Path(dir_str) if dir_str else None,
+        data_dir     = Path(dir_str) if dir_str else None,
         extra_meta   = extra,
     )
 
@@ -326,7 +327,7 @@ def _build_metadata(
                 )
                 continue
 
-            base_dir = s.dir if s.dir is not None else data_dir
+            base_dir = s.data_dir if s.data_dir is not None else data_dir
             fpath = base_dir / fname
             fovs[fov_id].files[s.name] = fpath
             if rid not in fovs[fov_id].round_ids:
