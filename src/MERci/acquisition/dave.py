@@ -85,13 +85,14 @@ def create_round_info(
     n_bits            : number of bits (hybridisation) rounds
     bits_hal_config   : HAL config filename for bits rounds (with ``.xml``)
     cells_hal_config  : HAL config filename for the cells round (with ``.xml``)
-    sample_dir        : experiment root directory; used to build ``dir`` paths
+    sample_dir        : experiment root directory; used to build ``data_dir`` paths
 
     Returns
     -------
-    pd.DataFrame with columns ``imaging_round``, ``series``, ``hal_config``, ``dir``
+    pd.DataFrame with columns ``imaging_round``, ``series``, ``hal_config``, ``data_dir``
     """
-    mic   = microscope.lower()
+    mic      = microscope.lower()
+    data_dir = str(sample_dir / "data")
     rows: List[dict] = []
 
     # Round 1: bits + cells
@@ -99,13 +100,13 @@ def create_round_info(
         "imaging_round": 1,
         "series":        f"hal-{mic}-epi_01_{{fov:03d}}",
         "hal_config":    bits_hal_config,
-        "dir":           str(sample_dir / "data" / "H01"),
+        "data_dir":      data_dir,
     })
     rows.append({
         "imaging_round": 1,
         "series":        f"hal-{mic}-epi_cells_{{fov:03d}}",
         "hal_config":    cells_hal_config,
-        "dir":           str(sample_dir / "data" / "cells"),
+        "data_dir":      str(sample_dir / "data" / "cells"),
     })
 
     # Rounds 2 … N: bits only
@@ -114,10 +115,10 @@ def create_round_info(
             "imaging_round": i,
             "series":        f"hal-{mic}-epi_{i:02d}_{{fov:03d}}",
             "hal_config":    bits_hal_config,
-            "dir":           str(sample_dir / "data" / f"H{i:02d}"),
+            "data_dir":      data_dir,
         })
 
-    return pd.DataFrame(rows, columns=["imaging_round", "series", "hal_config", "dir"])
+    return pd.DataFrame(rows, columns=["imaging_round", "series", "hal_config", "data_dir"])
 
 
 # ── Dave config builder ────────────────────────────────────────────────────────
