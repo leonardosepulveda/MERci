@@ -246,10 +246,10 @@ def _write_dave_xml(root: ET.Element, output_path: Path) -> None:
     """Serialize the recipe with indentation and CRLF line endings."""
     raw  = ET.tostring(root, encoding="utf-8")
     dom  = minidom.parseString(raw)
-    text = dom.toprettyxml(indent="\t", encoding="ISO-8859-1").decode("ISO-8859-1")
+    text = dom.toprettyxml(indent="    ", encoding="ISO-8859-1").decode("ISO-8859-1")
 
     # Remove the extra blank line toprettyxml adds before every element
-    text = re.sub(r"\n\t*\n", "\n", text)
+    text = re.sub(r"\n[ \t]*\n", "\n", text)
     text = text.replace("\n", "\r\n")
 
     with open(output_path, "w", encoding="ISO-8859-1", newline="") as fh:
