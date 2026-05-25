@@ -146,18 +146,19 @@ def _series_to_regexp(series: str) -> str:
     """
     Build the MERlin ``imageRegExp`` from a series pattern.
 
-    Series with two ``{…}`` placeholders (round + fov) get a regexp that
-    captures ``imagingRound`` before ``fov``; series with one placeholder
-    get a simpler regexp capturing only ``fov``.
+    If the series base (after stripping the ``_{fov:…}`` placeholder) still
+    has a trailing ``_\\d+`` round segment, the regexp captures
+    ``imagingRound`` before ``fov``.  Otherwise (e.g. cells) only ``fov``
+    is captured.
 
     Examples
     --------
     ``"hal-mf3-epi_01_{fov:03d}"``   →
-        ``(?P<imageType>[\\w|-]+)_(?P<imagingRound>[0-9]+)_(?P<fov>[0-9]+)``
+        ``(?P<imageType>[\\w|-]+)_(?P<imagingRound>[\\w|-]+)_(?P<fov>[0-9]+)``
     ``"hal-mf3-epi_cells_{fov:03d}"`` →
         ``(?P<imageType>[\\w|-]+)_(?P<fov>[0-9]+)``
     """
-    n_placeholders = len(re.findall(r"\{[^}]+\}", series))
-    if n_placeholders >= 2:
-        return r"(?P<imageType>[\w|-]+)_(?P<imagingRound>[0-9]+)_(?P<fov>[0-9]+)"
+    base = re.sub(r"_\{[^}]+\}$", "", series)   # strip _{fov:03d}
+    if re.search(r"_\d+$", base):
+        return r"(?P<imageType>[\w|-]+)_(?P<imagingRound>[\w|-]+)_(?P<fov>[0-9]+)"
     return r"(?P<imageType>[\w|-]+)_(?P<fov>[0-9]+)"
