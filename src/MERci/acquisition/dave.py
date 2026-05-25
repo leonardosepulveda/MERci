@@ -288,14 +288,12 @@ def annotate_dave_with_round_info(
     for round_1idx, bit, color_nm in round_bit_color:
         bits_by_round[round_1idx].append((bit, color_nm))
 
-    round_comments: dict[int, str] = {}
+    round_comments: dict[int, list[str]] = {}
     for round_1idx, bit_colors in sorted(bits_by_round.items()):
-        # Sort bits by color descending (750 → 650 → 560)
-        bit_strs = ", ".join(
+        round_comments[round_1idx] = [
             f"Bit {bit} ({color} nm)"
             for bit, color in sorted(bit_colors, key=lambda x: x[1], reverse=True)
-        )
-        round_comments[round_1idx] = f"Round {round_1idx}: {bit_strs}"
+        ]
 
     # Read file preserving raw CRLF so split("\r\n") works correctly
     with open(dave_path, "r", encoding="ISO-8859-1", newline="") as fh:
@@ -308,19 +306,23 @@ def annotate_dave_with_round_info(
         stripped = line.strip()
         indent   = line[: len(line) - len(line.lstrip())]
 
+        def _append_comment(n: int) -> None:
+            if n not in round_comments:
+                return
+            new_lines.append("")
+            new_lines.append(f"{indent}<!-- Round {n}:")
+            for s in round_comments[n]:
+                new_lines.append(f"{indent}        {s}")
+            new_lines.append(f"{indent}-->")
+
         # Round 1: insert before "Imaging Round 01" loop
         if stripped == '<loop name="Imaging Round 01">':
-            if 1 in round_comments:
-                new_lines.append("")
-                new_lines.append(f"{indent}<!-- {round_comments[1]} -->")
+            _append_comment(1)
         else:
             # Rounds 2+: insert before the corresponding "Fluidics Round NN" loop
             m = re.match(r'^<loop name="Fluidics Round (\d+)">', stripped)
             if m:
-                n = int(m.group(1))
-                if n in round_comments:
-                    new_lines.append("")
-                    new_lines.append(f"{indent}<!-- {round_comments[n]} -->")
+                _append_comment(int(m.group(1)))
 
         new_lines.append(line)
 
