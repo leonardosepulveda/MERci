@@ -297,8 +297,8 @@ def annotate_dave_with_round_info(
         )
         round_comments[round_1idx] = f"Round {round_1idx}: {bit_strs}"
 
-    # Read file (CRLF line endings, ISO-8859-1 encoding)
-    with open(dave_path, "r", encoding="ISO-8859-1") as fh:
+    # Read file preserving raw CRLF so split("\r\n") works correctly
+    with open(dave_path, "r", encoding="ISO-8859-1", newline="") as fh:
         content = fh.read()
 
     lines = content.split("\r\n")
