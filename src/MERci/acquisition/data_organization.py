@@ -66,13 +66,13 @@ def create_data_organization(
             "imageType":           bits_image_type,
             "imageRegExp":         bits_regexp,
             "bitNumber":           bit,
-            "imagingRound":        round_1idx - 1,      # MERlin is 0-indexed
+            "imagingRound":        round_1idx,
             "color":               color_nm,
             "frame":               _frames_for_color(bits_frame_table, color_nm),
             "zPos":                _zpos_for_color(bits_frame_table, color_nm),
             "fiducialImageType":   bits_image_type,
             "fiducialRegExp":      bits_regexp,
-            "fiducialImagingRound": round_1idx - 1,
+            "fiducialImagingRound": round_1idx,
             "fiducialFrame":       fid_frame_bits,
             "fiducialColor":       488,
         })

@@ -13,12 +13,15 @@ This makes the file easy to inspect and edit before starting an experiment.
 Experiment structure
 --------------------
 Round 1 (imaging): bits acquisition + cells acquisition for all FOVs
-Fluidics 1:        Cleave → Hybridize 1 → Wash and Imaging Buffers
+Fluidics Round 02: Cleave → Hybridize/Adaptor 2 → [Readouts] → Buffer
 Round 2 (imaging): bits acquisition for all FOVs
-Fluidics 2:        Cleave → Hybridize 2 → Wash and Imaging Buffers
+Fluidics Round 03: Cleave → Hybridize/Adaptor 3 → [Readouts] → Buffer
 …
 Round N (imaging): bits acquisition
-Final fluidics:    Cleave only
+[Optional] Fluidics Final: Cleave only
+
+Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
+precedes "Imaging Round 02").
 
 The ``round_info.csv`` drives everything:
 - rows with the same ``imaging_round`` are acquired in the same imaging loop
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional, Sequence
 from xml.dom import minidom
@@ -47,8 +51,8 @@ def series_to_movie_name(series: str) -> str:
 
     Examples
     --------
-    ``hal-mf3-epi_01_{fov:03d}``   → ``hal-mf3-epi_01``
-    ``hal-mf3-epi_cells_{fov:03d}`` → ``hal-mf3-epi_cells``
+    ``hal-mf3-epi_01_{fov:03d}``    → ``hal-mf3-epi_01``
+    ``hal-mf3-epi-cells_{fov:03d}`` → ``hal-mf3-epi-cells``
     """
     return re.sub(r"_\{[^}]+\}$", "", series)
 
@@ -95,7 +99,7 @@ def create_round_info(
     data_dir = str(sample_dir / "data")
     rows: List[dict] = []
 
-    # Round 1: bits + cells
+    # Round 1: bits + cells (cells series uses hyphen: hal-{mic}-epi-cells)
     rows.append({
         "imaging_round": 1,
         "series":        f"hal-{mic}-epi_01_{{fov:03d}}",
@@ -104,7 +108,7 @@ def create_round_info(
     })
     rows.append({
         "imaging_round": 1,
-        "series":        f"hal-{mic}-epi_cells_{{fov:03d}}",
+        "series":        f"hal-{mic}-epi-cells_{{fov:03d}}",
         "hal_config":    cells_hal_config,
         "data_dir":      str(sample_dir / "data" / "cells"),
     })
@@ -124,36 +128,44 @@ def create_round_info(
 # ── Dave config builder ────────────────────────────────────────────────────────
 
 def create_dave_config(
-    round_info:              pd.DataFrame,
-    positions_file:          Path,
-    settings_dir:            Path,
-    output_path:             Path,
-    num_focus_checks:        int = 50,
-    fluidics_protocols:      Optional[Sequence[str]] = None,
-    final_fluidics_protocol: str = "Cleave direct",
+    round_info:           pd.DataFrame,
+    positions_file:       Path,
+    settings_dir:         Path,
+    output_path:          Path,
+    use_adaptors:         bool = False,
+    include_final_cleave: bool = False,
+    num_focus_checks:     int  = 50,
+    fluidics_protocols:   Optional[Sequence[str]] = None,
 ) -> None:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
 
-    Each unique ``imaging_round`` value produces one imaging loop followed by
-    one fluidics loop.  The last imaging round is followed only by
-    ``final_fluidics_protocol``.
+    Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
+    precedes "Imaging Round 02").  The last imaging round has no trailing
+    fluidics unless ``include_final_cleave=True``.
 
     Parameters
     ----------
-    round_info              : DataFrame with columns ``imaging_round``,
-                              ``series``, ``hal_config``
-    positions_file          : path to ``positions_*.txt``; written as-is into
-                              each ``<loop_variable>/<file_path>``
-    settings_dir            : directory containing the HAL config XML files
-                              (used to read ``<frames>`` counts)
-    output_path             : where to write the recipe XML
-    num_focus_checks        : value for ``<num_focus_checks>``
-    fluidics_protocols      : ordered list of Kilroy protocol names executed
-                              between imaging rounds; defaults to
-                              ``["Cleave direct", "Hybridize {N}", "Wash and Imaging Buffers"]``
-                              where N is the imaging round number
-    final_fluidics_protocol : single protocol run after the last imaging round
+    round_info            : DataFrame with columns ``imaging_round``,
+                            ``series``, ``hal_config``
+    positions_file        : path to ``positions_*.txt``; written into each
+                            ``<loop_variable>/<file_path>``
+    settings_dir          : directory containing the HAL config XML files
+                            (used to read ``<frames>`` counts)
+    output_path           : where to write the recipe XML
+    use_adaptors          : if True, generate adaptor-based fluidics
+                            (``Cleave adaptors`` / ``Hyb adaptors N`` /
+                            ``Hyb readouts`` / ``Flow Image Buffer``);
+                            if False, use direct readout protocols
+                            (``Cleave direct`` / ``Hybridize N`` /
+                            ``Wash and Imaging Buffers``)
+    include_final_cleave  : if True, append a "Fluidics Final" block after the
+                            last imaging round containing only a single cleave
+                            step (``Cleave adaptors`` or ``Cleave direct``)
+    num_focus_checks      : value for ``<num_focus_checks>``
+    fluidics_protocols    : if provided, use this fixed list of Kilroy protocol
+                            names for every between-round fluidics block,
+                            overriding ``use_adaptors``
     """
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
@@ -161,8 +173,8 @@ def create_dave_config(
     root = ET.Element("recipe")
     seq  = ET.SubElement(root, "command_sequence")
 
-    imaging_loop_vars: list[tuple[str, str]] = []   # (loop_name, positions_path)
-    fluidics_loop_vars: list[tuple[str, list[str]]] = []  # (loop_name, [protocols])
+    imaging_loop_vars:  list[tuple[str, str]]       = []
+    fluidics_loop_vars: list[tuple[str, list[str]]] = []
 
     for idx, round_id in enumerate(round_ids):
         is_last  = (idx == n_rounds - 1)
@@ -176,13 +188,13 @@ def create_dave_config(
         for _, row in rows.iterrows():
             movie_name   = series_to_movie_name(str(row["series"]))
             hal_filename = str(row["hal_config"])
-            hal_stem     = Path(hal_filename).stem   # strip .xml if present
+            hal_stem     = Path(hal_filename).stem
             hal_path     = settings_dir / (hal_stem + ".xml")
 
             try:
                 n_frames = get_hal_frame_count(hal_path)
             except (FileNotFoundError, ValueError):
-                n_frames = 0   # leave as 0 if config not yet written
+                n_frames = 0
 
             movie = ET.SubElement(img_loop, "movie")
             name_el = ET.SubElement(movie, "name")
@@ -204,26 +216,36 @@ def create_dave_config(
         imaging_loop_vars.append((img_name, str(positions_file)))
 
         # ── Fluidics loop ──────────────────────────────────────────────────────
-        if is_last:
-            fl_name      = "Fluidics Final"
-            fl_protocols = [final_fluidics_protocol]
-        else:
-            fl_name = f"Fluidics Round {round_id:02d}"
+        if not is_last:
+            next_round = round_id + 1
+            fl_name    = f"Fluidics Round {next_round:02d}"
             if fluidics_protocols is not None:
                 fl_protocols = list(fluidics_protocols)
+            elif use_adaptors:
+                fl_protocols = [
+                    "Cleave adaptors",
+                    f"Hyb adaptors {next_round}",
+                    "Hyb readouts",
+                    "Flow Image Buffer",
+                ]
             else:
                 fl_protocols = [
                     "Cleave direct",
-                    f"Hybridize {round_id}",
+                    f"Hybridize {next_round}",
                     "Wash and Imaging Buffers",
                 ]
+        elif include_final_cleave:
+            fl_name      = "Fluidics Final"
+            fl_protocols = ["Cleave adaptors" if use_adaptors else "Cleave direct"]
+        else:
+            fl_name = None
 
-        fl_loop = ET.SubElement(seq, "loop")
-        fl_loop.set("name", fl_name)
-        ve = ET.SubElement(fl_loop, "variable_entry")
-        ve.set("name", fl_name)
-
-        fluidics_loop_vars.append((fl_name, fl_protocols))
+        if fl_name is not None:
+            fl_loop = ET.SubElement(seq, "loop")
+            fl_loop.set("name", fl_name)
+            ve = ET.SubElement(fl_loop, "variable_entry")
+            ve.set("name", fl_name)
+            fluidics_loop_vars.append((fl_name, fl_protocols))
 
     # ── Loop variables ─────────────────────────────────────────────────────────
     for lname, pos_path in imaging_loop_vars:
@@ -239,6 +261,72 @@ def create_dave_config(
             ET.SubElement(val, "valve_protocol").text = protocol
 
     _write_dave_xml(root, Path(output_path))
+
+
+# ── Dave annotation ────────────────────────────────────────────────────────────
+
+def annotate_dave_with_round_info(
+    dave_path:       Path,
+    round_bit_color: list[tuple],
+) -> None:
+    """
+    Insert XML comments into an existing Dave recipe XML describing which bits
+    are imaged in each round.
+
+    For round 1: comment is placed before the ``<loop name="Imaging Round 01">``
+    block.  For rounds 2+: comment is placed before the corresponding
+    ``<loop name="Fluidics Round NN">`` block (which precedes that imaging
+    round).  A blank line is inserted before each comment for readability.
+
+    Parameters
+    ----------
+    dave_path       : path to the Dave XML file to annotate (modified in-place)
+    round_bit_color : list of ``(round_1indexed, bit_number, color_nm)`` tuples
+    """
+    # Group bits by round and build comment strings
+    bits_by_round: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for round_1idx, bit, color_nm in round_bit_color:
+        bits_by_round[round_1idx].append((bit, color_nm))
+
+    round_comments: dict[int, str] = {}
+    for round_1idx, bit_colors in sorted(bits_by_round.items()):
+        # Sort bits by color descending (750 → 650 → 560)
+        bit_strs = ", ".join(
+            f"Bit {bit} ({color} nm)"
+            for bit, color in sorted(bit_colors, key=lambda x: x[1], reverse=True)
+        )
+        round_comments[round_1idx] = f"Round {round_1idx}: {bit_strs}"
+
+    # Read file (CRLF line endings, ISO-8859-1 encoding)
+    with open(dave_path, "r", encoding="ISO-8859-1") as fh:
+        content = fh.read()
+
+    lines = content.split("\r\n")
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        indent   = line[: len(line) - len(line.lstrip())]
+
+        # Round 1: insert before "Imaging Round 01" loop
+        if stripped == '<loop name="Imaging Round 01">':
+            if 1 in round_comments:
+                new_lines.append("")
+                new_lines.append(f"{indent}<!-- {round_comments[1]} -->")
+        else:
+            # Rounds 2+: insert before the corresponding "Fluidics Round NN" loop
+            m = re.match(r'^<loop name="Fluidics Round (\d+)">', stripped)
+            if m:
+                n = int(m.group(1))
+                if n in round_comments:
+                    new_lines.append("")
+                    new_lines.append(f"{indent}<!-- {round_comments[n]} -->")
+
+        new_lines.append(line)
+
+    content = "\r\n".join(new_lines)
+    with open(dave_path, "w", encoding="ISO-8859-1", newline="") as fh:
+        fh.write(content)
 
 
 # ── XML writer ─────────────────────────────────────────────────────────────────
