@@ -4,7 +4,7 @@
   <camera1>
 
     <!-- imaging settings -->
-    <exposure_time type="float">0.2</exposure_time>
+    <exposure_time type="float">0.25</exposure_time>
 
     <!-- view settings -->
     <colortable type="string">ramp.ctbl</colortable>
@@ -23,7 +23,7 @@
     <auto_increment type="int">1</auto_increment>
     <auto_shutters type="int">1</auto_shutters>
     <filename type="string">test</filename> 
-    <filetype type="string">.dax</filetype>
+    <filetype type="string">.zarr</filetype>
     <frames type="int">164</frames>
     <logfile type="string">F:\Data\image_log.txt</logfile>
     <want_bell type="int">1</want_bell>
