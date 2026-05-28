@@ -8,9 +8,13 @@ load_round_info         – read round_info.csv
 load_positions          – read comma-separated positions file
 save_positions_array    – write (N,2) array to comma-separated file
 parse_inf               – parse HAL .inf sidecar
-read_dax                – load a raw .dax file into a numpy array
-get_dax_shape           – read shape without loading pixel data
+read_dax                – load a raw .dax file into a numpy array  (uint16)
+read_zarr               – load a HAL .zarr store into a numpy array (uint16)
+read_tiff               – load a multi-page .tiff into a numpy array (uint16)
+read_image              – format-agnostic dispatcher for the three formats above
+get_dax_shape           – read .dax shape without loading pixel data
 discover_image_files    – scan a directory for stable image files
+                          (handles flat files and .zarr directory stores)
 """
 from __future__ import annotations
 
@@ -211,39 +215,178 @@ def get_dax_shape(
     return int(nf), int(fh), int(fw)
 
 
+# ── Multi-format readers ──────────────────────────────────────────────────────
+
+def read_zarr(
+    zarr_path: Path,
+    dtype:     type = np.uint16,
+) -> np.ndarray:
+    """
+    Load a HAL-written ``.zarr`` store and return a ``(n_frames, H, W)`` array.
+
+    The store is expected to contain a single zarr Array at the root level
+    (the format written by Storm Control / HAL2).  If a zarr Group is found,
+    the first array child is used.
+
+    Parameters
+    ----------
+    zarr_path : path to the ``.zarr`` directory store
+    dtype     : cast output to this dtype (default ``uint16``)
+
+    Returns
+    -------
+    numpy array of shape ``(n_frames, height, width)``
+    """
+    try:
+        import zarr
+    except ImportError as exc:
+        raise ImportError(
+            "The 'zarr' package is required for .zarr support. "
+            "Install it with: pip install zarr"
+        ) from exc
+
+    store = zarr.open(str(zarr_path), mode="r")
+    if isinstance(store, zarr.Array):
+        arr = store[:]
+    else:
+        # Group: use the first (and typically only) array child
+        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
+        if not keys:
+            raise ValueError(
+                f"No zarr Array found inside group store: {zarr_path}"
+            )
+        arr = store[keys[0]][:]
+
+    return arr.astype(dtype)
+
+
+def read_tiff(
+    tiff_path: Path,
+    dtype:     type = np.uint16,
+) -> np.ndarray:
+    """
+    Load a multi-page ``.tiff`` file and return a ``(n_frames, H, W)`` array.
+
+    Parameters
+    ----------
+    tiff_path : path to the TIFF file
+    dtype     : cast output to this dtype (default ``uint16``)
+
+    Returns
+    -------
+    numpy array of shape ``(n_frames, height, width)``
+    """
+    try:
+        import tifffile
+    except ImportError as exc:
+        raise ImportError(
+            "The 'tifffile' package is required for .tiff support. "
+            "Install it with: pip install tifffile"
+        ) from exc
+
+    arr = tifffile.imread(str(tiff_path))
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, ...]   # single frame → (1, H, W)
+    return arr.astype(dtype)
+
+
+def read_image(
+    path:         Path,
+    frame_width:  Optional[int] = None,
+    frame_height: Optional[int] = None,
+    n_frames:     Optional[int] = None,
+    dtype:        type          = np.uint16,
+) -> np.ndarray:
+    """
+    Format-agnostic image reader.  Dispatches to :func:`read_dax`,
+    :func:`read_zarr`, or :func:`read_tiff` based on the file extension.
+
+    Returns a ``(n_frames, height, width)`` array of *dtype*.
+
+    The *frame_width*, *frame_height*, and *n_frames* parameters are forwarded
+    to :func:`read_dax` only; zarr and tiff embed their own metadata.
+    """
+    path   = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".dax":
+        return read_dax(path, frame_width=frame_width,
+                        frame_height=frame_height, n_frames=n_frames, dtype=dtype)
+    if suffix == ".zarr":
+        return read_zarr(path, dtype=dtype)
+    if suffix in (".tiff", ".tif"):
+        return read_tiff(path, dtype=dtype)
+    raise ValueError(
+        f"Unsupported image format '{suffix}' for path: {path}. "
+        "Supported formats: .dax, .zarr, .tiff"
+    )
+
+
 def discover_image_files(
     data_dir:        Path,
-    suffix:          str   = ".dax",
+    suffix:          str   = ".zarr",
     recursive:       bool  = True,
     stability_check: bool  = True,
     stability_delay: float = 0.1,
 ) -> List[Path]:
     """
-    Return a sorted list of image files under *data_dir* that are not still
+    Return a sorted list of image paths under *data_dir* that are not still
     being written.
+
+    Handles both flat-file formats (``.dax``, ``.tiff``) and directory-based
+    stores (``.zarr``).
 
     Parameters
     ----------
-    stability_check : if True, verify file size is unchanged after a short
-                      delay (skips partially-written files)
-    stability_delay : seconds between size measurements
+    suffix          : file extension / directory suffix to search for
+    stability_check : skip entries whose size changes within *stability_delay*
+                      seconds (catches partially-written files).
+                      For ``.zarr`` directories the total content size is used.
+    stability_delay : seconds between the two size measurements
     """
     glob       = data_dir.rglob if recursive else data_dir.glob
     candidates = sorted(glob(f"*{suffix}"))
 
     if not stability_check:
-        return [p for p in candidates if p.stat().st_size > 0]
+        stable = []
+        for p in candidates:
+            try:
+                if p.is_dir():
+                    # zarr store: accept if non-empty
+                    if any(p.iterdir()):
+                        stable.append(p)
+                elif p.stat().st_size > 0:
+                    stable.append(p)
+            except (FileNotFoundError, StopIteration):
+                pass
+        return stable
 
     stable = []
     for p in candidates:
         try:
-            s0 = p.stat().st_size
-            if s0 == 0:
-                continue
-            time.sleep(stability_delay)
-            s1 = p.stat().st_size
+            if p.is_dir():
+                # Directory store (zarr): measure total content size
+                s0 = _dir_content_size(p)
+                if s0 == 0:
+                    continue
+                time.sleep(stability_delay)
+                s1 = _dir_content_size(p)
+            else:
+                s0 = p.stat().st_size
+                if s0 == 0:
+                    continue
+                time.sleep(stability_delay)
+                s1 = p.stat().st_size
             if s0 == s1:
                 stable.append(p)
         except FileNotFoundError:
             pass
     return stable
+
+
+def _dir_content_size(path: Path) -> int:
+    """Sum of file sizes for all files under *path* (non-recursive files only)."""
+    return sum(
+        f.stat().st_size
+        for f in path.rglob("*")
+        if f.is_file()
+    )

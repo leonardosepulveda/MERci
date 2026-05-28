@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple  # noqa: F401 (Optional/List used in annotations)
 
 import numpy as np
 
@@ -115,11 +115,12 @@ def create_mosaic(
 
 
 def load_thumbnails_for_round(
-    round_id: int,
-    metadata,              # ExperimentMetadata
+    round_id:       int,
+    metadata,                           # ExperimentMetadata
     thumbnails_dir: Path,
-    frame_idx: int = 0,
-    series_idx: int = 0,   # which series per FOV to use when multiple exist
+    frame_idx:      int = 0,
+    series_idx:     int = 0,            # which series per FOV when multiple exist
+    fov_subset:     Optional[List[int]] = None,
 ) -> Tuple[Dict[int, np.ndarray], Dict[int, Tuple[float, float]]]:
     """
     Load existing thumbnail PNGs for every FOV in *round_id*.
@@ -131,6 +132,7 @@ def load_thumbnails_for_round(
     thumbnails_dir : directory that contains ``{stem}_frame{n:03d}.png`` files
     frame_idx      : which frame index thumbnail to load (default 0)
     series_idx     : when a round has multiple series per FOV, pick this one
+    fov_subset     : if given, only load thumbnails for these FOV ids
 
     Returns
     -------
@@ -143,13 +145,17 @@ def load_thumbnails_for_round(
     if round_info is None:
         raise KeyError(f"Round {round_id} not found in metadata")
 
+    fov_set = set(fov_subset) if fov_subset is not None else None
+
     thumbnails: Dict[int, np.ndarray] = {}
     positions:  Dict[int, Tuple[float, float]] = {}
 
     for fov_id, file_list in round_info.fov_files.items():
+        if fov_set is not None and fov_id not in fov_set:
+            continue
         if not file_list:
             continue
-        idx = min(series_idx, len(file_list) - 1)
+        idx   = min(series_idx, len(file_list) - 1)
         fpath = file_list[idx]
         thumb_path = (
             Path(thumbnails_dir) / f"{fpath.stem}_frame{frame_idx:03d}.png"

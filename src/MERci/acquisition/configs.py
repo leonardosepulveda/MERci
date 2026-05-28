@@ -198,6 +198,8 @@ def create_hal_config(
     shutter_filename: str,
     output_path:      Path,
     default_power:    Optional[List[float]] = None,
+    file_type:        str                   = ".zarr",
+    exposure_time:    float                 = 0.25,
 ) -> None:
     """
     Patch a HAL config XML template and write the result to *output_path*.
@@ -207,6 +209,8 @@ def create_hal_config(
     * ``<frames>``        → ``len(frame_table)``
     * ``<shutters>``      → *shutter_filename*
     * ``<z_offsets>``     → derived from ``frame_table["z"]``
+    * ``<filetype>``      → *file_type* (e.g. ``".zarr"``, ``".dax"``, ``".tiff"``)
+    * ``<exposure_time>`` → *exposure_time* (seconds)
     * ``<default_power>`` → *default_power* (only if provided)
 
     All comments and overall formatting are preserved.
@@ -219,6 +223,9 @@ def create_hal_config(
                        e.g. ``"shutter_blkf2-560f49-650f49.xml"``
     output_path      : where to write the patched config
     default_power    : list of per-channel power values; omitted if ``None``
+    file_type        : image file format written by HAL (``".zarr"``, ``".dax"``,
+                       or ``".tiff"``); default ``".zarr"``
+    exposure_time    : camera exposure time in seconds; default ``0.25``
     """
     with open(template_path, "rb") as fh:
         text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
@@ -233,9 +240,11 @@ def create_hal_config(
             flags=re.DOTALL,
         )
 
-    text = _sub("frames",    str(len(frame_table)))
-    text = _sub("shutters",  shutter_filename)
-    text = _sub("z_offsets", format_z_offsets_from_frame_table(frame_table))
+    text = _sub("frames",        str(len(frame_table)))
+    text = _sub("shutters",      shutter_filename)
+    text = _sub("z_offsets",     format_z_offsets_from_frame_table(frame_table))
+    text = _sub("filetype",      file_type)
+    text = _sub("exposure_time", f"{exposure_time:.4f}")
 
     if default_power is not None:
         text = _sub("default_power", ",".join(str(v) for v in default_power))
@@ -292,6 +301,93 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
         lines.append(indent + "  ".join(row_buf))
 
     return "\n" + "\n".join(lines) + "\n      "
+
+
+# ── HAL config inspection helpers ────────────────────────────────────────────
+
+def read_hal_flip_vertical(hal_config_path: Path) -> bool:
+    """
+    Return ``True`` if ``<flip_vertical>1</flip_vertical>`` is set in the
+    HAL config at *hal_config_path*.  Returns ``False`` on any parse error.
+    """
+    try:
+        with open(hal_config_path, "rb") as fh:
+            text = fh.read().decode("ISO-8859-1")
+        m = re.search(r"<flip_vertical[^>]*>(\d+)</flip_vertical>", text)
+        return bool(m and int(m.group(1)) == 1)
+    except Exception:
+        return False
+
+
+def find_frame_table_for_hal_config(
+    hal_config_path: Path,
+    metadata_dir:    Path,
+) -> "Optional[Path]":
+    """
+    Locate the frame-table CSV that corresponds to *hal_config_path*.
+
+    Strategy: read the ``<shutters>`` element from the HAL config
+    (``shutter-{name}.xml``), strip the ``shutter-`` prefix to recover
+    *name*, and return ``metadata_dir/frame_table_{name}.csv`` if it exists.
+
+    Returns ``None`` when the frame table cannot be found.
+    """
+    try:
+        with open(hal_config_path, "rb") as fh:
+            text = fh.read().decode("ISO-8859-1")
+        m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
+        if not m:
+            return None
+        shutter_stem = Path(m.group(1).strip()).stem  # shutter-{name}
+        if shutter_stem.startswith("shutter-"):
+            name = shutter_stem[len("shutter-"):]
+        else:
+            name = shutter_stem
+        candidate = Path(metadata_dir) / f"frame_table_{name}.csv"
+        return candidate if candidate.exists() else None
+    except Exception:
+        return None
+
+
+def get_color_frame_indices(
+    frame_table: pd.DataFrame,
+    bead_z:      float = 0.0,
+) -> "Dict[float, int]":
+    """
+    For each non-blank, non-bead color in *frame_table* return the frame index
+    at the z position closest to the midpoint of the z-stack.
+
+    Parameters
+    ----------
+    frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
+                  integer index equal to the camera frame number
+    bead_z      : z value used for fiducial (bead) frames; those rows are
+                  excluded from the search
+
+    Returns
+    -------
+    ``{color_nm: frame_idx}`` — one entry per non-blank color; the frame index
+    is the first occurrence of that color at the middle-z slice.
+    """
+    df = frame_table.copy()
+    df["frame_idx"] = df.index
+
+    # Keep only data frames (not bead/end frames at bead_z) with real colors
+    data = df[(df["z"] != bead_z) & df["color"].notna()].copy()
+    if data.empty:
+        return {}
+
+    z_vals  = data["z"].unique()
+    z_mid   = (z_vals.min() + z_vals.max()) / 2.0
+    best_z  = z_vals[int(np.argmin(np.abs(z_vals - z_mid)))]
+
+    at_mid = data[data["z"] == best_z]
+    result: Dict[float, int] = {}
+    for _, row in at_mid.iterrows():
+        color = float(row["color"])
+        if color not in result:
+            result[color] = int(row["frame_idx"])
+    return result
 
 
 # ── Pretty-print helper ───────────────────────────────────────────────────────

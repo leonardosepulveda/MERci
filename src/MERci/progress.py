@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-_FOV_DONE_SUFFIX   = ".fov_done"
-_ROUND_DONE_SUFFIX = ".round_done"
+_FOV_DONE_SUFFIX          = ".fov_done"
+_ROUND_DONE_SUFFIX        = ".round_done"
+_ROUND_TRANSFERRED_SUFFIX = ".round_transferred"
 
 
 class ProgressTracker:
@@ -54,14 +55,19 @@ class ProgressTracker:
     def histogram_path(self, dax_path: Path) -> Path:
         return self.histograms_dir / f"{Path(dax_path).stem}_histograms.npz"
 
-    def mosaic_path(self, round_id: int) -> Path:
-        return self.mosaics_dir / f"round_{round_id:03d}_mosaic.png"
+    def mosaic_path(self, round_id: int, color: Optional[float] = None) -> Path:
+        if color is None:
+            return self.mosaics_dir / f"round_{round_id:03d}_mosaic.png"
+        return self.mosaics_dir / f"round_{round_id:03d}_{int(color)}nm_mosaic.png"
 
     def fov_sentinel(self, dax_path: Path) -> Path:
         return self.done_dir / f"{Path(dax_path).stem}{_FOV_DONE_SUFFIX}"
 
     def round_sentinel(self, round_id: int) -> Path:
         return self.done_dir / f"round_{round_id:03d}{_ROUND_DONE_SUFFIX}"
+
+    def transfer_sentinel(self, round_id: int) -> Path:
+        return self.done_dir / f"round_{round_id:03d}{_ROUND_TRANSFERRED_SUFFIX}"
 
     # ── Status queries ────────────────────────────────────────────────────────
 
@@ -72,6 +78,10 @@ class ProgressTracker:
     def is_round_done(self, round_id: int) -> bool:
         """True if the round-level sentinel exists."""
         return self.round_sentinel(round_id).exists()
+
+    def is_round_transferred(self, round_id: int) -> bool:
+        """True if the round's data transfer has completed."""
+        return self.transfer_sentinel(round_id).exists()
 
     def is_thumbnail_done(self, dax_path: Path, frame_idx: int) -> bool:
         return self.thumbnail_path(dax_path, frame_idx).exists()
@@ -84,16 +94,25 @@ class ProgressTracker:
 
     def all_fovs_done_for_round(
         self,
-        round_id: int,
-        metadata,           # ExperimentMetadata
+        round_id:   int,
+        metadata,               # ExperimentMetadata
+        fov_subset: Optional[List[int]] = None,
     ) -> bool:
         """
-        Return True iff *every* expected image file in *round_id* exists on
-        disk and has a FOV-level sentinel.
+        Return True iff every expected image file in *round_id* (optionally
+        filtered to *fov_subset* FOV ids) exists on disk and has a FOV sentinel.
         """
         files = metadata.files_for_round(round_id)
         if not files:
             return False
+        if fov_subset is not None:
+            fov_set = set(fov_subset)
+            files = [
+                f for f in files
+                if metadata.fov_id_of_file(f) in fov_set
+            ]
+            if not files:
+                return False
         return all(f.exists() and self.is_fov_done(f) for f in files)
 
     # ── Batch helpers ─────────────────────────────────────────────────────────
@@ -111,17 +130,18 @@ class ProgressTracker:
 
     def pending_rounds(
         self,
-        round_ids: List[int],
+        round_ids:  List[int],
         metadata,
+        fov_subset: Optional[List[int]] = None,
     ) -> List[int]:
         """
-        Return round ids where all FOV analyses are complete but no
-        round-level sentinel exists yet.
+        Return round ids where all FOV analyses are complete (within
+        *fov_subset* if given) but no round-level sentinel exists yet.
         """
         return [
             rid for rid in round_ids
             if not self.is_round_done(rid)
-            and self.all_fovs_done_for_round(rid, metadata)
+            and self.all_fovs_done_for_round(rid, metadata, fov_subset)
         ]
 
     # ── Status updates ────────────────────────────────────────────────────────
@@ -139,6 +159,13 @@ class ProgressTracker:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch()
         log.info("Round %d marked done.", round_id)
+
+    def mark_round_transferred(self, round_id: int) -> None:
+        """Create the transfer sentinel (idempotent)."""
+        p = self.transfer_sentinel(round_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        log.info("Round %d marked transferred.", round_id)
 
     # ── Summary ───────────────────────────────────────────────────────────────
 
