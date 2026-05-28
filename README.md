@@ -50,8 +50,8 @@ SAMPLE_DIR/                          e.g.  G:\LT048_sample_18\
     shutter-{name}.xml               ← HAL shutter config (output of notebook 01)
     dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of notebook 03)
   data/
-    cells/                           ← cells-round .dax files (written by HAL)
-    H01/ … H0N/                      ← bits-round .dax files (written by HAL)
+    cells/                           ← cells-round image files (written by HAL)
+    H01/ … H0N/                      ← bits-round image files (written by HAL)
   analysis/                          ← thumbnails, stats, mosaics (output of schedulers)
 ```
 
@@ -77,6 +77,8 @@ Key parameters to set:
 | `color_seq` | Laser colours for data frames | `[560, 650]` |
 | `end_seq` | Blank frames at end of stack | `[np.nan, np.nan]` |
 | `z_pos` | z positions for the data stack (µm) | `np.arange(1, 20.5, 0.5)` |
+| `FILE_TYPE` | Image format written by HAL | `".zarr"` (default), `".dax"`, `".tiff"` |
+| `EXPOSURE_TIME` | Camera exposure time (seconds) | `0.25` |
 
 **Outputs** (written to `SAMPLE_DIR/settings/` and `SAMPLE_DIR/metadata/`):
 - `hal-config-{mic}-{name}.xml` — HAL imaging config, patched from the template in `MERci/data/templates/`
@@ -146,11 +148,15 @@ Final fluidics:    Cleave direct
 
 ## Online analysis
 
-During the experiment, run the analysis schedulers in separate notebook cells (or notebooks) to monitor quality in real time.
+During the experiment, run the analysis schedulers in separate notebook cells (or notebooks) to monitor quality in real time.  Use the dedicated notebooks:
+
+- `notebooks/05_online_analysis.ipynb` — runs the FOV and round schedulers
+- `notebooks/06_view_mosaics.ipynb` — displays per-color mosaics as they are built
+- `notebooks/07_view_intensity_stats.ipynb` — plots per-frame intensity statistics over time
 
 ### How it works
 
-`ExperimentStateMonitor` watches `data/` for new `.dax` files.  When imaging finishes and the microscope enters the fluidics step, the analysis window `[t_min, t_max]` opens and the schedulers process all pending files.
+`ExperimentStateMonitor` watches `data/` for new image files.  When imaging finishes and the microscope enters the fluidics step, the analysis window `[t_min, t_max]` opens and the schedulers process all pending files.
 
 ```
 Imaging ends          t_min          t_max     Next round starts
@@ -159,19 +165,39 @@ Imaging ends          t_min          t_max     Next round starts
                         └── analysis window ──┘
 ```
 
+`t_max` is set automatically from `fluidics_type`:
+- `"adaptor"` (default) → 100 min
+- `"direct"` → 50 min
+
+Override `t_max` explicitly to use a custom value.
+
+### Image format support
+
+MERci reads `.zarr` (default), `.dax`, and `.tiff` image stacks.  The format is selected via `config.image_suffix` and must match what HAL is configured to write.
+
 ### FOV-level analysis (`FOVScheduler`)
 
-For each `.dax` file, produces:
+For each image file, produces:
 - `analysis/thumbnails/{stem}_frame{n:03d}.png` — contrast-stretched thumbnails
 - `analysis/stats/{stem}_stats.csv` — per-frame min/mean/median/max/std/p01/p99
 - `analysis/histograms/{stem}_histograms.npz` — per-frame intensity histograms
 
 ### Round-level analysis (`RoundScheduler`)
 
-Once all FOV sentinels exist for a round, assembles:
-- `analysis/mosaics/round_{r:03d}_mosaic.png` — spatial mosaic of all FOV thumbnails
+Once all FOV sentinels exist for a round, assembles one spatial mosaic per imaging color (read from the frame table):
+- `analysis/mosaics/round_{r:03d}_{color}nm_mosaic.png`
+
+The `flip_y` orientation is read automatically from the `<flip_vertical>` field in the round's HAL config (override with `config.mosaic_flip_y`).
 
 Progress is tracked via zero-byte sentinel files in `analysis/done/`.  Multiple schedulers can run concurrently without coordination.
+
+### Data transfer (optional)
+
+Set `transfer_dest` in `ExperimentConfig` to copy each round's raw data directory to a network destination (e.g. a NAS) during the fluidics window, using robocopy on Windows.  Transfer starts only when at least `transfer_min_time` seconds remain in the analysis window.
+
+### FOV subset filtering (optional)
+
+Set `fov_subset` to a list of FOV ids to restrict both the FOV scheduler and mosaic assembly to a subset of positions — useful for quick diagnostics or re-running a partial experiment.
 
 ### Typical notebook setup
 
@@ -182,10 +208,19 @@ from MERci.progress        import ProgressTracker
 from MERci.state           import ExperimentStateMonitor
 from MERci.scheduler       import FOVScheduler, RoundScheduler
 
-config  = ExperimentConfig(data_dir=..., metadata_dir=..., analysis_dir=...,
-                           round_info_csv=..., positions_txt=...)
-meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt,
-                                  config.data_dir)
+config = ExperimentConfig(
+    data_dir       = SAMPLE_DIR / "data",
+    metadata_dir   = SAMPLE_DIR / "metadata",
+    analysis_dir   = SAMPLE_DIR / "analysis",
+    settings_dir   = SAMPLE_DIR / "settings",   # needed for auto flip_y and per-color mosaics
+    round_info_csv = SAMPLE_DIR / "metadata" / "round_info.csv",
+    positions_txt  = SAMPLE_DIR / "positions"  / f"positions_{SAMPLE_NAME}.txt",
+    image_suffix   = ".zarr",                   # or ".dax" / ".tiff"
+    fluidics_type  = "adaptor",                 # sets t_max = 100 min; use "direct" for 50 min
+    # transfer_dest = Path(r"\\NAS\experiments"), # optional: copy data during fluidics window
+    # fov_subset    = [0, 1, 2],                  # optional: restrict to a subset of FOVs
+)
+meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir)
 tracker = ProgressTracker(config.analysis_dir)
 monitor = ExperimentStateMonitor(config)
 
@@ -198,17 +233,18 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 | Module | Key exports |
 |---|---|
-| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `create_shutter_file`, `create_hal_config` |
+| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `create_shutter_file`, `create_hal_config`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices` |
 | `acquisition.positions` | `create_grid_positions`, `generate_scanning_path`, `filter_scanning_path`, `close_scanning_path`, `load_hole_polygons`, `get_path_stats` |
 | `acquisition.dave` | `create_round_info`, `create_dave_config`, `series_to_movie_name` |
 | `common.config` | `ExperimentConfig` |
 | `common.metadata` | `ExperimentMetadata`, `SeriesInfo`, `FOVInfo`, `RoundInfo` |
-| `common.io` | `read_dax`, `parse_inf`, `get_dax_shape`, `save_positions_array`, `discover_image_files` |
+| `common.io` | `read_dax`, `read_zarr`, `read_tiff`, `read_image`, `parse_inf`, `get_dax_shape`, `save_positions_array`, `discover_image_files` |
 | `analysis.fov` | `create_thumbnail`, `create_thumbnails_for_stack`, `measure_stats`, `get_histogram` |
 | `analysis.round` | `create_mosaic`, `load_thumbnails_for_round` |
 | `state` | `ExperimentStateMonitor`, `ExperimentPhase` |
 | `progress` | `ProgressTracker` |
 | `scheduler` | `FOVScheduler`, `RoundScheduler`, `ExperimentScheduler` |
+| `transfer` | `transfer_round` |
 | `visualization` | `visualize_shutter_sequence`, `plot_fov_layout`, `plot_stats_over_rounds`, `display_mosaic` |
 
 ---
@@ -233,9 +269,17 @@ See `data/examples/round_info_example.csv` for a complete example.
 
 One `x,y` coordinate pair per line (stage units, µm).  Lines beginning with `#` are ignored.
 
-### `.dax` / `.inf` files
+### Image files
 
-Raw uint16 binary image stacks written by HAL.  Frame dimensions are read from the `.inf` sidecar (same stem, same directory).
+HAL can write images in three formats, selected by `<filetype>` in the HAL config:
+
+| Format | Extension | Notes |
+|---|---|---|
+| Zarr | `.zarr/` | Directory store; default for new experiments |
+| DAX | `.dax` | Raw uint16 binary; requires `.inf` sidecar |
+| TIFF | `.tiff` | Multi-page TIFF |
+
+Use `read_image(path)` to load any of the three formats without knowing the type in advance.
 
 ### Microscope channel mapping
 
@@ -248,4 +292,4 @@ Raw uint16 binary image stacks written by HAL.  Frame dimensions are read from t
 | 405 | 4 |
 | blank | NaN |
 
-This is the default mapping; it can be extended in `acquisition/configs.py` for other microscopes.
+This is the default mapping for MF3 and MF5; it can be extended in `acquisition/configs.py` for other microscopes.
