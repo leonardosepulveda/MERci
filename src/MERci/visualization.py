@@ -28,6 +28,19 @@ log = logging.getLogger(__name__)
 
 # ── Acquisition: shutter sequence ─────────────────────────────────────────────
 
+def _infer_scan_mode(frame_table) -> str:
+    """Return ``'interleaved'`` or ``'sequential'`` from the frame table structure."""
+    bead_z = frame_table["z"].iloc[0]
+    data   = frame_table[frame_table["z"] != bead_z]
+    if len(data) < 2:
+        return "interleaved"
+    if data["z"].iloc[0] == data["z"].iloc[1]:
+        return "interleaved"
+    c0, c1     = data["color"].iloc[0], data["color"].iloc[1]
+    same_color = (c0 == c1) or (pd.isna(c0) and pd.isna(c1))
+    return "sequential" if same_color else "interleaved"
+
+
 def visualize_shutter_sequence(
     frame_table,                   # pd.DataFrame
     title:     Optional[str] = None,
@@ -38,8 +51,13 @@ def visualize_shutter_sequence(
 
     Each horizontal bar represents one camera frame.  Bars are placed in
     columns corresponding to hardware channels, with blank frames in an
-    extra column.  Horizontal separators mark z-group boundaries.
-    Z annotations appear to the right.
+    extra column.
+
+    The scan mode is inferred automatically:
+
+    - **Interleaved**: separators at every z-change; z-value labels on the right.
+    - **Sequential**: separators only at color-block boundaries; each color block
+      is labelled with wavelength and z-range at its midpoint.
 
     Parameters
     ----------
@@ -54,9 +72,11 @@ def visualize_shutter_sequence(
         650.0: "#2ca02c",   # green
         750.0: "#d62728",   # red
     }
-    _BLANK_COLOUR  = "black"
+    _BLANK_COLOUR   = "black"
     _DEFAULT_COLOUR = "#7f7f7f"
-    _BLANK_X       = -1
+    _BLANK_X        = -1
+
+    scan_mode = _infer_scan_mode(frame_table)
 
     df = frame_table.copy().reset_index().rename(columns={"index": "frame"})
     if df.empty:
@@ -87,24 +107,71 @@ def visualize_shutter_sequence(
             align="center", color=face, edgecolor="k", linewidth=0.2,
         )
 
-    # ── z-group separators ────────────────────────────────────────────────────
-    prev_frame = prev_z = None
+    # ── Separators ───────────────────────────────────────────────────────────
+    # Interleaved: draw at every z-change.
+    # Sequential: draw only at color-block boundaries (suppresses per-frame
+    # separators within a z-sweep, which would make the chart unreadably busy).
+    prev_frame = prev_z = prev_color = None
     for _, row in df.iterrows():
         f = int(row["frame"])
         z = row["z"]
-        if prev_frame is not None and z != prev_z:
-            ax.axhline(
-                y=(prev_frame + f) / 2.0,
-                color="0.7", linestyle="--", linewidth=0.5, zorder=0,
-            )
-        prev_frame, prev_z = f, z
+        c = row["color"]
+        if prev_frame is not None:
+            if scan_mode == "interleaved":
+                draw_sep = z != prev_z
+            else:
+                same = (prev_color == c) if not (pd.isna(prev_color) or pd.isna(c)) \
+                       else (pd.isna(prev_color) and pd.isna(c))
+                draw_sep = not same
+            if draw_sep:
+                ax.axhline(
+                    y=(prev_frame + f) / 2.0,
+                    color="0.7", linestyle="--", linewidth=0.5, zorder=0,
+                )
+        prev_frame, prev_z, prev_color = f, z, c
 
-    # ── Z annotations ─────────────────────────────────────────────────────────
+    # ── Annotations ──────────────────────────────────────────────────────────
     right_x = max(all_x) + 1.2 if all_x else 0.5
-    for z_val, f0 in df.groupby("z", sort=True)["frame"].min().items():
-        if pd.isna(z_val):
-            continue
-        ax.text(right_x, f0, f"z={z_val:g}", fontsize=8, va="center", ha="left")
+
+    if scan_mode == "interleaved":
+        # One z-value label at the first frame of each unique z-plane.
+        for z_val, f0 in df.groupby("z", sort=True)["frame"].min().items():
+            if pd.isna(z_val):
+                continue
+            ax.text(right_x, f0, f"z={z_val:g}", fontsize=8, va="center", ha="left")
+
+    else:
+        # One label per color block placed at the block's vertical midpoint.
+        # Build blocks: (first_frame, last_frame, color, z_start, z_end)
+        blocks: list = []
+        blk_start = blk_color = blk_z_start = blk_z_end = None
+        prev_f = None
+        for _, row in df.iterrows():
+            f = int(row["frame"])
+            c = row["color"]
+            z = row["z"]
+            if blk_color is None:
+                blk_start, blk_color, blk_z_start = f, c, z
+            else:
+                same = (blk_color == c) if not (pd.isna(blk_color) or pd.isna(c)) \
+                       else (pd.isna(blk_color) and pd.isna(c))
+                if not same:
+                    blocks.append((blk_start, prev_f, blk_color, blk_z_start, blk_z_end))
+                    blk_start, blk_color, blk_z_start = f, c, z
+            blk_z_end, prev_f = z, f
+        if blk_start is not None:
+            blocks.append((blk_start, prev_f, blk_color, blk_z_start, blk_z_end))
+
+        for (f0, f1, color, z0, z1) in blocks:
+            mid = (f0 + f1) / 2.0
+            if pd.isna(color):
+                label = "blank"
+            elif z0 == z1:
+                label = f"{int(color)} nm  z={z0:g}"
+            else:
+                arrow = "^" if z1 > z0 else "v"
+                label = f"{int(color)} nm  z={z0:g}->{z1:g} {arrow}"
+            ax.text(right_x, mid, label, fontsize=8, va="center", ha="left")
 
     # ── Labels & ticks ────────────────────────────────────────────────────────
     ax.set_ylabel("Frame")
@@ -112,7 +179,7 @@ def visualize_shutter_sequence(
     ax.set_title(title or "Shutter sequence")
     ax.set_xticks(all_x)
     ax.set_xticklabels(["blank"] + [str(int(c)) for c in active_channels])
-    ax.set_xlim(min(all_x) - 1, max(all_x) + 2.5)
+    ax.set_xlim(min(all_x) - 1, max(all_x) + 3.5)
     ax.set_ylim(df["frame"].min() - 1, df["frame"].max() + 1)
 
     plt.tight_layout()
