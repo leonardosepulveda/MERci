@@ -13,7 +13,7 @@ Typical round structure
   [color_seq]  at z=z_pos[0]
   [color_seq]  at z=z_pos[1]
   …
-  [end_seq]    at z=bead_z           ← blanks to allow stage return
+  [end_seq]    at z=bead_z           ← blanks to allow Z-nanopositioner return to z_bead
 
 Usage
 -----
@@ -72,6 +72,7 @@ def get_frame_table(
     end_seq:    List,
     z_pos:      np.ndarray,
     microscope: str = "MF3",
+    scan_mode:  str = "interleaved",
 ) -> pd.DataFrame:
     """
     Build the frame table describing one imaging round.
@@ -81,27 +82,57 @@ def get_frame_table(
     bead_z     : z position (µm above coverslip) for fiducial bead frames
     bead_seq   : ordered list of colours (nm) or ``np.nan`` for blank frames,
                  acquired at *bead_z* **before** the z-stack
-    color_seq  : colours acquired at every position in *z_pos*
+    color_seq  : colours to acquire across the z-stack
     end_seq    : colours acquired at *bead_z* **after** the z-stack;
                  typically blank frames (``[np.nan, np.nan]``) to allow the
-                 stage to return before the next round begins
+                 Z-nanopositioner to return to z_bead before the next round begins
     z_pos      : 1-D array of z positions for data frames
     microscope : used to resolve hardware channel indices
+    scan_mode  : acquisition order for the data frames:
+
+                 ``"interleaved"`` *(default)* — all colors acquired at each
+                 Z-nanopositioner position before stepping to the next z.
+                 Optimised for AOTF / fast electronic channel switching::
+
+                   z=z_pos[0]:  color_seq[0]  color_seq[1]  …
+                   z=z_pos[1]:  color_seq[0]  color_seq[1]  …
+                   …
+
+                 ``"sequential"`` — full Z-nanopositioner sweep acquired per
+                 color, then switch to the next color.  Z is traversed in a
+                 boustrophedon (snake) pattern to avoid retracing.  Optimised
+                 for physical shutters / slow channel switching::
+
+                   color_seq[0]:  z_pos[0] … z_pos[-1]   (ascending)
+                   color_seq[1]:  z_pos[-1] … z_pos[0]   (descending)
+                   color_seq[2]:  z_pos[0] … z_pos[-1]   (ascending)
+                   …
 
     Returns
     -------
     pd.DataFrame with columns ``["color", "channel", "z"]`` and an integer
     index equal to the camera frame number (0-based).
     """
+    if scan_mode not in ("interleaved", "sequential"):
+        raise ValueError(
+            f"Unknown scan_mode {scan_mode!r}. Use 'interleaved' or 'sequential'."
+        )
+
     ch_map = get_color_to_channel_dict(microscope)
     rows: List[Dict] = []
 
     for color in bead_seq:
         rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
 
-    for z in z_pos:
-        for color in color_seq:
-            rows.append({"color": color, "channel": ch_map[color], "z": z})
+    if scan_mode == "interleaved":
+        for z in z_pos:
+            for color in color_seq:
+                rows.append({"color": color, "channel": ch_map[color], "z": z})
+    else:  # "sequential"
+        for i, color in enumerate(color_seq):
+            z_sweep = z_pos if i % 2 == 0 else z_pos[::-1]
+            for z in z_sweep:
+                rows.append({"color": color, "channel": ch_map[color], "z": z})
 
     for color in end_seq:
         rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
@@ -112,17 +143,21 @@ def get_frame_table(
 def get_color_sequence_name(
     frame_table: pd.DataFrame,
     separator:   str = "-",
+    scan_mode:   str = "interleaved",
 ) -> str:
     """
     Build a compact human-readable name for a colour sequence.
 
     Returns something like ``"blkf2-560f49-650f49"`` where ``blkf2`` means
     two blank (NaN) frames and ``560f49`` means forty-nine 560 nm frames.
+    A ``"-seq"`` suffix is appended when *scan_mode* is ``"sequential"`` to
+    prevent filename collisions with the interleaved variant.
 
     Parameters
     ----------
     frame_table : DataFrame with a ``"color"`` column
     separator   : string placed between name tokens (default ``"-"``)
+    scan_mode   : ``"interleaved"`` (default) or ``"sequential"``
     """
     col     = frame_table["color"]
     n_blank = int(col.isna().sum())
@@ -134,7 +169,10 @@ def get_color_sequence_name(
     for wavelength in sorted(counts.index.astype(float)):
         parts.append(f"{int(wavelength)}f{int(counts.loc[wavelength])}")
 
-    return separator.join(parts)
+    name = separator.join(parts)
+    if scan_mode == "sequential":
+        name += separator + "seq"
+    return name
 
 
 # ── Shutter XML ───────────────────────────────────────────────────────────────
