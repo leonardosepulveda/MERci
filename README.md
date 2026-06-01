@@ -61,9 +61,9 @@ SAMPLE_DIR/                          e.g.  G:\LT048_sample_18\
 
 Run the three notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/`), so no paths need to be changed.
 
-### Notebook 01 — HAL configs and shutter files
+### Notebook setup_01 — HAL configs and shutter files
 
-`notebooks/01_create_hal_config_and_shutters.ipynb`
+`notebooks/setup_01_create_hal_config_and_shutters.ipynb`
 
 Defines the per-frame imaging sequence and writes the HAL configuration files.
 
@@ -90,9 +90,9 @@ The compact config name (e.g. `blkf3-488f1-560f49-650f49`) is auto-generated fro
 
 ---
 
-### Notebook 02 — FOV positions
+### Notebook setup_02 — FOV positions
 
-`notebooks/02_create_positions_from_tissue_boundary.ipynb`
+`notebooks/setup_02_create_positions_from_tissue_boundary.ipynb`
 
 Builds a regular boustrophedon FOV grid within the tissue boundary.
 
@@ -111,9 +111,9 @@ Reads `boundary_positions.txt` and any `hole*.txt` files from `SAMPLE_DIR/positi
 
 ---
 
-### Notebook 03 — Dave recipe
+### Notebook setup_03 — Dave recipe
 
-`notebooks/03_create_dave_config.ipynb`
+`notebooks/setup_03_create_dave_config.ipynb`
 
 Generates the `round_info.csv` table and the Dave experiment recipe XML.
 
@@ -148,11 +148,12 @@ Final fluidics:    Cleave direct
 
 ## Online analysis
 
-During the experiment, run the analysis schedulers in separate notebook cells (or notebooks) to monitor quality in real time.  Use the dedicated notebooks:
+During the experiment, run the analysis notebooks in separate JupyterLab tabs to monitor quality in real time:
 
-- `notebooks/05_online_analysis.ipynb` — runs the FOV and round schedulers
-- `notebooks/06_view_mosaics.ipynb` — displays per-color mosaics as they are built
-- `notebooks/07_view_intensity_stats.ipynb` — plots per-frame intensity statistics over time
+- `notebooks/analysis_01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
+- `notebooks/analysis_02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
+- `notebooks/analysis_03_view_mosaics.ipynb` — displays per-color mosaics as they are built
+- `notebooks/analysis_04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
 
 ### How it works
 

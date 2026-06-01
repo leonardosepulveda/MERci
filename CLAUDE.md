@@ -61,13 +61,14 @@ src/MERci/
   transfer.py       # transfer_round — background robocopy/shutil to a network destination
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
 notebooks/
-  01_create_hal_config_and_shutters.ipynb  # Pre-experiment: define imaging sequence, write HAL XML and CSV
-  02_create_positions_from_tissue_boundary.ipynb  # Pre-experiment: generate FOV scanning grid
-  03_create_dave_config.ipynb             # Pre-experiment: generate round_info.csv and Dave recipe XML
-  04_create_data_organization.ipynb       # Pre-experiment: data organization setup
-  05_online_analysis.ipynb               # Online: run FOV + round schedulers during experiment
-  06_view_mosaics.ipynb                  # Online: display per-color mosaics as they are built
-  07_view_intensity_stats.ipynb          # Online: plot per-frame intensity statistics over rounds
+  setup_01_create_hal_config_and_shutters.ipynb        # Pre-experiment: define imaging sequence, write HAL XML and CSV
+  setup_02_create_positions_from_tissue_boundary.ipynb # Pre-experiment: generate FOV scanning grid
+  setup_03_create_dave_config.ipynb                    # Pre-experiment: generate round_info.csv and Dave recipe XML
+  setup_04_create_data_organization.ipynb              # Pre-experiment: data organization setup
+  analysis_01_fov_scheduler.ipynb                      # Online: FOV-level scheduler (thumbnails, stats, histograms)
+  analysis_02_round_scheduler.ipynb                    # Online: round-level scheduler (mosaics, optional data transfer)
+  analysis_03_view_mosaics.ipynb                       # Online: display per-color mosaics as they are built
+  analysis_04_view_intensity_stats.ipynb               # Online: plot per-frame intensity statistics over rounds
 data/
   templates/        # hal-config-mf3-epi.xml — HAL config template (microscope-specific)
   examples/         # round_info_example.csv — reference schema for round_info.csv
