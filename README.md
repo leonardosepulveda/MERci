@@ -40,26 +40,33 @@ SAMPLE_DIR/                          e.g.  G:\LT048_sample_18\
   positions/
     boundary_positions.txt           ← tissue boundary (from microscope operator)
     hole*.txt                        ← exclusion regions (from microscope operator)
-    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of notebook 02)
+    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of setup_02)
   metadata/
-    frame_table_{name}.csv           ← frame sequence table (output of notebook 01)
-    shutter_sequence_{name}.png      ← visual summary (output of notebook 01)
-    round_info.csv                   ← per-round imaging metadata (output of notebook 03)
+    frame_table_{name}.csv           ← frame sequence table (output of setup_01)
+    shutter_sequence_{name}.png      ← visual summary (output of setup_01)
+    round_info.csv                   ← per-round imaging metadata (output of setup_03)
+    round_bit_color_map.csv          ← round → bit → color mapping (output of setup_04)
+    data_organization_{mic}_{name}.csv  ← MERlin data-organization file (output of setup_04)
   settings/
-    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of notebook 01)
-    shutter-{name}.xml               ← HAL shutter config (output of notebook 01)
-    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of notebook 03)
-  data/
-    cells/                           ← cells-round image files (written by HAL)
-    H01/ … H0N/                      ← bits-round image files (written by HAL)
-  analysis/                          ← thumbnails, stats, mosaics (output of schedulers)
+    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of setup_01)
+    shutter-{name}.xml               ← HAL shutter config (output of setup_01)
+    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of setup_03)
+  readouts.csv                       ← codebook readout table (user-provided, required by setup_04)
+  data/                              ← raw image files; exact subfolder structure is defined in
+                                        round_info.csv via the `dir` column (written by HAL)
+  analysis/                          ← outputs of the online-analysis schedulers
+    thumbnails/                      ← per-frame PNG thumbnails
+    stats/                           ← per-frame intensity stats (CSV)
+    histograms/                      ← per-frame intensity histograms (.npz)
+    mosaics/                         ← spatial mosaics per round and color
+    done/                            ← zero-byte sentinel files tracking analysis progress
 ```
 
 ---
 
 ## Pre-experiment workflow
 
-Run the three notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/`), so no paths need to be changed.
+Run the four setup notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/`), so no paths need to be changed.
 
 ### Notebook setup_01 — HAL configs and shutter files
 
@@ -146,6 +153,29 @@ Final fluidics:    Cleave direct
 
 ---
 
+### Notebook setup_04 — MERlin data organization
+
+`notebooks/setup_04_create_data_organization.ipynb`
+
+Generates the MERlin `data_organization_*.csv` file that maps each bit to its images, z-positions, and fiducial frames.  Also annotates the Dave XML produced by setup_03 with per-round bit information.
+
+**Required input:** `SAMPLE_DIR/readouts.csv` — a table mapping bit numbers to readout names, with columns `Bit number` and `Name`.
+
+Key parameters to set:
+
+| Variable | Description |
+|---|---|
+| `round_bit_color` | List of `(round, bit, color_nm)` tuples matching the experiment codebook |
+
+Frame tables and series patterns are auto-detected from `metadata/frame_table_*.csv` and `round_info.csv`.
+
+**Outputs:**
+- `SAMPLE_DIR/metadata/round_bit_color_map.csv` — round → bit → color mapping table
+- `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv` — MERlin data-organization file
+- `SAMPLE_DIR/settings/dave-*.xml` annotated with per-round bit comments
+
+---
+
 ## Online analysis
 
 During the experiment, run the analysis notebooks in separate JupyterLab tabs to monitor quality in real time:
@@ -221,7 +251,8 @@ config = ExperimentConfig(
     # transfer_dest = Path(r"\\NAS\experiments"), # optional: copy data during fluidics window
     # fov_subset    = [0, 1, 2],                  # optional: restrict to a subset of FOVs
 )
-meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir)
+meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir,
+                                   image_suffix=config.image_suffix)
 tracker = ProgressTracker(config.analysis_dir)
 monitor = ExperimentStateMonitor(config)
 

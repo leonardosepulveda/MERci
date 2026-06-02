@@ -28,13 +28,17 @@ This repo is cloned directly into each new experiment folder (`SAMPLE_DIR`) as `
 ```
 SAMPLE_DIR/          (e.g. G:\LT048_sample_18\)
   MERci/             ← clone of this repo
-  positions/         ← boundary_positions.txt, hole*.txt (from operator), positions_{SAMPLE_NAME}.txt (from nb 02)
-  metadata/          ← frame_table_*.csv, shutter_sequence_*.png (nb 01), round_info.csv (nb 03)
-  settings/          ← hal-config-*.xml, shutter-*.xml (nb 01), dave-*.xml (nb 03)
-  data/              ← image files written by HAL (.zarr default, or .dax / .tiff)
-    cells/           ← cells-round images
-    H01/ … H0N/      ← bits-round images, one folder per round
-  analysis/          ← thumbnails, stats, mosaics produced by MERci schedulers
+  positions/         ← boundary_positions.txt, hole*.txt (from operator),
+                        positions_{SAMPLE_NAME}.txt (from setup_02)
+  metadata/          ← frame_table_*.csv, shutter_sequence_*.png (setup_01),
+                        round_info.csv (setup_03),
+                        round_bit_color_map.csv, data_organization_*.csv (setup_04)
+  settings/          ← hal-config-*.xml, shutter-*.xml (setup_01), dave-*.xml (setup_03)
+  readouts.csv       ← codebook readout table (user-provided, required by setup_04)
+  data/              ← raw image files; exact subfolder structure defined by the `dir`
+                        column in round_info.csv (written by HAL during acquisition)
+  analysis/          ← thumbnails/, stats/, histograms/, mosaics/, done/
+                        (produced by analysis_01 and analysis_02 schedulers)
 ```
 
 ## Package layout
@@ -78,9 +82,9 @@ data/
 
 ### Pre-experiment workflow
 
-Run notebooks 01–03 in order before starting the microscope.
+Run the four setup notebooks in order before starting the microscope.
 
-**Notebook 01** (`01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Auto-generates a compact name via `get_color_sequence_name` (e.g. `blkf3-488f1-560f49-650f49`). Now also sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
+**setup_01** (`setup_01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
 - `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/templates/hal-config-mf3-epi.xml`
 - `SAMPLE_DIR/settings/shutter-{name}.xml` — shutter event XML
 - `SAMPLE_DIR/metadata/frame_table_{name}.csv` — frame table
@@ -88,11 +92,16 @@ Run notebooks 01–03 in order before starting the microscope.
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**Notebook 02** (`02_create_positions_from_tissue_boundary.ipynb`): reads `boundary_positions.txt` and `hole*.txt` from `SAMPLE_DIR/positions/`, builds a regular boustrophedon FOV grid (`create_grid_positions` → `generate_scanning_path`), filters by polygon–polygon overlap (`filter_scanning_path`), reorders return points (`close_scanning_path`), and saves `SAMPLE_DIR/positions/positions_{SAMPLE_NAME}.txt`.
+**setup_02** (`setup_02_create_positions_from_tissue_boundary.ipynb`): reads `boundary_positions.txt` and `hole*.txt` from `SAMPLE_DIR/positions/`, builds a regular boustrophedon FOV grid (`create_grid_positions` → `generate_scanning_path`), filters by polygon–polygon overlap (`filter_scanning_path`), reorders return points (`close_scanning_path`), and saves `SAMPLE_DIR/positions/positions_{SAMPLE_NAME}.txt`.
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**Notebook 03** (`03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+**setup_03** (`setup_03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+
+**setup_04** (`setup_04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `SAMPLE_DIR/readouts.csv` (codebook mapping bit numbers to readout names). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
+- `SAMPLE_DIR/metadata/round_bit_color_map.csv`
+- `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
+- Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
 
 ### Online-analysis architecture
 
@@ -139,7 +148,8 @@ config = ExperimentConfig(
     image_suffix   = ".zarr",          # or ".dax" / ".tiff"
     fluidics_type  = "adaptor",        # sets t_max = 100 min
 )
-meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir)
+meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir,
+                                   image_suffix=config.image_suffix)
 tracker = ProgressTracker(config.analysis_dir)
 monitor = ExperimentStateMonitor(config)
 
