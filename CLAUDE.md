@@ -74,8 +74,10 @@ notebooks/
   analysis_03_view_mosaics.ipynb                       # Online: display per-color mosaics as they are built
   analysis_04_view_intensity_stats.ipynb               # Online: plot per-frame intensity statistics over rounds
 data/
-  templates/        # hal-config-mf3-epi.xml — HAL config template (microscope-specific)
-  examples/         # round_info_example.csv — reference schema for round_info.csv
+  configs/
+    hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
+    kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
+  positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
 ```
 
 ## Architecture
@@ -161,11 +163,12 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 - `round_info.csv` — required columns: `imaging_round` (or legacy `round_id`), `series` (Python format string like `hal-mf3-epi_{fov:03d}_01`); optional: `imaging_type`, `hal_config`, `shutter_file`, `dir`. See `data/examples/round_info_example.csv`.
 - `positions_{SAMPLE_NAME}.txt` — comma-separated `x,y` per line, one FOV per line; `#`-prefixed lines ignored
 - Image files — HAL writes `.zarr` (directory store, default), `.dax` (raw uint16 binary + `.inf` sidecar), or `.tiff` (multi-page). Use `read_image(path)` to load any format. `discover_image_files` handles both flat files and zarr directory stores.
-- `hal-config-mf3-epi.xml` — HAL config template in `data/templates/`; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
+- HAL config templates — `data/configs/hal/hal-config-{mic}-epi.xml`; auto-detected in setup_01 by microscope name; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
+- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; auto-detected in setup_03 by microscope name; newest file (by YYMMDD) is copied to `SAMPLE_DIR/settings/`
 
 ### Microscope channel mapping
 
-Both `MF3` and `MF5`: `{405→4, 488→3, 560→2, 650→1, 750→0}`. `NaN` = blank frame (no laser). Extend in `acquisition/configs.py` for other microscopes.
+`MF2`, `MF3`, and `MF5` all share the same mapping: `{405→4, 488→3, 560→2, 650→1, 750→0}`. `NaN` = blank frame (no laser). Extend `_COLOUR_TO_CHANNEL` in `acquisition/configs.py` for other microscopes.
 
 ## Running notebooks
 

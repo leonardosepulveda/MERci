@@ -41,6 +41,7 @@ import pandas as pd
 # ── Channel / colour mapping ─────────────────────────────────────────────────
 
 _COLOUR_TO_CHANNEL: Dict[str, Dict] = {
+    "MF2": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
     "MF3": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
     "MF5": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
 }

@@ -92,12 +92,14 @@ Key parameters to set:
 | `EXPOSURE_TIME` | Camera exposure time (seconds) | `0.25` |
 
 **Outputs** (written to `SAMPLE_DIR/settings/` and `SAMPLE_DIR/metadata/`):
-- `hal-config-{mic}-{name}.xml` — HAL imaging config, patched from the template in `MERci/data/templates/`
+- `hal-config-{mic}-{name}.xml` — HAL imaging config, patched from the template in `MERci/data/configs/hal/`
 - `shutter-{name}.xml` — HAL shutter event sequence
 - `frame_table_{name}.csv` — frame table used by the analysis modules
 - `shutter_sequence_{name}.png` — visual summary for verification
 
 The compact config name (e.g. `blkf3-488f1-560f49-650f49`) is auto-generated from the frame sequence.
+
+The HAL template is auto-detected from `MERci/data/configs/hal/` by matching the `MICROSCOPE` name (e.g. `hal-config-mf3-epi.xml` for `MICROSCOPE = "MF3"`). A `FileNotFoundError` is raised if no matching template exists.
 
 ---
 
@@ -154,6 +156,7 @@ Final fluidics:    Cleave direct
 **Outputs:**
 - `SAMPLE_DIR/metadata/round_info.csv`
 - `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`
+- `SAMPLE_DIR/settings/kilroy-config-*-{mic}-*-{YYMMDD}.xml` — copied from `MERci/data/configs/kilroy/` (newest file matching the microscope name, if present)
 
 ---
 
@@ -299,7 +302,7 @@ imaging_round,series,hal_config,dir
 2,hal-mf3-epi_02_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,G:\sample\data\H02
 ```
 
-See `data/examples/round_info_example.csv` for a complete example.
+See the `round_info.csv` section above for column descriptions.
 
 ### `positions_{SAMPLE_NAME}.txt`
 
@@ -328,4 +331,4 @@ Use `read_image(path)` to load any of the three formats without knowing the type
 | 405 | 4 |
 | blank | NaN |
 
-This is the default mapping for MF3 and MF5; it can be extended in `acquisition/configs.py` for other microscopes.
+MF2, MF3, and MF5 all use this mapping. Add new microscopes to `_COLOUR_TO_CHANNEL` in `acquisition/configs.py`.
