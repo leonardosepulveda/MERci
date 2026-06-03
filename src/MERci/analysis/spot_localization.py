@@ -425,7 +425,8 @@ def simulate_psf_image(
 
     Algorithm
     ---------
-    1. Place each emitter at its nearest voxel with amplitude = photon_budget.
+    1. Place each emitter at its nearest voxel, pre-scaled so that after
+       Gaussian convolution the **peak pixel equals photon_budget**.
     2. Convolve with an anisotropic 3-D Gaussian PSF via gaussian_filter.
     3. Add uniform background (bg_photons).
     4. Apply Poisson shot noise.
@@ -434,21 +435,23 @@ def simulate_psf_image(
 
     Parameters
     ----------
-    positions_um    : DataFrame with columns x_um, y_um, z_um
-    volume_shape_px : (n_z, n_y, n_x) — output array shape in pixels/planes
-    voxel_size_um   : (vx, vy, vz) — µm per pixel/plane; vx=vy=lateral, vz=axial
-    psf_sigma_xy_um : lateral PSF sigma in µm
-    psf_sigma_z_um  : axial PSF sigma in µm
-    photon_budget   : mean photons per emitter peak
-    readout_noise_std : std of Gaussian readout noise (in ADU / photon-equivalent)
-    bg_photons      : uniform background level
-    bit_depth       : dynamic range of output (default 16 → uint16)
-    rng             : numpy Generator or integer seed
+    positions_um      : DataFrame with columns x_um, y_um, z_um
+    volume_shape_px   : (n_z, n_y, n_x) — output array shape in pixels/planes
+    voxel_size_um     : (vx, vy, vz) — µm per pixel/plane; vx=vy=lateral, vz=axial
+    psf_sigma_xy_um   : lateral PSF sigma in µm
+    psf_sigma_z_um    : axial PSF sigma in µm
+    photon_budget     : peak photon count at the emitter centre after PSF convolution
+    readout_noise_std : std of additive Gaussian readout noise (same units as photons)
+    bg_photons        : uniform background level added before noise
+    bit_depth         : dynamic range of output (default 16 → uint16)
+    rng               : numpy Generator or integer seed
 
     Returns
     -------
     (n_z, n_y, n_x) uint16 array
     """
+    import math
+
     gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
     n_z, n_y, n_x = volume_shape_px
     vx, vy, vz    = voxel_size_um
@@ -458,6 +461,12 @@ def simulate_psf_image(
     sig_y_px = psf_sigma_xy_um / vy
     sig_z_pl = psf_sigma_z_um  / vz
 
+    # gaussian_filter conserves total signal (integral), not the peak.
+    # For a 3-D separable Gaussian with sigmas (sz, sy, sx), applying it to
+    # a delta of amplitude A gives a peak of A / ((2π)^1.5 * sx * sy * sz).
+    # Pre-scale the amplitude so the output peak == photon_budget.
+    psf_volume_factor = (2 * math.pi) ** 1.5 * sig_x_px * sig_y_px * sig_z_pl
+
     # Place emitters on the voxel grid
     volume = np.zeros((n_z, n_y, n_x), dtype=np.float64)
     for _, em in positions_um.iterrows():
@@ -465,7 +474,7 @@ def simulate_psf_image(
         iy = int(round(em["y_um"] / vy))
         ix = int(round(em["x_um"] / vx))
         if 0 <= iz < n_z and 0 <= iy < n_y and 0 <= ix < n_x:
-            volume[iz, iy, ix] += photon_budget
+            volume[iz, iy, ix] += photon_budget * psf_volume_factor
 
     # Convolve with separable anisotropic Gaussian (z, y, x order)
     volume = gaussian_filter(volume, sigma=[sig_z_pl, sig_y_px, sig_x_px])
