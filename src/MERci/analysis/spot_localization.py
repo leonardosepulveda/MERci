@@ -619,8 +619,9 @@ def plot_max_projections(
     voxel_size_um: Tuple[float, float, float],
     *,
     title: str = "",
-    lo_pct: float = 5.0,
+    lo_pct: float = 50.0,
     hi_pct: float = 95.0,
+    print_stats: bool = True,
     figsize: Optional[Tuple[float, float]] = None,
 ) -> plt.Figure:
     """Plot XY, ZX, and ZY max-intensity projections of a 3-D volume.
@@ -632,13 +633,16 @@ def plot_max_projections(
 
     Parameters
     ----------
-    volume        : (n_z, n_y, n_x) array
+    volume      : (n_z, n_y, n_x) array
     voxel_size_um : (vx, vy, vz) µm per pixel/plane — used for axis labels
                     and correct aspect ratios
-    title         : figure suptitle
-    lo_pct        : lower percentile for vmin (default 5.0)
-    hi_pct        : upper percentile for vmax (default 95.0)
-    figsize       : figure size; defaults to (12, 4)
+    title       : figure suptitle
+    lo_pct      : lower percentile for vmin (default 50.0 — sets black point
+                  at the median, which is typically background for sparse images)
+    hi_pct      : upper percentile for vmax (default 95.0)
+    print_stats : if True, print a table of key percentiles and display limits
+                  for each projection before showing the figure (default True)
+    figsize     : figure size; defaults to (12, 4)
 
     Returns
     -------
@@ -652,6 +656,28 @@ def plot_max_projections(
     zx = vol_f.max(axis=1)               # (n_z, n_x)
     zy = vol_f.max(axis=2)               # (n_z, n_y)
 
+    projections   = [("XY (z-max)", xy), ("ZX (y-max)", zx), ("ZY (x-max)", zy)]
+    stat_pcts     = [0, 10, 25, 50, 75, 90, 95, 99, 100]
+    display_limits = []
+
+    if print_stats:
+        header = f"{'Projection':<14}" + "".join(f"  p{p:>3}" for p in stat_pcts)
+        header += f"   vmin    vmax"
+        print(header)
+        print("-" * len(header))
+
+    for label, proj in projections:
+        vals = np.percentile(proj, stat_pcts)
+        vmin, vmax = compute_display_limits(proj, lo_pct, hi_pct)
+        display_limits.append((vmin, vmax))
+        if print_stats:
+            row = f"{label:<14}" + "".join(f"  {int(v):>4}" for v in vals)
+            row += f"   {int(vmin):>4}    {int(vmax):>4}"
+            print(row)
+
+    if print_stats:
+        print(f"\n  Display contrast: vmin = p{lo_pct:.0f}, vmax = p{hi_pct:.0f}  (per panel)")
+
     # Physical extents in µm
     ext_xy = [0, n_x * vx, 0, n_y * vy]
     ext_zx = [0, n_x * vx, 0, n_z * vz]
@@ -662,18 +688,19 @@ def plot_max_projections(
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-    def _show(ax, proj, extent, xlabel, ylabel, panel_title):
-        vmin, vmax = compute_display_limits(proj, lo_pct, hi_pct)
+    for ax, (label, proj), extent, (xlabel, ylabel), (vmin, vmax) in zip(
+        axes,
+        projections,
+        [ext_xy, ext_zx, ext_zy],
+        [("X (µm)", "Y (µm)"), ("X (µm)", "Z (µm)"), ("Y (µm)", "Z (µm)")],
+        display_limits,
+    ):
         ax.imshow(proj, cmap="gray", origin="lower", aspect="auto",
                   extent=extent, interpolation="nearest",
                   vmin=vmin, vmax=vmax)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
-        ax.set_title(panel_title)
-
-    _show(axes[0], xy, ext_xy, "X (µm)", "Y (µm)", "XY (z-max)")
-    _show(axes[1], zx, ext_zx, "X (µm)", "Z (µm)", "ZX (y-max)")
-    _show(axes[2], zy, ext_zy, "Y (µm)", "Z (µm)", "ZY (x-max)")
+        ax.set_title(label)
 
     if title:
         fig.suptitle(title, fontsize=12, fontweight="bold")
