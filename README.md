@@ -15,11 +15,15 @@ MERci is cloned directly into the experiment folder — no package installation 
 
 Miniforge provides `mamba`, a fast drop-in replacement for `conda`.
 
-**Create the environment** (one-time, per computer):
+**Create the environment and register the kernel** (one-time, per computer):
 
 ```bash
 mamba env create -f environment.yml
+mamba activate merci_env
+python -m ipykernel install --user --name merci_env --display-name "Python (merci_env)"
 ```
+
+The kernel registration step makes `merci_env` visible in JupyterLab's kernel selector.  It only needs to be run once — JupyterLab can be launched from any environment afterwards.
 
 **Open the notebooks:**
 
