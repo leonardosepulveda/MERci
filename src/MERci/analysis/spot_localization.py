@@ -25,7 +25,8 @@ Public API
     simulate_multicolor_stack  – multi-colour convenience wrapper
 
 **Visualisation**
-    plot_max_projections – XY / ZX / ZY max-projection figure
+    compute_display_limits – (vmin, vmax) from percentiles of any image array
+    plot_max_projections   – XY / ZX / ZY max-projection figure
 """
 from __future__ import annotations
 
@@ -588,15 +589,46 @@ def simulate_multicolor_stack(
 
 # ── F. Visualisation ──────────────────────────────────────────────────────────
 
+def compute_display_limits(
+    image: np.ndarray,
+    lo_pct: float = 5.0,
+    hi_pct: float = 95.0,
+) -> Tuple[float, float]:
+    """Return (vmin, vmax) as the *lo_pct* and *hi_pct* percentiles of *image*.
+
+    Useful for setting imshow contrast so that the bulk of the intensity
+    distribution fills the colourmap, suppressing both dark background noise
+    and isolated bright outliers.
+
+    Parameters
+    ----------
+    image   : any-shape array
+    lo_pct  : lower percentile for vmin (default 5.0)
+    hi_pct  : upper percentile for vmax (default 95.0)
+
+    Returns
+    -------
+    (vmin, vmax) as floats
+    """
+    vmin, vmax = np.percentile(image, [lo_pct, hi_pct])
+    return float(vmin), float(vmax)
+
+
 def plot_max_projections(
     volume: np.ndarray,
     voxel_size_um: Tuple[float, float, float],
     *,
     title: str = "",
-    percentile_clip: Tuple[float, float] = (1.0, 99.9),
+    lo_pct: float = 5.0,
+    hi_pct: float = 95.0,
     figsize: Optional[Tuple[float, float]] = None,
 ) -> plt.Figure:
     """Plot XY, ZX, and ZY max-intensity projections of a 3-D volume.
+
+    Contrast is set per panel using ``compute_display_limits``: vmin and vmax
+    are the *lo_pct* / *hi_pct* percentiles of each projection independently,
+    so each view is optimally stretched regardless of projection statistics.
+    White = high intensity (fluorescence convention).
 
     Parameters
     ----------
@@ -604,7 +636,9 @@ def plot_max_projections(
     voxel_size_um : (vx, vy, vz) µm per pixel/plane — used for axis labels
                     and correct aspect ratios
     title         : figure suptitle
-    percentile_clip : (lo, hi) percentile clipping for contrast stretching
+    lo_pct        : lower percentile for vmin (default 5.0)
+    hi_pct        : upper percentile for vmax (default 95.0)
+    figsize       : figure size; defaults to (12, 4)
 
     Returns
     -------
@@ -614,17 +648,12 @@ def plot_max_projections(
     vx, vy, vz    = voxel_size_um
 
     vol_f = volume.astype(np.float32)
-    lo, hi = np.percentile(vol_f, [percentile_clip[0], percentile_clip[1]])
-
-    def _norm(arr: np.ndarray) -> np.ndarray:
-        return np.clip((arr - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-
-    xy = _norm(vol_f.max(axis=0))               # (n_y, n_x)
-    zx = _norm(vol_f.max(axis=1))               # (n_z, n_x)
-    zy = _norm(vol_f.max(axis=2))               # (n_z, n_y)
+    xy = vol_f.max(axis=0)               # (n_y, n_x)
+    zx = vol_f.max(axis=1)               # (n_z, n_x)
+    zy = vol_f.max(axis=2)               # (n_z, n_y)
 
     # Physical extents in µm
-    ext_xy = [0, n_x * vx, 0, n_y * vy]        # [xmin, xmax, ymin, ymax]
+    ext_xy = [0, n_x * vx, 0, n_y * vy]
     ext_zx = [0, n_x * vx, 0, n_z * vz]
     ext_zy = [0, n_y * vy, 0, n_z * vz]
 
@@ -633,9 +662,11 @@ def plot_max_projections(
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-    def _show(ax, img, extent, xlabel, ylabel, panel_title):
-        ax.imshow(img, cmap="gray", origin="lower", aspect="auto",
-                  extent=extent, interpolation="nearest")
+    def _show(ax, proj, extent, xlabel, ylabel, panel_title):
+        vmin, vmax = compute_display_limits(proj, lo_pct, hi_pct)
+        ax.imshow(proj, cmap="gray", origin="lower", aspect="auto",
+                  extent=extent, interpolation="nearest",
+                  vmin=vmin, vmax=vmax)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(panel_title)
