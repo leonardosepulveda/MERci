@@ -1,4 +1,4 @@
-# merfish_pipeline/common/io.py
+# MERci/common/io.py
 """
 Low-level I/O utilities shared by acquisition-planning and analysis modules.
 

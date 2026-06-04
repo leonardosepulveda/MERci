@@ -1,4 +1,4 @@
-# merfish_pipeline/acquisition/positions.py
+# MERci/acquisition/positions.py
 """
 Generate FOV grids and optimised scanning paths for stage-based MERFISH imaging.
 
@@ -13,7 +13,7 @@ Typical workflow
    remove FOVs whose camera frame overlaps any hole.
 6. ``close_scanning_path`` – move the "return" points to the end of the path.
 7. ``get_path_stats`` – inspect total travel distance and largest single step.
-8. ``merfish_pipeline.common.io.save_positions_array`` – write positions.txt.
+8. ``MERci.common.io.save_positions_array`` – write positions.txt.
 """
 from __future__ import annotations
 

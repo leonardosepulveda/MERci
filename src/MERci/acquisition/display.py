@@ -1,4 +1,4 @@
-# merfish_pipeline/acquisition/display.py
+# MERci/acquisition/display.py
 """
 Jupyter display helpers for acquisition setup notebooks.
 

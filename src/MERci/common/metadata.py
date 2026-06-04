@@ -1,4 +1,4 @@
-# merfish_pipeline/common/metadata.py
+# MERci/common/metadata.py
 """
 Parse round_info.csv and positions.txt; build the unified look-up structures
 used by both acquisition-planning and online-analysis modules.

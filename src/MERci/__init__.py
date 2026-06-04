@@ -1,12 +1,12 @@
 # MERci/__init__.py
 """
-merfish_pipeline
-================
+MERci
+=====
 End-to-end pipeline for MERFISH experiment setup and analysis.
 
-Acquisition modules: merfish_pipeline.acquisition
-Analysis modules:    merfish_pipeline.analysis
-Shared utilities:    merfish_pipeline.common
+Acquisition modules: MERci.acquisition
+Analysis modules:    MERci.analysis
+Shared utilities:    MERci.common
 """
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata, RoundInfo, SeriesInfo, FOVInfo

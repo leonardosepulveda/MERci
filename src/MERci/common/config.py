@@ -1,4 +1,4 @@
-# merfish_pipeline/common/config.py
+# MERci/common/config.py
 """
 Central configuration dataclass.  One instance is shared by both the
 acquisition-planning modules and the online-analysis modules.
