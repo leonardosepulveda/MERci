@@ -94,7 +94,7 @@ data/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
-  input/, output/   # example input configs and example analysis output (for demos/tests)
+  output/           # local-only example analysis output (gitignored)
 ```
 
 ## Architecture
