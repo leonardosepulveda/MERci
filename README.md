@@ -32,30 +32,30 @@ mamba activate merci_env
 jupyter lab
 ```
 
-Then navigate to `MERci/notebooks/` in the JupyterLab file browser. Open notebooks from that folder so that `SAMPLE_DIR` is auto-detected correctly.
+Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `prepare_imaging/` (pre-experiment setup), `analysis/` (online monitoring), and `misc/` (ad-hoc utilities). Open notebooks from their subfolder so that `SAMPLE_DIR` is auto-detected correctly — each notebook resolves `MERCI_DIR = Path(os.getcwd()).parent.parent` and `SAMPLE_DIR = MERCI_DIR.parent`, which assumes it is run from a second-level subfolder (`MERci/notebooks/<group>/`).
 
 ---
 
 ## Experiment folder layout
 
 ```
-SAMPLE_DIR/                          e.g.  G:\LT048_sample_18\
+SAMPLE_DIR/                          e.g.  D:\experiments\my_sample\
   MERci/                             ← clone of this repo
   positions/
     boundary_positions.txt           ← tissue boundary (from microscope operator)
     hole*.txt                        ← exclusion regions (from microscope operator)
-    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of setup_02)
+    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of prepare_imaging/02)
   metadata/
-    frame_table_{name}.csv           ← frame sequence table (output of setup_01)
-    shutter_sequence_{name}.png      ← visual summary (output of setup_01)
-    round_info.csv                   ← per-round imaging metadata (output of setup_03)
-    round_bit_color_map.csv          ← round → bit → color mapping (output of setup_04)
-    data_organization_{mic}_{name}.csv  ← MERlin data-organization file (output of setup_04)
+    frame_table_{name}.csv           ← frame sequence table (output of prepare_imaging/01)
+    shutter_sequence_{name}.png      ← visual summary (output of prepare_imaging/01)
+    round_info.csv                   ← per-round imaging metadata (output of prepare_imaging/03)
+    round_bit_color_map.csv          ← round → bit → color mapping (output of prepare_imaging/04)
+    data_organization_{mic}_{name}.csv  ← MERlin data-organization file (output of prepare_imaging/04)
   settings/
-    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of setup_01)
-    shutter-{name}.xml               ← HAL shutter config (output of setup_01)
-    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of setup_03)
-  readouts.csv                       ← codebook readout table (user-provided, required by setup_04)
+    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of prepare_imaging/01)
+    shutter-{name}.xml               ← HAL shutter config (output of prepare_imaging/01)
+    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of prepare_imaging/03)
+  readouts.csv                       ← codebook readout table (user-provided, required by prepare_imaging/04)
   data/                              ← raw image files; exact subfolder structure is defined in
                                         round_info.csv via the `dir` column (written by HAL)
   analysis/                          ← outputs of the online-analysis schedulers
@@ -70,11 +70,11 @@ SAMPLE_DIR/                          e.g.  G:\LT048_sample_18\
 
 ## Pre-experiment workflow
 
-Run the four setup notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/`), so no paths need to be changed.
+Run the four `prepare_imaging/` notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/prepare_imaging/`), so no paths need to be changed.
 
-### Notebook setup_01 — HAL configs and shutter files
+### Notebook 01 — HAL configs and shutter files
 
-`notebooks/setup_01_create_hal_config_and_shutters.ipynb`
+`notebooks/prepare_imaging/01_create_hal_config_and_shutters.ipynb`
 
 Defines the per-frame imaging sequence and writes the HAL configuration files.
 
@@ -103,9 +103,9 @@ The HAL template is auto-detected from `MERci/data/configs/hal/` by matching the
 
 ---
 
-### Notebook setup_02 — FOV positions
+### Notebook 02 — FOV positions
 
-`notebooks/setup_02_create_positions_from_tissue_boundary.ipynb`
+`notebooks/prepare_imaging/02_create_positions_from_tissue_boundary.ipynb`
 
 Builds a regular boustrophedon FOV grid within the tissue boundary.
 
@@ -124,9 +124,9 @@ Reads `boundary_positions.txt` and any `hole*.txt` files from `SAMPLE_DIR/positi
 
 ---
 
-### Notebook setup_03 — Dave recipe
+### Notebook 03 — Dave recipe
 
-`notebooks/setup_03_create_dave_config.ipynb`
+`notebooks/prepare_imaging/03_create_dave_config.ipynb`
 
 Generates the `round_info.csv` table and the Dave experiment recipe XML.
 
@@ -160,11 +160,11 @@ Final fluidics:    Cleave direct
 
 ---
 
-### Notebook setup_04 — MERlin data organization
+### Notebook 04 — MERlin data organization
 
-`notebooks/setup_04_create_data_organization.ipynb`
+`notebooks/prepare_imaging/04_create_data_organization.ipynb`
 
-Generates the MERlin `data_organization_*.csv` file that maps each bit to its images, z-positions, and fiducial frames.  Also annotates the Dave XML produced by setup_03 with per-round bit information.
+Generates the MERlin `data_organization_*.csv` file that maps each bit to its images, z-positions, and fiducial frames.  Also annotates the Dave XML produced by notebook 03 with per-round bit information.
 
 **Required input:** `SAMPLE_DIR/readouts.csv` — a table mapping bit numbers to readout names, with columns `Bit number` and `Name`.
 
@@ -187,10 +187,12 @@ Frame tables and series patterns are auto-detected from `metadata/frame_table_*.
 
 During the experiment, run the analysis notebooks in separate JupyterLab tabs to monitor quality in real time:
 
-- `notebooks/analysis_01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
-- `notebooks/analysis_02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
-- `notebooks/analysis_03_view_mosaics.ipynb` — displays per-color mosaics as they are built
-- `notebooks/analysis_04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
+- `notebooks/analysis/01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
+- `notebooks/analysis/02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
+- `notebooks/analysis/03_view_mosaics.ipynb` — displays per-color mosaics as they are built
+- `notebooks/analysis/04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
+
+A standalone utility notebook is also provided: `notebooks/misc/MF2_60XSil1.3_zcorrection.ipynb` — z-correction for the MF2 60× silicone objective.
 
 ### How it works
 
@@ -272,19 +274,22 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 | Module | Key exports |
 |---|---|
-| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `create_shutter_file`, `create_hal_config`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices` |
+| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `get_color_to_channel_dict`, `create_shutter_file`, `create_hal_config`, `format_z_offsets_from_frame_table`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices` |
 | `acquisition.positions` | `create_grid_positions`, `generate_scanning_path`, `filter_scanning_path`, `close_scanning_path`, `load_hole_polygons`, `get_path_stats` |
-| `acquisition.dave` | `create_round_info`, `create_dave_config`, `series_to_movie_name` |
+| `acquisition.dave` | `create_round_info`, `create_dave_config`, `annotate_dave_with_round_info`, `series_to_movie_name`, `get_hal_frame_count` |
+| `acquisition.data_organization` | `create_data_organization` |
+| `acquisition.display` | `print_frame_table`, `display_xml` |
 | `common.config` | `ExperimentConfig` |
 | `common.metadata` | `ExperimentMetadata`, `SeriesInfo`, `FOVInfo`, `RoundInfo` |
-| `common.io` | `read_dax`, `read_zarr`, `read_tiff`, `read_image`, `parse_inf`, `get_dax_shape`, `save_positions_array`, `discover_image_files` |
-| `analysis.fov` | `create_thumbnail`, `create_thumbnails_for_stack`, `measure_stats`, `get_histogram` |
+| `common.io` | `read_dax`, `read_zarr`, `read_tiff`, `read_image`, `parse_inf`, `get_dax_shape`, `load_round_info`, `load_positions`, `save_positions_array`, `discover_image_files` |
+| `analysis.fov` | `create_thumbnail`, `create_thumbnails_for_stack`, `measure_stats`, `get_histogram`, `load_stats`, `load_histogram` |
 | `analysis.round` | `create_mosaic`, `load_thumbnails_for_round` |
+| `analysis.spot_localization` | `detect_beads_2d`, `fit_bead_3d`, `localize_beads_in_volume`, `localize_beads_in_file`, `match_beads_across_colors`, `compute_max_projection`, `plot_max_projections`, `simulate_multicolor_stack` (PSF/bead simulation + localization helpers) |
 | `state` | `ExperimentStateMonitor`, `ExperimentPhase` |
 | `progress` | `ProgressTracker` |
 | `scheduler` | `FOVScheduler`, `RoundScheduler`, `ExperimentScheduler` |
 | `transfer` | `transfer_round` |
-| `visualization` | `visualize_shutter_sequence`, `plot_fov_layout`, `plot_stats_over_rounds`, `display_mosaic` |
+| `visualization` | `visualize_shutter_sequence`, `plot_fov_layout`, `plot_stats_over_rounds`, `plot_spatial_uniformity`, `display_mosaic` |
 
 ---
 
@@ -297,9 +302,9 @@ Optional columns: `hal_config`, `dir`, `imaging_type`, `shutter_file`
 
 ```
 imaging_round,series,hal_config,dir
-1,hal-mf3-epi_01_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,G:\sample\data\H01
-1,hal-mf3-epi_cells_{fov:03d},hal-config-mf3-blkf1-405f49-488f1.xml,G:\sample\data\cells
-2,hal-mf3-epi_02_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,G:\sample\data\H02
+1,hal-mf3-epi_01_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H01
+1,hal-mf3-epi_cells_{fov:03d},hal-config-mf3-blkf1-405f49-488f1.xml,D:\experiments\my_sample\data\cells
+2,hal-mf3-epi_02_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H02
 ```
 
 See the `round_info.csv` section above for column descriptions.

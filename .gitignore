@@ -5,11 +5,17 @@
 __pycache__/
 *.pyc
 
+# Atomic-write leftovers (editor / tool temp files)
+*.tmp.*
+
 # Packaging metadata
 *.egg-info/
 *.egg
 dist/
 build/
 
-# output 
+# output
 output/
+
+# Prompt/task history (local only)
+prompt_history/

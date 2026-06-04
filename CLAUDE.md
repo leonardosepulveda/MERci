@@ -17,28 +17,34 @@ mamba activate merci_env
 jupyter lab
 ```
 
-Open notebooks from `MERci/notebooks/` in the JupyterLab file browser so that `SAMPLE_DIR` is auto-detected correctly.
+Open notebooks from their folders under `MERci/notebooks/` (`prepare_imaging/`, `analysis/`, `misc/`) in the JupyterLab file browser so that `SAMPLE_DIR` is auto-detected correctly.
 
 ## Deployment model
 
-This repo is cloned directly into each new experiment folder (`SAMPLE_DIR`) as `SAMPLE_DIR/MERci/`. No `pip install` is needed — dependencies come from the `merci_env` conda environment. Notebooks add `src/` to `sys.path` automatically (`Path(os.getcwd()).parent / "src"` resolves to `MERci/src` when the notebook CWD is `MERci/notebooks/`). `SAMPLE_DIR` is `Path(os.getcwd()).parent.parent`.
+This repo is cloned directly into each new experiment folder (`SAMPLE_DIR`) as `SAMPLE_DIR/MERci/`. No `pip install` is needed — dependencies come from the `merci_env` conda environment. Notebooks live two levels under the repo root (e.g. `MERci/notebooks/prepare_imaging/`), so each notebook resolves paths as:
+
+```python
+MERCI_DIR  = Path(os.getcwd()).parent.parent   # MERci/
+SAMPLE_DIR = MERCI_DIR.parent                   # experiment root
+sys.path.insert(0, str(MERCI_DIR / "src"))      # MERci/src
+```
 
 ## Experiment folder layout
 
 ```
-SAMPLE_DIR/          (e.g. G:\LT048_sample_18\)
+SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
   MERci/             ← clone of this repo
   positions/         ← boundary_positions.txt, hole*.txt (from operator),
-                        positions_{SAMPLE_NAME}.txt (from setup_02)
-  metadata/          ← frame_table_*.csv, shutter_sequence_*.png (setup_01),
-                        round_info.csv (setup_03),
-                        round_bit_color_map.csv, data_organization_*.csv (setup_04)
-  settings/          ← hal-config-*.xml, shutter-*.xml (setup_01), dave-*.xml (setup_03)
-  readouts.csv       ← codebook readout table (user-provided, required by setup_04)
+                        positions_{SAMPLE_NAME}.txt (from prepare_imaging/02)
+  metadata/          ← frame_table_*.csv, shutter_sequence_*.png (prepare_imaging/01),
+                        round_info.csv (prepare_imaging/03),
+                        round_bit_color_map.csv, data_organization_*.csv (prepare_imaging/04)
+  settings/          ← hal-config-*.xml, shutter-*.xml (prepare_imaging/01), dave-*.xml (prepare_imaging/03)
+  readouts.csv       ← codebook readout table (user-provided, required by prepare_imaging/04)
   data/              ← raw image files; exact subfolder structure defined by the `dir`
                         column in round_info.csv (written by HAL during acquisition)
   analysis/          ← thumbnails/, stats/, histograms/, mosaics/, done/
-                        (produced by analysis_01 and analysis_02 schedulers)
+                        (produced by the analysis/01 and analysis/02 schedulers)
 ```
 
 ## Package layout
@@ -48,59 +54,70 @@ src/MERci/
   common/
     config.py       # ExperimentConfig dataclass — all paths and tunable parameters
     metadata.py     # ExperimentMetadata — parses round_info.csv + positions.txt
-    io.py           # read_dax/zarr/tiff/image, parse_inf, save_positions_array, discover_image_files
+    io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
+                    # save_positions_array, discover_image_files
   acquisition/
-    configs.py      # get_frame_table, get_color_sequence_name, create_shutter_file, create_hal_config
+    configs.py      # get_frame_table, get_color_sequence_name, get_color_to_channel_dict, create_shutter_file,
+                    # create_hal_config, format_z_offsets_from_frame_table
                     # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
-    positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path
-    dave.py         # create_round_info, create_dave_config, series_to_movie_name
-    data_organization.py  # data organization helpers
+    positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
+                    # load_hole_polygons, get_path_stats
+    dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
+                    # series_to_movie_name, get_hal_frame_count
+    data_organization.py  # create_data_organization
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
-    fov.py          # create_thumbnail(s), measure_stats, get_histogram — FOV-level analysis
+    fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
+    spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
+                          # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
   state.py          # ExperimentStateMonitor — detects imaging vs. fluidics phases by watching file mtimes
   progress.py       # ProgressTracker — sentinel files for fov_done, round_done, round_transferred
   scheduler.py      # FOVScheduler, RoundScheduler, ExperimentScheduler — main analysis loops
   transfer.py       # transfer_round — background robocopy/shutil to a network destination
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
 notebooks/
-  setup_01_create_hal_config_and_shutters.ipynb        # Pre-experiment: define imaging sequence, write HAL XML and CSV
-  setup_02_create_positions_from_tissue_boundary.ipynb # Pre-experiment: generate FOV scanning grid
-  setup_03_create_dave_config.ipynb                    # Pre-experiment: generate round_info.csv and Dave recipe XML
-  setup_04_create_data_organization.ipynb              # Pre-experiment: data organization setup
-  analysis_01_fov_scheduler.ipynb                      # Online: FOV-level scheduler (thumbnails, stats, histograms)
-  analysis_02_round_scheduler.ipynb                    # Online: round-level scheduler (mosaics, optional data transfer)
-  analysis_03_view_mosaics.ipynb                       # Online: display per-color mosaics as they are built
-  analysis_04_view_intensity_stats.ipynb               # Online: plot per-frame intensity statistics over rounds
+  prepare_imaging/  # Pre-experiment notebooks (run in order)
+    01_create_hal_config_and_shutters.ipynb        # define imaging sequence, write HAL XML and CSV
+    02_create_positions_from_tissue_boundary.ipynb # generate FOV scanning grid
+    03_create_dave_config.ipynb                    # generate round_info.csv and Dave recipe XML
+    04_create_data_organization.ipynb              # MERlin data-organization setup
+  analysis/         # Online-analysis notebooks (run during the experiment)
+    01_fov_scheduler.ipynb                         # FOV-level scheduler (thumbnails, stats, histograms)
+    02_round_scheduler.ipynb                       # round-level scheduler (mosaics, optional data transfer)
+    03_view_mosaics.ipynb                          # display per-color mosaics as they are built
+    04_view_intensity_stats.ipynb                  # plot per-frame intensity statistics over rounds
+  misc/             # Ad-hoc utilities
+    MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
+  input/, output/   # example input configs and example analysis output (for demos/tests)
 ```
 
 ## Architecture
 
 ### Pre-experiment workflow
 
-Run the four setup notebooks in order before starting the microscope.
+Run the four `prepare_imaging/` notebooks in order before starting the microscope.
 
-**setup_01** (`setup_01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
-- `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/templates/hal-config-mf3-epi.xml`
+**01** (`prepare_imaging/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
+- `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}-epi.xml`
 - `SAMPLE_DIR/settings/shutter-{name}.xml` — shutter event XML
 - `SAMPLE_DIR/metadata/frame_table_{name}.csv` — frame table
 - `SAMPLE_DIR/metadata/shutter_sequence_{name}.png` — visualisation
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**setup_02** (`setup_02_create_positions_from_tissue_boundary.ipynb`): reads `boundary_positions.txt` and `hole*.txt` from `SAMPLE_DIR/positions/`, builds a regular boustrophedon FOV grid (`create_grid_positions` → `generate_scanning_path`), filters by polygon–polygon overlap (`filter_scanning_path`), reorders return points (`close_scanning_path`), and saves `SAMPLE_DIR/positions/positions_{SAMPLE_NAME}.txt`.
+**02** (`prepare_imaging/02_create_positions_from_tissue_boundary.ipynb`): reads `boundary_positions.txt` and `hole*.txt` from `SAMPLE_DIR/positions/`, builds a regular boustrophedon FOV grid (`create_grid_positions` → `generate_scanning_path`), filters by polygon–polygon overlap (`filter_scanning_path`), reorders return points (`close_scanning_path`), and saves `SAMPLE_DIR/positions/positions_{SAMPLE_NAME}.txt`.
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**setup_03** (`setup_03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+**03** (`prepare_imaging/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
 
-**setup_04** (`setup_04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `SAMPLE_DIR/readouts.csv` (codebook mapping bit numbers to readout names). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
+**04** (`prepare_imaging/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `SAMPLE_DIR/readouts.csv` (codebook mapping bit numbers to readout names). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
 - `SAMPLE_DIR/metadata/round_bit_color_map.csv`
 - `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
 - Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
@@ -160,11 +177,11 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 ### Key data files
 
-- `round_info.csv` — required columns: `imaging_round` (or legacy `round_id`), `series` (Python format string like `hal-mf3-epi_{fov:03d}_01`); optional: `imaging_type`, `hal_config`, `shutter_file`, `dir`. See `data/examples/round_info_example.csv`.
+- `round_info.csv` — required columns: `imaging_round` (or legacy `round_id`), `series` (Python format string like `hal-mf3-epi_{fov:03d}_01`); optional: `imaging_type`, `hal_config`, `shutter_file`, `dir`. Loaded via `common.io.load_round_info`.
 - `positions_{SAMPLE_NAME}.txt` — comma-separated `x,y` per line, one FOV per line; `#`-prefixed lines ignored
 - Image files — HAL writes `.zarr` (directory store, default), `.dax` (raw uint16 binary + `.inf` sidecar), or `.tiff` (multi-page). Use `read_image(path)` to load any format. `discover_image_files` handles both flat files and zarr directory stores.
-- HAL config templates — `data/configs/hal/hal-config-{mic}-epi.xml`; auto-detected in setup_01 by microscope name; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
-- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; auto-detected in setup_03 by microscope name; newest file (by YYMMDD) is copied to `SAMPLE_DIR/settings/`
+- HAL config templates — `data/configs/hal/hal-config-{mic}-epi.xml`; auto-detected in `prepare_imaging/01` by microscope name; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
+- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; auto-detected in `prepare_imaging/03` by microscope name; newest file (by YYMMDD) is copied to `SAMPLE_DIR/settings/`
 
 ### Microscope channel mapping
 
@@ -172,8 +189,54 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 ## Running notebooks
 
-Notebooks auto-detect `SAMPLE_DIR` via `Path(os.getcwd()).parent.parent`. Do not hardcode absolute paths in notebooks.
+Notebooks auto-detect `SAMPLE_DIR` from their own location: `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. This assumes notebooks are run from a second-level subfolder (`MERci/notebooks/<group>/`). Do not hardcode absolute paths in notebooks.
 
 ## Scope constraint
 
 All edits and analysis must stay within this repo. Do not modify sibling folders (`image_acquisition/`, `imaging_with_storm_control/`, etc.) unless explicitly requested.
+
+## Version control
+
+Commit and push as you go — do not leave finished work uncommitted.
+
+- After completing each individual modification, create its own focused git commit
+  (one logical change per commit) with a clear message, then `git push` to `origin`.
+- Do not batch many unrelated changes into a single commit, and do not let edits
+  pile up locally — the remote (`github.com/leonardosepulveda/MERci`) should reflect
+  progress as it happens.
+- This is standing authorization to commit and push without asking each time.
+- Never commit transient files: atomic-write leftovers (`*.tmp.*`), `__pycache__/`,
+  or `*.egg-info/` (all gitignored).
+
+## Remembering task history
+
+For **every user question/request**, log it to `prompt_history/` (a gitignored,
+local-only folder). This lets project context be reconstructed if the
+conversation history is lost.
+
+- Create one Markdown file per request, named `{YYYY_MM_DD_HH_MM}_{short_description}.md`
+  (e.g. `2026_06_04_1432_add_prompt_history_convention.md`).
+- Use YAML frontmatter for queryable metadata, then prose sections. Template:
+
+```markdown
+---
+date: YYYY-MM-DD HH:MM
+title: <short description>
+files_modified:
+  - path/relative/to/repo
+status: completed | in-progress | abandoned
+---
+
+## Prompt
+<verbatim copy of the user's request>
+
+## Plan
+<Claude's plan of action before executing>
+
+## Summary
+<what was actually done, including any deviations from the plan>
+```
+
+Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
+and lets all entries be scanned/grepped by metadata without reading every body.
+
