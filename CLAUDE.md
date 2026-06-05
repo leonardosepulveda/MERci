@@ -60,6 +60,8 @@ src/MERci/
     configs.py      # get_frame_table, get_color_sequence_name, get_color_to_channel_dict, create_shutter_file,
                     # create_hal_config, format_z_offsets_from_frame_table
                     # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
+                    # + reconstruct_frame_table (inverse: hal+shutter XML -> frame table) and its parsers
+                    #   read_shutter_reference, parse_z_offsets, parse_shutter_events
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
                     # load_hole_polygons, get_path_stats
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
@@ -89,6 +91,7 @@ notebooks/
     04_view_intensity_stats.ipynb                  # plot per-frame intensity statistics over rounds
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
+    reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)

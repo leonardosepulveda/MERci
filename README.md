@@ -192,7 +192,9 @@ During the experiment, run the analysis notebooks in separate JupyterLab tabs to
 - `notebooks/analysis/03_view_mosaics.ipynb` — displays per-color mosaics as they are built
 - `notebooks/analysis/04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
 
-A standalone utility notebook is also provided: `notebooks/misc/MF2_60XSil1.3_zcorrection.ipynb` — z-correction for the MF2 60× silicone objective.
+Standalone utility notebooks are also provided under `notebooks/misc/`:
+- `MF2_60XSil1.3_zcorrection.ipynb` — z-correction for the MF2 60× silicone objective.
+- `reconstruct_frame_table_from_configs.ipynb` — inverse of `prepare_imaging/01`: rebuild a `frame_table_*.csv` from an existing HAL config + its shutter file (recover a lost frame table or verify HAL/shutter consistency).
 
 ### How it works
 
@@ -274,7 +276,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 | Module | Key exports |
 |---|---|
-| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `get_color_to_channel_dict`, `create_shutter_file`, `create_hal_config`, `format_z_offsets_from_frame_table`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices` |
+| `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `get_color_to_channel_dict`, `create_shutter_file`, `create_hal_config`, `format_z_offsets_from_frame_table`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices`, `reconstruct_frame_table`, `read_shutter_reference`, `parse_z_offsets`, `parse_shutter_events` |
 | `acquisition.positions` | `create_grid_positions`, `generate_scanning_path`, `filter_scanning_path`, `close_scanning_path`, `load_hole_polygons`, `get_path_stats` |
 | `acquisition.dave` | `create_round_info`, `create_dave_config`, `annotate_dave_with_round_info`, `series_to_movie_name`, `get_hal_frame_count` |
 | `acquisition.data_organization` | `create_data_organization` |
