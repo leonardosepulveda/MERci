@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"Reminder: per CLAUDE.md, log this request to prompt_history/ as {YYYY_MM_DD_HH_MM}_{short_description}.md with YAML frontmatter (date, title, files_modified, status) and Prompt / Plan / Summary sections. Create/update it before ending the turn.\"}}'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
