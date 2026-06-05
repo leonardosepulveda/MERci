@@ -329,6 +329,8 @@ Use `read_image(path)` to load any of the three formats without knowing the type
 
 ### Microscope channel mapping
 
+**MF2, MF3, MF5** (5 channels):
+
 | Wavelength (nm) | Channel index |
 |---|---|
 | 750 | 0 |
@@ -338,4 +340,14 @@ Use `read_image(path)` to load any of the three formats without knowing the type
 | 405 | 4 |
 | blank | NaN |
 
-MF2, MF3, and MF5 all use this mapping. Add new microscopes to `_COLOUR_TO_CHANNEL` in `acquisition/configs.py`.
+**MFX** (4 channels, no 750, distinct ordering):
+
+| Wavelength (nm) | Channel index |
+|---|---|
+| 650 | 0 |
+| 560 | 1 |
+| 488 | 2 |
+| 405 | 3 |
+| blank | NaN |
+
+Add new microscopes to `_COLOUR_TO_CHANNEL` in `acquisition/configs.py`.
