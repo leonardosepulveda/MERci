@@ -429,6 +429,192 @@ def get_color_frame_indices(
     return result
 
 
+# ── Frame table reconstruction (inverse of get_frame_table) ──────────────────
+
+def read_shutter_reference(hal_config_path: Path) -> str:
+    """
+    Return the shutter filename referenced by the ``<shutters>`` element of the
+    HAL config at *hal_config_path* (e.g. ``"shutter-blkf2-560f49-650f49.xml"``).
+
+    Raises
+    ------
+    ValueError
+        If no ``<shutters>`` element is found.
+    """
+    with open(hal_config_path, "rb") as fh:
+        text = fh.read().decode("ISO-8859-1")
+    m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
+    if not m:
+        raise ValueError(
+            f"No <shutters> element found in HAL config: {hal_config_path}"
+        )
+    return m.group(1).strip()
+
+
+def read_hal_frame_count(hal_config_path: Path) -> "Optional[int]":
+    """Return the ``<frames>`` value from the HAL config, or ``None`` if absent."""
+    with open(hal_config_path, "rb") as fh:
+        text = fh.read().decode("ISO-8859-1")
+    m = re.search(r"<frames[^>]*>\s*(\d+)\s*</frames>", text)
+    return int(m.group(1)) if m else None
+
+
+def parse_z_offsets(hal_config_path: Path) -> List[float]:
+    """
+    Parse the ``<z_offsets>`` element of a HAL config into one float per frame.
+
+    Inverse of :func:`format_z_offsets_from_frame_table`.
+
+    Raises
+    ------
+    ValueError
+        If the HAL config has no (non-empty) ``<z_offsets>`` element — e.g. it
+        does not use the hardware Z-nanopositioner scan — so per-frame z cannot
+        be determined.
+    """
+    with open(hal_config_path, "rb") as fh:
+        text = fh.read().decode("ISO-8859-1")
+    m = re.search(r"<z_offsets[^>]*>(.*?)</z_offsets>", text, flags=re.DOTALL)
+    if not m or not m.group(1).strip():
+        raise ValueError(
+            f"HAL config has no <z_offsets>; per-frame z cannot be determined: "
+            f"{hal_config_path}"
+        )
+    values = re.findall(r"[-+]?\d*\.?\d+", m.group(1))
+    return [float(v) for v in values]
+
+
+def parse_shutter_events(shutter_path: Path) -> "Dict[int, int]":
+    """
+    Map ``frame_index -> channel`` for every ``<event>`` in a shutter XML file.
+
+    Inverse of the per-frame events written by :func:`create_shutter_file`.
+    The frame index is ``round(float(<on>))``; blank frames have no event and
+    are therefore absent from the returned mapping.
+
+    Raises
+    ------
+    ValueError
+        If two events map to the same frame index (ambiguous).
+    """
+    with open(shutter_path, "rb") as fh:
+        root = ET.fromstring(fh.read().decode("ISO-8859-1"))
+
+    oversampling_el = root.find("oversampling")
+    if (oversampling_el is not None and oversampling_el.text
+            and int(float(oversampling_el.text)) != 1):
+        import warnings
+        warnings.warn(
+            f"Shutter <oversampling> is {oversampling_el.text.strip()} "
+            f"(expected 1); frame indices are read from <on> as written by MERci.",
+            stacklevel=2,
+        )
+
+    events: Dict[int, int] = {}
+    for event in root.findall("event"):
+        on_el      = event.find("on")
+        channel_el = event.find("channel")
+        if on_el is None or channel_el is None:
+            continue
+        frame_idx = int(round(float(on_el.text)))
+        if frame_idx in events:
+            raise ValueError(
+                f"Two shutter events map to frame index {frame_idx} in {shutter_path}"
+            )
+        events[frame_idx] = int(channel_el.text)
+    return events
+
+
+def reconstruct_frame_table(
+    hal_config_path: Path,
+    shutter_path:    "Optional[Path]" = None,
+    microscope:      str              = "MF3",
+) -> pd.DataFrame:
+    """
+    Rebuild a frame table from a HAL config XML and its shutter XML — the inverse
+    of :func:`get_frame_table` / :func:`create_shutter_file`.
+
+    Per-frame ``z`` comes from the HAL config ``<z_offsets>``; per-frame
+    ``channel`` comes from the shutter ``<event>`` list (frames with no event
+    are blank); ``color`` is recovered by inverting
+    :func:`get_color_to_channel_dict`.
+
+    Parameters
+    ----------
+    hal_config_path : HAL config XML written by :func:`create_hal_config`
+    shutter_path    : shutter XML; if ``None`` it is resolved from the HAL
+                      config's ``<shutters>`` element, relative to the HAL
+                      config's directory
+    microscope      : microscope name for the channel→color mapping
+
+    Returns
+    -------
+    DataFrame with columns ``["color", "channel", "z"]`` and a RangeIndex equal
+    to the camera frame number (0-based). Blank frames have ``NaN`` color and
+    channel — identical in structure to :func:`get_frame_table`'s output.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the referenced/derived shutter file does not exist.
+    ValueError
+        On a frame-count mismatch, a missing ``<z_offsets>``, or an event
+        channel that is not in the microscope's channel map.
+    """
+    hal_config_path = Path(hal_config_path)
+
+    if shutter_path is None:
+        shutter_path = hal_config_path.parent / read_shutter_reference(hal_config_path)
+    shutter_path = Path(shutter_path)
+    if not shutter_path.exists():
+        raise FileNotFoundError(f"Shutter file not found: {shutter_path}")
+
+    z_offsets = parse_z_offsets(hal_config_path)
+    events    = parse_shutter_events(shutter_path)
+    n_frames  = len(z_offsets)
+
+    # Cross-check the frame count declared in the HAL config.
+    hal_frames = read_hal_frame_count(hal_config_path)
+    if hal_frames is not None and hal_frames != n_frames:
+        raise ValueError(
+            f"Frame-count mismatch: HAL <frames>={hal_frames} but <z_offsets> "
+            f"has {n_frames} values ({hal_config_path})"
+        )
+
+    # Every shutter event must fall within the frame range implied by z_offsets.
+    stray = sorted(i for i in events if i < 0 or i >= n_frames)
+    if stray:
+        raise ValueError(
+            f"Shutter has events for frame(s) {stray} outside the {n_frames}-frame "
+            f"range implied by <z_offsets> — mismatched HAL/shutter pair "
+            f"({shutter_path})"
+        )
+
+    # channel → color (drop the NaN→NaN entry)
+    inv = {
+        int(ch): color
+        for color, ch in get_color_to_channel_dict(microscope).items()
+        if not pd.isna(ch)
+    }
+
+    rows: List[Dict] = []
+    for i in range(n_frames):
+        if i in events:
+            channel = events[i]
+            if channel not in inv:
+                raise ValueError(
+                    f"Shutter event at frame {i} has channel {channel}, which is "
+                    f"not in the '{microscope}' channel map {sorted(inv)}"
+                )
+            rows.append({"color":   float(inv[channel]),
+                         "channel": float(channel),
+                         "z":       z_offsets[i]})
+        else:
+            rows.append({"color": np.nan, "channel": np.nan, "z": z_offsets[i]})
+
+    return pd.DataFrame(rows, columns=["color", "channel", "z"])
+
+
 # ── Pretty-print helper ───────────────────────────────────────────────────────
 
 def _write_pretty_xml(root: ET.Element, output_path: Path) -> None:
