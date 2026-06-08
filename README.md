@@ -86,10 +86,14 @@ Key parameters to set:
 | `z_bead` | z position for fiducial bead frames (µm) | `0` |
 | `bead_seq` | Laser colours for bead frames | `[488, np.nan]` |
 | `color_seq` | Laser colours for data frames | `[560, 650]` |
-| `end_seq` | Blank frames at end of stack | `[np.nan, np.nan]` |
+| `end_seq` | Frames acquired at `z_bead` after the z-stack (and after the z return) | `[np.nan, np.nan]` |
 | `z_pos` | z positions for the data stack (µm) | `np.arange(1, 20.5, 0.5)` |
+| `Z_RETURN_MODE` | How the objective returns to `z_bead` after the stack: `"progressive"` (default; blank frames step down by `RETURN_STEP`) or `"instant"` (single jump) | `"progressive"` |
+| `RETURN_STEP` | z decrement (µm) per blank frame in progressive mode | `5` |
 | `FILE_TYPE` | Image format written by HAL | `".zarr"` (default), `".dax"`, `".tiff"` |
 | `EXPOSURE_TIME` | Camera exposure time (seconds) | `0.25` |
+
+In **progressive** mode (the default), a stack ending at z=25 with `z_bead=0` and `RETURN_STEP=5` adds blank (laser-off) frames at z = 20, 15, 10, 5, 0 — stepping the Z-nanopositioner back to the coverslip in controlled increments — before the `end_seq` frames. Use `"instant"` for the previous single-jump behaviour.
 
 **Outputs** (written to `SAMPLE_DIR/settings/` and `SAMPLE_DIR/metadata/`):
 - `hal-config-{mic}-{name}.xml` — HAL imaging config, patched from the template in `MERci/data/configs/hal/`

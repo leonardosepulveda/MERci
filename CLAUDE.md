@@ -106,7 +106,7 @@ data/
 
 Run the four `prepare_imaging/` notebooks in order before starting the microscope.
 
-**01** (`prepare_imaging/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
+**01** (`prepare_imaging/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
 - `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}-epi.xml`
 - `SAMPLE_DIR/settings/shutter-{name}.xml` — shutter event XML
 - `SAMPLE_DIR/metadata/frame_table_{name}.csv` — frame table
