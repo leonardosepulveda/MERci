@@ -4,7 +4,7 @@ Unified plotting utilities for both acquisition planning and analysis.
 
 Acquisition
 -----------
-visualize_shutter_sequence  – bar chart of the per-frame colour sequence
+visualize_shutter_sequence  – frame-vs-z trajectory, markers coloured by laser
 
 Analysis
 --------
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -28,36 +29,24 @@ log = logging.getLogger(__name__)
 
 # ── Acquisition: shutter sequence ─────────────────────────────────────────────
 
-def _infer_scan_mode(frame_table) -> str:
-    """Return ``'interleaved'`` or ``'sequential'`` from the frame table structure."""
-    bead_z = frame_table["z"].iloc[0]
-    data   = frame_table[frame_table["z"] != bead_z]
-    if len(data) < 2:
-        return "interleaved"
-    if data["z"].iloc[0] == data["z"].iloc[1]:
-        return "interleaved"
-    c0, c1     = data["color"].iloc[0], data["color"].iloc[1]
-    same_color = (c0 == c1) or (pd.isna(c0) and pd.isna(c1))
-    return "sequential" if same_color else "interleaved"
-
-
 def visualize_shutter_sequence(
     frame_table,                   # pd.DataFrame
     title:     Optional[str] = None,
     save_path: Optional[Path] = None,
 ) -> None:
     """
-    Draw a vertical bar chart of the per-frame colour/z sequence.
+    Plot the per-frame z trajectory of an imaging round.
 
-    Each horizontal bar represents one camera frame.  Bars are placed in
-    columns corresponding to hardware channels, with blank frames in an
-    extra column.
+    The x-axis is the camera frame number and the y-axis is the z position
+    (µm).  A grey baseline traces the objective's z path across frames, and a
+    circular marker at each frame is filled with the colour of the laser
+    acquired at that frame.  Blank (laser-off) frames are drawn as hollow
+    grey-edged markers.
 
-    The scan mode is inferred automatically:
-
-    - **Interleaved**: separators at every z-change; z-value labels on the right.
-    - **Sequential**: separators only at color-block boundaries; each color block
-      is labelled with wavelength and z-range at its midpoint.
+    The shape of the trajectory makes the acquisition order obvious: an
+    interleaved scan shows a rising staircase (all colours per z before
+    stepping), a sequential scan shows full z-sweeps per colour, and a
+    progressive z-return shows the descending tail back to ``bead_z``.
 
     Parameters
     ----------
@@ -72,115 +61,65 @@ def visualize_shutter_sequence(
         650.0: "#2ca02c",   # green
         750.0: "#d62728",   # red
     }
-    _BLANK_COLOUR   = "black"
+    _BLANK_FACE     = "white"
+    _BLANK_EDGE     = "0.6"
     _DEFAULT_COLOUR = "#7f7f7f"
-    _BLANK_X        = -1
-
-    scan_mode = _infer_scan_mode(frame_table)
 
     df = frame_table.copy().reset_index().rename(columns={"index": "frame"})
     if df.empty:
         log.warning("Frame table is empty – nothing to plot.")
         return
 
-    active_channels = sorted(df["channel"].dropna().unique())
-    all_x           = [_BLANK_X] + [int(c) for c in active_channels]
-
     df = df.sort_values("frame")
+    frames = df["frame"].to_numpy()
+    z_vals = df["z"].astype(float).to_numpy()
 
-    fig, ax = plt.subplots(figsize=(5, 8))
-
-    # ── Draw bars ────────────────────────────────────────────────────────────
-    for _, row in df.iterrows():
-        frame = int(row["frame"])
-        ch    = row["channel"]
-        wav   = row["color"]
-
+    # Per-frame marker colours: laser colour for acquired frames, hollow for blanks.
+    faces, edges = [], []
+    for wav, ch in zip(df["color"], df["channel"]):
         if pd.isna(ch):
-            x_ctr, face = _BLANK_X, _BLANK_COLOUR
+            faces.append(_BLANK_FACE)
+            edges.append(_BLANK_EDGE)
         else:
-            x_ctr = int(ch)
-            face  = _WAVELENGTH_COLOUR.get(float(wav), _DEFAULT_COLOUR)
+            colour = _WAVELENGTH_COLOUR.get(float(wav), _DEFAULT_COLOUR)
+            faces.append(colour)
+            edges.append(colour)
 
-        ax.barh(
-            y=frame, width=0.8, left=x_ctr - 0.4, height=1.0,
-            align="center", color=face, edgecolor="k", linewidth=0.2,
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    # Grey baseline tracing the z path across frames.
+    ax.plot(frames, z_vals, color="grey", alpha=0.5, linewidth=1.0, zorder=1)
+
+    # Circular markers coloured by the acquired laser.
+    ax.scatter(
+        frames, z_vals,
+        facecolors=faces, edgecolors=edges,
+        s=40, linewidths=0.8, zorder=2,
+    )
+
+    # Legend: one entry per laser present, plus blank if any.
+    present = sorted({float(w) for w, c in zip(df["color"], df["channel"])
+                      if not pd.isna(c)})
+    handles = [
+        Line2D([0], [0], marker="o", linestyle="",
+               markerfacecolor=_WAVELENGTH_COLOUR.get(w, _DEFAULT_COLOUR),
+               markeredgecolor=_WAVELENGTH_COLOUR.get(w, _DEFAULT_COLOUR),
+               markersize=7, label=f"{int(w)} nm")
+        for w in present
+    ]
+    if df["channel"].isna().any():
+        handles.append(
+            Line2D([0], [0], marker="o", linestyle="",
+                   markerfacecolor=_BLANK_FACE, markeredgecolor=_BLANK_EDGE,
+                   markersize=7, label="blank")
         )
+    if handles:
+        ax.legend(handles=handles, title="Laser", fontsize=8, loc="best")
 
-    # ── Separators ───────────────────────────────────────────────────────────
-    # Interleaved: draw at every z-change.
-    # Sequential: draw only at color-block boundaries (suppresses per-frame
-    # separators within a z-sweep, which would make the chart unreadably busy).
-    prev_frame = prev_z = prev_color = None
-    for _, row in df.iterrows():
-        f = int(row["frame"])
-        z = row["z"]
-        c = row["color"]
-        if prev_frame is not None:
-            if scan_mode == "interleaved":
-                draw_sep = z != prev_z
-            else:
-                same = (prev_color == c) if not (pd.isna(prev_color) or pd.isna(c)) \
-                       else (pd.isna(prev_color) and pd.isna(c))
-                draw_sep = not same
-            if draw_sep:
-                ax.axhline(
-                    y=(prev_frame + f) / 2.0,
-                    color="0.7", linestyle="--", linewidth=0.5, zorder=0,
-                )
-        prev_frame, prev_z, prev_color = f, z, c
-
-    # ── Annotations ──────────────────────────────────────────────────────────
-    right_x = max(all_x) + 1.2 if all_x else 0.5
-
-    if scan_mode == "interleaved":
-        # One z-value label at the first frame of each unique z-plane.
-        for z_val, f0 in df.groupby("z", sort=True)["frame"].min().items():
-            if pd.isna(z_val):
-                continue
-            ax.text(right_x, f0, f"z={z_val:g}", fontsize=8, va="center", ha="left")
-
-    else:
-        # One label per color block placed at the block's vertical midpoint.
-        # Build blocks: (first_frame, last_frame, color, z_start, z_end)
-        blocks: list = []
-        blk_start = blk_color = blk_z_start = blk_z_end = None
-        prev_f = None
-        for _, row in df.iterrows():
-            f = int(row["frame"])
-            c = row["color"]
-            z = row["z"]
-            if blk_color is None:
-                blk_start, blk_color, blk_z_start = f, c, z
-            else:
-                same = (blk_color == c) if not (pd.isna(blk_color) or pd.isna(c)) \
-                       else (pd.isna(blk_color) and pd.isna(c))
-                if not same:
-                    blocks.append((blk_start, prev_f, blk_color, blk_z_start, blk_z_end))
-                    blk_start, blk_color, blk_z_start = f, c, z
-            blk_z_end, prev_f = z, f
-        if blk_start is not None:
-            blocks.append((blk_start, prev_f, blk_color, blk_z_start, blk_z_end))
-
-        for (f0, f1, color, z0, z1) in blocks:
-            mid = (f0 + f1) / 2.0
-            if pd.isna(color):
-                label = "blank"
-            elif z0 == z1:
-                label = f"{int(color)} nm  z={z0:g}"
-            else:
-                arrow = "^" if z1 > z0 else "v"
-                label = f"{int(color)} nm  z={z0:g}->{z1:g} {arrow}"
-            ax.text(right_x, mid, label, fontsize=8, va="center", ha="left")
-
-    # ── Labels & ticks ────────────────────────────────────────────────────────
-    ax.set_ylabel("Frame")
-    ax.set_xlabel("Channel / blank")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel("z position (µm)")
     ax.set_title(title or "Shutter sequence")
-    ax.set_xticks(all_x)
-    ax.set_xticklabels(["blank"] + [str(int(c)) for c in active_channels])
-    ax.set_xlim(min(all_x) - 1, max(all_x) + 3.5)
-    ax.set_ylim(df["frame"].min() - 1, df["frame"].max() + 1)
+    ax.margins(x=0.01)
 
     plt.tight_layout()
     if save_path is not None:
