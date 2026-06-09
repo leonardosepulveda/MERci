@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<settings>
+  <camera1 validate="True">
+    <AOIBinning type="string">1x1</AOIBinning>
+    <AOIHeight type="int">2048</AOIHeight>
+    <AOILeft type="int">1</AOILeft>
+    <AOITop type="int">1</AOITop>
+    <AOIWidth type="int">2048</AOIWidth>
+    <ExposureTime type="float">0.5</ExposureTime>
+    <FanSpeed type="string">On</FanSpeed>
+    <SensorCooling type="boolean">True</SensorCooling>
+    <SimplePreAmpGainControl type="string">16-bit (low noise &amp; high well capacity)</SimplePreAmpGainControl>
+    <default_max type="int">500</default_max>
+    <default_min type="int">0</default_min>
+    <exposure_time type="float">0.5</exposure_time>
+    <extension type="string"/>
+    <flip_horizontal type="boolean">False</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <fps type="float">8.0</fps>
+    <saved type="boolean">True</saved>
+    <temperature type="float">-20.0</temperature>
+    <transpose type="boolean">False</transpose>
+    <x_bin type="int">1</x_bin>
+    <x_end type="int">256</x_end>
+    <x_pixels type="int">2048</x_pixels>
+    <x_start type="int">1</x_start>
+    <y_bin type="int">1</y_bin>
+    <y_end type="int">256</y_end>
+    <y_pixels type="int">2048</y_pixels>
+    <y_start type="int">1</y_start>
+  </camera1>
+  <display00 validate="False">
+    <camera1 validate="True">
+      <center_x type="float">1025.0</center_x>
+      <center_y type="float">1025.0</center_y>
+      <colortable type="string">ramp_sat.ctbl</colortable>
+      <display_max type="int">500</display_max>
+      <display_min type="int">0</display_min>
+      <initialized type="boolean">True</initialized>
+      <scale type="int">-3</scale>
+      <sync type="int">0</sync>
+    </camera1>
+    <feed_name type="string">camera1</feed_name>
+  </display00>
+  <film validate="False">
+    <acq_mode type="string">fixed_length</acq_mode>
+    <auto_increment type="boolean">True</auto_increment>
+    <auto_shutters type="boolean">True</auto_shutters>
+    <extension type="string"/>
+    <filename type="string">movie</filename>
+    <filetype type="string">.tif</filetype>
+    <frames type="int">3</frames>
+    <want_bell type="boolean">True</want_bell>
+  </film>
+  
+  <focuslock validate="True">
+    <calibrate validate="True">
+      <deadtime type="int">20</deadtime>
+      <frames_to_pause type="int">2</frames_to_pause>
+      <range type="float">600.0</range>
+      <step_size type="float">10.0</step_size>
+    </calibrate>
+    <find_sum validate="True">
+      <step_size type="float">0.1</step_size>
+    </find_sum>
+    <hardware_z_scan validate="True">
+      <z_offsets type="string">
+		 0,   0,   0
+	  </z_offsets>
+    </hardware_z_scan>
+    <jump_size type="float">0.1</jump_size>
+    
+	<locked validate="True">
+      <buffer_length type="int">3</buffer_length>
+      <lock_gain type="float">0.3</lock_gain>
+      <lock_gain_max type="float">0.5</lock_gain_max>
+      <minimum_sum type="float">-1.0</minimum_sum>
+      <offset_threshold type="float">30.0</offset_threshold>
+    </locked>
+    <optimal_mode validate="True">
+      <bracket_step type="float">1000.0</bracket_step>
+      <quality_threshold type="float">0.0</quality_threshold>
+      <scan_hold type="int">10</scan_hold>
+      <scan_step type="float">100.0</scan_step>
+    </optimal_mode>
+    <scan validate="True">
+      <minimum_sum type="float">15000.0</minimum_sum>
+      <offset_threshold type="float">30.0</offset_threshold>
+      <scan_range type="float">10.0</scan_range>
+      <scan_step type="float">0.05</scan_step>
+    </scan>
+  </focuslock>
+  
+
+  <illumination validate="True">
+    <default_power type="custom">1.000,1.000,1.000,1.000,1.000,1.000,1.000</default_power>
+    <on_off_state type="custom">False,False,False,False,False,False,False</on_off_state>
+    <power_buttons type="custom">[[['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]]]</power_buttons>
+    <shutters type="string">shutter_config_blkf4-405f49-488f2-560f49-650f49.xml</shutters>
+  </illumination>
+  <mosaic validate="False">
+    <flip_horizontal type="boolean">False</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <obj1 type="custom">60x,0.1092,0.0,0.0</obj1>
+    <obj2 type="custom">10x,0.650,0.0,0.0</obj2>
+    <obj3 type="custom">60xSi,0.1092,0.0,0.0</obj3>
+    <objective type="string">obj1</objective>
+    <transpose type="boolean">False</transpose>
+  </mosaic>
+  <spinning_disk validate="True">
+    <aperture type="int">10</aperture>
+    <bright_field_bypass type="boolean">False</bright_field_bypass>
+    <camera_dichroic_mirror type="string">1:Glass</camera_dichroic_mirror>
+    <dichroic_mirror type="string">1:DMPT405/488/561/640/755</dichroic_mirror>
+    <disk type="string">50-micron pinholes</disk>
+    <disk_speed type="int">4000</disk_speed>
+    <filter_wheel_pos1 type="string">4:zet405/488/561/647-656/752m</filter_wheel_pos1>
+    <filter_wheel_pos2 type="string">10:blocked</filter_wheel_pos2>
+    <spin_disk type="boolean">True</spin_disk>
+  </spinning_disk>
+  <stage validate="True">
+    <large_step_size type="float">25.0</large_step_size>
+    <small_step_size type="float">5.0</small_step_size>
+  </stage>
+  <timing validate="True">
+    <time_base type="string">camera1</time_base>
+  </timing>
+</settings>
