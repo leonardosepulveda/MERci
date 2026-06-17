@@ -333,7 +333,7 @@ Use `read_image(path)` to load any of the three formats without knowing the type
 
 ### Microscope channel mapping
 
-**MF2, MF3, MF5** (5 channels):
+**MF2, MF3, MF4, MF5** (5 channels):
 
 | Wavelength (nm) | Channel index |
 |---|---|
