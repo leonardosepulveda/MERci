@@ -12,16 +12,18 @@ This makes the file easy to inspect and edit before starting an experiment.
 
 Experiment structure
 --------------------
-Round 1 (imaging): bits acquisition + cells acquisition for all FOVs
-Fluidics Round 02: Cleave → Hybridize/Adaptor 2 → [Readouts] → Buffer
-Round 2 (imaging): bits acquisition for all FOVs
-Fluidics Round 03: Cleave → Hybridize/Adaptor 3 → [Readouts] → Buffer
+Round 1 (imaging): cells acquisition for all FOVs (no preceding fluidics)
+Fluidics Round 02: Hybridize/Adaptor 1 → [Readouts] → Buffer   ← NO cleave (first hyb)
+Round 2 (imaging): bits #1 acquisition for all FOVs
+Fluidics Round 03: Cleave → Hybridize/Adaptor 2 → [Readouts] → Buffer
 …
-Round N (imaging): bits acquisition
+Round N+1 (imaging): bits #N acquisition
 [Optional] Fluidics Final: Cleave only
 
 Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
-precedes "Imaging Round 02").
+precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb index
+(1…N), not the imaging-round number, and the first hyb omits the cleave step
+(see ``create_dave_config(first_hyb_no_cleave=...)``).
 
 The ``round_info.csv`` drives everything:
 - rows with the same ``imaging_round`` are acquired in the same imaging loop
@@ -80,8 +82,10 @@ def create_round_info(
     """
     Build the ``round_info.csv`` dataframe for a standard MERFISH experiment.
 
-    The first imaging round contains both a bits acquisition and a cells
-    acquisition.  Subsequent rounds contain only the bits acquisition.
+    Imaging round 1 is the **cells** acquisition only.  Imaging rounds 2…N+1 are
+    the bits acquisitions (bit/hyb #1…#N).  The bits movie *series* number tracks
+    the bit/hyb index (``_01``…``_0N``), not the imaging-round number, so the
+    Kilroy hyb-protocol numbers stay stable regardless of the cells offset.
 
     Parameters
     ----------
@@ -93,36 +97,37 @@ def create_round_info(
 
     Returns
     -------
-    pd.DataFrame with columns ``imaging_round``, ``series``, ``hal_config``, ``data_dir``
+    pd.DataFrame with columns ``imaging_round``, ``imaging_type``, ``series``,
+    ``hal_config``, ``data_dir``
     """
     mic      = microscope.lower()
     data_dir = str(sample_dir / "data")
     rows: List[dict] = []
 
-    # Round 1: bits + cells (cells series uses hyphen: hal-{mic}-epi-cells)
+    # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
     rows.append({
         "imaging_round": 1,
-        "series":        f"hal-{mic}-epi_01_{{fov:03d}}",
-        "hal_config":    bits_hal_config,
-        "data_dir":      data_dir,
-    })
-    rows.append({
-        "imaging_round": 1,
+        "imaging_type":  "cells",
         "series":        f"hal-{mic}-epi-cells_{{fov:03d}}",
         "hal_config":    cells_hal_config,
         "data_dir":      str(sample_dir / "data" / "cells"),
     })
 
-    # Rounds 2 … N: bits only
-    for i in range(2, n_bits + 1):
+    # Imaging Rounds 2 … N+1: bits #1 … #N.  The series number tracks the
+    # bit/hyb index (1…N); the imaging_round is bit_idx + 1.
+    for bit_idx in range(1, n_bits + 1):
         rows.append({
-            "imaging_round": i,
-            "series":        f"hal-{mic}-epi_{i:02d}_{{fov:03d}}",
+            "imaging_round": bit_idx + 1,
+            "imaging_type":  "bits",
+            "series":        f"hal-{mic}-epi_{bit_idx:02d}_{{fov:03d}}",
             "hal_config":    bits_hal_config,
             "data_dir":      data_dir,
         })
 
-    return pd.DataFrame(rows, columns=["imaging_round", "series", "hal_config", "data_dir"])
+    return pd.DataFrame(
+        rows,
+        columns=["imaging_round", "imaging_type", "series", "hal_config", "data_dir"],
+    )
 
 
 # ── Dave config builder ────────────────────────────────────────────────────────
@@ -134,6 +139,7 @@ def create_dave_config(
     output_path:          Path,
     use_adaptors:         bool = False,
     include_final_cleave: bool = False,
+    first_hyb_no_cleave:  bool = True,
     num_focus_checks:     int  = 50,
     fluidics_protocols:   Optional[Sequence[str]] = None,
 ) -> None:
@@ -141,8 +147,11 @@ def create_dave_config(
     Write an explicit-block Dave recipe XML from ``round_info``.
 
     Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
-    precedes "Imaging Round 02").  The last imaging round has no trailing
-    fluidics unless ``include_final_cleave=True``.
+    precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb
+    index (the count of bits rounds reached so far), not the imaging-round
+    number, so a leading cells round does not shift the Kilroy protocol names.
+    The last imaging round has no trailing fluidics unless
+    ``include_final_cleave=True``.
 
     Parameters
     ----------
@@ -162,6 +171,12 @@ def create_dave_config(
     include_final_cleave  : if True, append a "Fluidics Final" block after the
                             last imaging round containing only a single cleave
                             step (``Cleave adaptors`` or ``Cleave direct``)
+    first_hyb_no_cleave   : if True (default), the fluidics block that precedes
+                            the FIRST bits imaging round omits the cleave step
+                            (used when a cells round is imaged first, so the
+                            first hybridisation flows onto a freshly prepared
+                            sample); all later fluidics blocks keep the cleave.
+                            Ignored when ``fluidics_protocols`` is given.
     num_focus_checks      : value for ``<num_focus_checks>``
     fluidics_protocols    : if provided, use this fixed list of Kilroy protocol
                             names for every between-round fluidics block,
@@ -169,6 +184,19 @@ def create_dave_config(
     """
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
+
+    def _round_is_cells(rid: int) -> bool:
+        """A round is a cells round if its imaging_type is 'cells' (or, absent
+        that column, every series name contains 'cells')."""
+        rrows = round_info[round_info["imaging_round"] == rid]
+        if "imaging_type" in round_info.columns:
+            types = {str(t).strip().lower() for t in rrows["imaging_type"].dropna()}
+            if types:
+                return types == {"cells"}
+        return all("cells" in str(s) for s in rrows["series"])
+
+    bits_round_ids   = [rid for rid in round_ids if not _round_is_cells(rid)]
+    first_bits_round = bits_round_ids[0] if bits_round_ids else None
 
     root = ET.Element("recipe")
     seq  = ET.SubElement(root, "command_sequence")
@@ -219,19 +247,29 @@ def create_dave_config(
         if not is_last:
             next_round = round_id + 1
             fl_name    = f"Fluidics Round {next_round:02d}"
+
+            # Hyb number tracks the bit/hyb index of the NEXT imaging round, so a
+            # leading cells round does not shift the Kilroy protocol numbers.
+            if first_bits_round is not None and next_round >= first_bits_round:
+                hyb_idx = next_round - first_bits_round + 1
+            else:
+                hyb_idx = next_round   # no cells offset detected; legacy numbering
+
+            # The fluidics that precedes the FIRST bits round omits the cleave.
+            is_first_hyb = (first_bits_round is not None and next_round == first_bits_round)
+            skip_cleave  = is_first_hyb and first_hyb_no_cleave
+
             if fluidics_protocols is not None:
                 fl_protocols = list(fluidics_protocols)
             elif use_adaptors:
-                fl_protocols = [
-                    "Cleave adaptors",
-                    f"Hyb adaptors {next_round}",
+                fl_protocols = ([] if skip_cleave else ["Cleave adaptors"]) + [
+                    f"Hyb adaptors {hyb_idx}",
                     "Hyb readouts",
                     "Flow Image Buffer",
                 ]
             else:
-                fl_protocols = [
-                    "Cleave direct",
-                    f"Hybridize {next_round}",
+                fl_protocols = ([] if skip_cleave else ["Cleave direct"]) + [
+                    f"Hybridize {hyb_idx}",
                     "Wash and Imaging Buffers",
                 ]
         elif include_final_cleave:
@@ -277,6 +315,12 @@ def annotate_dave_with_round_info(
     block.  For rounds 2+: comment is placed before the corresponding
     ``<loop name="Fluidics Round NN">`` block (which precedes that imaging
     round).  A blank line is inserted before each comment for readability.
+
+    In the default cells-first layout, imaging round 1 is the cells acquisition
+    (no bits), so it normally has no entry here; the bits comments attach to the
+    ``Fluidics Round NN`` loops for rounds 2…N+1.  The ``round_1indexed`` values
+    passed in must therefore be **imaging-round** indices (bits start at 2), not
+    bit/hyb indices — see ``notebooks/prepare_imaging/04``.
 
     Parameters
     ----------
