@@ -33,15 +33,14 @@ def visualize_shutter_sequence(
     frame_table,                   # pd.DataFrame
     title:     Optional[str] = None,
     save_path: Optional[Path] = None,
+    style:     str = "dot",
 ) -> None:
     """
     Plot the per-frame z trajectory of an imaging round.
 
     The x-axis is the camera frame number and the y-axis is the z position
     (µm).  A grey baseline traces the objective's z path across frames, and a
-    circular marker at each frame is filled with the colour of the laser
-    acquired at that frame.  Blank (laser-off) frames are drawn as hollow
-    grey-edged markers.
+    marker at each frame is coloured by the laser acquired at that frame.
 
     The shape of the trajectory makes the acquisition order obvious: an
     interleaved scan shows a rising staircase (all colours per z before
@@ -53,7 +52,16 @@ def visualize_shutter_sequence(
     frame_table : DataFrame with columns ``["color", "channel", "z"]``
     title       : plot title (default generated automatically)
     save_path   : if given, the figure is saved to this path (300 dpi)
+    style       : ``"dot"`` *(default)* — circular markers whose size and the
+                  figure width auto-scale with the number of frames so dense
+                  rounds do not overlap (blank frames drawn hollow); or
+                  ``"line"`` — a thin vertical tick of the laser colour centred
+                  on each ``(frame, z)`` point, which stays legible at any
+                  frame count (blank frames drawn in grey).
     """
+    if style not in ("dot", "line"):
+        raise ValueError(f"Unknown style {style!r}. Use 'dot' or 'line'.")
+
     _WAVELENGTH_COLOUR = {
         405.0: "#9467bd",   # purple
         488.0: "#1f77b4",   # blue
@@ -73,29 +81,38 @@ def visualize_shutter_sequence(
     df = df.sort_values("frame")
     frames = df["frame"].to_numpy()
     z_vals = df["z"].astype(float).to_numpy()
+    n      = len(df)
 
-    # Per-frame marker colours: laser colour for acquired frames, hollow for blanks.
-    faces, edges = [], []
-    for wav, ch in zip(df["color"], df["channel"]):
-        if pd.isna(ch):
-            faces.append(_BLANK_FACE)
-            edges.append(_BLANK_EDGE)
-        else:
-            colour = _WAVELENGTH_COLOUR.get(float(wav), _DEFAULT_COLOUR)
-            faces.append(colour)
-            edges.append(colour)
+    # Per-frame laser colour (None for blank frames).
+    colours = [
+        None if pd.isna(ch) else _WAVELENGTH_COLOUR.get(float(wav), _DEFAULT_COLOUR)
+        for wav, ch in zip(df["color"], df["channel"])
+    ]
 
-    fig, ax = plt.subplots(figsize=(12, 4))
+    # Scale the figure width and marker size with the number of frames so dense
+    # rounds (hundreds of frames) stay readable instead of overlapping.
+    fig_w     = float(np.clip(0.09 * n, 12.0, 22.0))
+    marker_s  = float(np.clip(4000.0 / max(n, 1), 5.0, 50.0))
+
+    fig, ax = plt.subplots(figsize=(fig_w, 4))
 
     # Grey baseline tracing the z path across frames.
     ax.plot(frames, z_vals, color="grey", alpha=0.5, linewidth=1.0, zorder=1)
 
-    # Circular markers coloured by the acquired laser.
-    ax.scatter(
-        frames, z_vals,
-        facecolors=faces, edgecolors=edges,
-        s=40, linewidths=0.8, zorder=2,
-    )
+    if style == "dot":
+        faces = [c if c is not None else _BLANK_FACE for c in colours]
+        edges = [c if c is not None else _BLANK_EDGE for c in colours]
+        ax.scatter(
+            frames, z_vals,
+            facecolors=faces, edgecolors=edges,
+            s=marker_s, linewidths=0.6, zorder=2,
+        )
+    else:  # "line": thin vertical tick centred on each point
+        line_cols = [c if c is not None else _BLANK_EDGE for c in colours]
+        ax.scatter(
+            frames, z_vals,
+            marker="|", c=line_cols, s=120, linewidths=1.3, zorder=2,
+        )
 
     # Legend: one entry per laser present, plus blank if any.
     present = sorted({float(w) for w, c in zip(df["color"], df["channel"])
