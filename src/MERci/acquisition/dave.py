@@ -25,6 +25,11 @@ precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb index
 (1…N), not the imaging-round number, and the first hyb omits the cleave step
 (see ``create_dave_config(first_hyb_no_cleave=...)``).
 
+The concrete Kilroy protocol names written into the recipe are resolved from the
+Kilroy config passed as ``create_dave_config(kilroy_config=...)`` (see
+``acquisition/kilroy.py``), so every protocol referenced is guaranteed to exist
+in the Kilroy file that runs the experiment.
+
 The ``round_info.csv`` drives everything:
 - rows with the same ``imaging_round`` are acquired in the same imaging loop
 - the order within a round follows the CSV row order
@@ -42,6 +47,8 @@ from typing import List, Optional, Sequence
 from xml.dom import minidom
 
 import pandas as pd
+
+from .kilroy import KilroyProtocolResolver, load_kilroy_protocols
 
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
@@ -142,6 +149,7 @@ def create_dave_config(
     first_hyb_no_cleave:  bool = True,
     num_focus_checks:     int  = 50,
     fluidics_protocols:   Optional[Sequence[str]] = None,
+    kilroy_config:        Optional[Path] = None,
 ) -> None:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
@@ -181,9 +189,26 @@ def create_dave_config(
     fluidics_protocols    : if provided, use this fixed list of Kilroy protocol
                             names for every between-round fluidics block,
                             overriding ``use_adaptors``
+    kilroy_config         : path to the Kilroy config XML that will run this
+                            experiment.  When given, every fluidic protocol
+                            written into the recipe is resolved to (and required
+                            to exist as) a real ``<protocol>`` in that Kilroy
+                            config — the cleave / hybridize / readouts / image-
+                            buffer step names are taken from the Kilroy file
+                            rather than hard-coded, and a ``ValueError`` is
+                            raised if any required step has no matching protocol.
+                            When ``None`` (legacy), hard-coded protocol names are
+                            used and no Kilroy cross-check is performed.
     """
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
+
+    # Resolve fluidic protocol names against the Kilroy config that will run this
+    # experiment, so every protocol written here exists as a Kilroy <protocol>.
+    resolver = (
+        KilroyProtocolResolver(load_kilroy_protocols(kilroy_config))
+        if kilroy_config is not None else None
+    )
 
     def _round_is_cells(rid: int) -> bool:
         """A round is a cells round if its imaging_type is 'cells' (or, absent
@@ -261,7 +286,24 @@ def create_dave_config(
 
             if fluidics_protocols is not None:
                 fl_protocols = list(fluidics_protocols)
+                if resolver is not None:
+                    resolver.validate(fl_protocols)
+            elif resolver is not None:
+                # Names taken from the Kilroy config (see kilroy_config).
+                cleave = [] if skip_cleave else [resolver.cleave(adaptors=use_adaptors)]
+                if use_adaptors:
+                    fl_protocols = cleave + [
+                        resolver.hybridize(hyb_idx, adaptors=True),
+                        resolver.readouts(),
+                        resolver.image_buffer(),
+                    ]
+                else:
+                    fl_protocols = cleave + [
+                        resolver.hybridize(hyb_idx, adaptors=False),
+                        resolver.image_buffer(),
+                    ]
             elif use_adaptors:
+                # Legacy hard-coded names (no Kilroy cross-check).
                 fl_protocols = ([] if skip_cleave else ["Cleave adaptors"]) + [
                     f"Hyb adaptors {hyb_idx}",
                     "Hyb readouts",
@@ -274,7 +316,10 @@ def create_dave_config(
                 ]
         elif include_final_cleave:
             fl_name      = "Fluidics Final"
-            fl_protocols = ["Cleave adaptors" if use_adaptors else "Cleave direct"]
+            if resolver is not None:
+                fl_protocols = [resolver.cleave(adaptors=use_adaptors)]
+            else:
+                fl_protocols = ["Cleave adaptors" if use_adaptors else "Cleave direct"]
         else:
             fl_name = None
 

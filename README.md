@@ -160,7 +160,7 @@ Final fluidics:    Cleave direct
 **Outputs:**
 - `SAMPLE_DIR/metadata/round_info.csv`
 - `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`
-- `SAMPLE_DIR/settings/kilroy-config-*-{mic}-*-{YYMMDD}.xml` — copied from `MERci/data/configs/kilroy/` (newest file matching the microscope name, if present)
+- `SAMPLE_DIR/settings/kilroy-config-*-{mic}-*-{YYMMDD}.xml` — copied from `MERci/data/configs/kilroy/` (newest file matching the microscope name, or MF2 as a fallback). This Kilroy config is also the source of fluidic protocol names for the Dave recipe: every protocol Dave references must exist in it (see `acquisition/kilroy.py`).
 
 ---
 

@@ -65,6 +65,8 @@ src/MERci/
                     # load_hole_polygons, get_path_stats
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
+    kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
+                    # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names
     data_organization.py  # create_data_organization
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
@@ -117,7 +119,7 @@ Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**03** (`prepare_imaging/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+**03** (`prepare_imaging/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). The Kilroy config for the microscope is resolved (via `find_kilroy_config`, falling back to MF2 when the microscope has no config) and passed to `create_dave_config` as the source of fluidic protocol names: every protocol written into the Dave recipe is resolved to — and required to exist as — a `<protocol>` in that Kilroy config, raising `ValueError` otherwise (e.g. adaptor mode on a Kilroy config lacking a readouts protocol). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
 
 **04** (`prepare_imaging/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
 - `SAMPLE_DIR/metadata/round_bit_color_map.csv`
@@ -183,7 +185,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 - `positions_{SAMPLE_NAME}.txt` — comma-separated `x,y` per line, one FOV per line; `#`-prefixed lines ignored
 - Image files — HAL writes `.zarr` (directory store, default), `.dax` (raw uint16 binary + `.inf` sidecar), or `.tiff` (multi-page). Use `read_image(path)` to load any format. `discover_image_files` handles both flat files and zarr directory stores.
 - HAL config templates — `data/configs/hal/hal-config-{mic}-epi.xml`; auto-detected in `prepare_imaging/01` by microscope name; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
-- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; auto-detected in `prepare_imaging/03` by microscope name; newest file (by YYMMDD) is copied to `SAMPLE_DIR/settings/`
+- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; resolved in `prepare_imaging/03` by `find_kilroy_config` (newest by YYMMDD; falls back to MF2 when the microscope has no config), copied to `SAMPLE_DIR/settings/`, and used as the source of fluidic protocol names for the Dave recipe. Protocol names are **not** standardised across microscopes (e.g. `Cleave Adaptors` vs `Cleave Adaptor`), so `KilroyProtocolResolver` token-matches each logical dave step (cleave / hybridize k / readouts / image buffer) to the real `<protocol>` name in the chosen config.
 
 ### Microscope channel mapping
 
