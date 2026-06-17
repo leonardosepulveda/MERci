@@ -40,7 +40,6 @@ SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
                         round_info.csv (prepare_imaging/03),
                         round_bit_color_map.csv, data_organization_*.csv (prepare_imaging/04)
   settings/          ← hal-config-*.xml, shutter-*.xml (prepare_imaging/01), dave-*.xml (prepare_imaging/03)
-  readouts.csv       ← codebook readout table (user-provided, required by prepare_imaging/04)
   data/              ← raw image files; exact subfolder structure defined by the `dir`
                         column in round_info.csv (written by HAL during acquisition)
   analysis/          ← thumbnails/, stats/, histograms/, mosaics/, done/
@@ -97,7 +96,7 @@ data/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
-  output/           # local-only example analysis output (gitignored)
+  readouts.csv      # default codebook readout table (bit number -> readout name), read by prepare_imaging/04
 ```
 
 ## Architecture
@@ -120,7 +119,7 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 
 **03** (`prepare_imaging/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
 
-**04** (`prepare_imaging/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `SAMPLE_DIR/readouts.csv` (codebook mapping bit numbers to readout names). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
+**04** (`prepare_imaging/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
 - `SAMPLE_DIR/metadata/round_bit_color_map.csv`
 - `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
 - Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
