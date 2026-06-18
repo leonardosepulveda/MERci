@@ -34,6 +34,20 @@ jupyter lab
 
 Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `prepare_imaging/` (pre-experiment setup), `analysis/` (online monitoring), and `misc/` (ad-hoc utilities). Open notebooks from their subfolder so that `SAMPLE_DIR` is auto-detected correctly — each notebook resolves `MERCI_DIR = Path(os.getcwd()).parent.parent` and `SAMPLE_DIR = MERCI_DIR.parent`, which assumes it is run from a second-level subfolder (`MERci/notebooks/<group>/`).
 
+### Updating an existing clone without overwriting your notebooks
+
+Because MERci is cloned into each experiment folder, a clone where you have already run notebooks will have local changes (notebook outputs and any parameter edits). To pull the latest **package code** while leaving your notebooks exactly as you ran them, update only the source paths instead of doing a full `git pull`:
+
+```bash
+cd <experiment>/MERci
+git fetch origin
+git checkout origin/master -- src/ data/ environment.yml README.md CLAUDE.md
+```
+
+`git checkout origin/master -- <paths>` overwrites only the listed paths with the upstream version; `notebooks/` is untouched, so your runs and edits are preserved. (Caveat: any local edits you made *inside* the listed paths — e.g. to `src/` — would be overwritten, so check `git status` first.) Gitignored files such as `prompt_history/` and `settings.local.json` are never affected.
+
+If you instead want to merge everything and review conflicts yourself, commit your local work and run `git pull origin master`; only files changed both locally and upstream (typically notebooks you ran) will conflict, and you can keep your version with `git checkout --ours <notebook>`.
+
 ---
 
 ## Experiment folder layout
