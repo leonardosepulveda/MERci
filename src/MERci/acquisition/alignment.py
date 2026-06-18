@@ -7,12 +7,15 @@ system of a *target* microscope, assuming the physical sample (stage insert)
 was moved between scopes with the **same X/Y axis directions** and at most a
 small change.  Because it is the same rigid tissue, the two stage coordinate
 systems differ only by an **isotropic similarity transform** — a single uniform
-scale plus a translation, with **no rotation**:
+scale plus a translation, with **no rotation** but optionally a **per-axis flip**
+(a mirror on x and/or y, which can differ between microscopes):
 
-    q = scale * p + (tx, ty)
+    q_x = (±scale) * p_x + tx
+    q_y = (±scale) * p_y + ty
 
 The transform is found by overlapping the two hand-drawn tissue-boundary
-polygons (one per microscope).  A closed-form moment match (centroid +
+polygons (one per microscope).  When flips are allowed, the four axis-flip
+combinations are each fitted and the highest-overlap one is kept.  A closed-form moment match (centroid +
 area-ratio scale) gives an excellent starting guess, which is then refined by
 maximising the polygon intersection-over-union (IoU) with a derivative-free
 optimiser — robust even though IoU is non-smooth.
@@ -96,17 +99,26 @@ def load_boundary_polygon(path: Path) -> Polygon:
 @dataclass
 class AlignmentResult:
     """
-    An isotropic similarity transform ``q = scale * p + (tx, ty)`` mapping
-    source-microscope coordinates onto target-microscope coordinates.
+    An isotropic similarity transform mapping source-microscope coordinates
+    onto target-microscope coordinates, optionally with per-axis flips
+    (reflections) — but never a rotation:
+
+        q_x = (±scale) * p_x + tx
+        q_y = (±scale) * p_y + ty
+
+    where the sign of each axis is negative when that axis is flipped between
+    the two microscopes.
 
     Attributes
     ----------
-    scale     : uniform scale factor (≈1 when both scopes report µm stage units)
+    scale     : uniform scale **magnitude** (≈1 when both scopes report µm units)
     tx, ty    : translation applied *after* scaling, in target stage units
     iou       : intersection-over-union of the fitted overlap (0–1; 1 = perfect)
     iou_init  : IoU of the closed-form initialisation, before refinement
     n_iter    : optimiser iterations used (0 if refinement was skipped)
     refined   : whether IoU refinement ran and improved on the initial guess
+    flip_x    : True if the x-axis is mirrored between source and target
+    flip_y    : True if the y-axis is mirrored between source and target
     """
 
     scale:    float
@@ -116,27 +128,38 @@ class AlignmentResult:
     iou_init: float
     n_iter:   int
     refined:  bool
+    flip_x:   bool = False
+    flip_y:   bool = False
 
     @property
     def translation(self) -> Tuple[float, float]:
         return (self.tx, self.ty)
 
+    @property
+    def signed_scale(self) -> Tuple[float, float]:
+        """``(sx, sy)`` — per-axis signed scale (negative = that axis flipped)."""
+        return (-self.scale if self.flip_x else self.scale,
+                -self.scale if self.flip_y else self.scale)
+
     def transform_points(self, coords: np.ndarray) -> np.ndarray:
         """Apply the transform to an ``(N, 2)`` array of ``(x, y)`` points."""
         coords = np.asarray(coords, dtype=float)
-        return coords * self.scale + np.array([self.tx, self.ty])
+        sx, sy = self.signed_scale
+        return coords * np.array([sx, sy]) + np.array([self.tx, self.ty])
 
     def transform_polygon(self, poly: Polygon) -> Polygon:
         """Apply the transform to a Shapely polygon."""
-        return _apply_to_polygon(poly, self.scale, self.tx, self.ty)
+        sx, sy = self.signed_scale
+        return _apply_to_polygon(poly, sx, sy, self.tx, self.ty)
 
 
 # ── Polygon helpers ─────────────────────────────────────────────────────────
 
-def _apply_to_polygon(poly: Polygon, scale: float, tx: float, ty: float) -> Polygon:
-    """Scale about the global origin (0, 0), then translate — matching the
-    point transform ``q = scale * p + (tx, ty)``."""
-    scaled = _shp_scale(poly, xfact=scale, yfact=scale, origin=(0.0, 0.0))
+def _apply_to_polygon(poly: Polygon, sx: float, sy: float, tx: float, ty: float) -> Polygon:
+    """Scale per-axis about the global origin (0, 0) — allowing negative
+    factors for flips — then translate, matching the point transform
+    ``q = (sx * p_x + tx, sy * p_y + ty)``."""
+    scaled = _shp_scale(poly, xfact=sx, yfact=sy, origin=(0.0, 0.0))
     return _shp_translate(scaled, xoff=tx, yoff=ty)
 
 
@@ -155,62 +178,52 @@ def polygon_iou(a: Polygon, b: Polygon) -> float:
 
 # ── Fitting ─────────────────────────────────────────────────────────────────
 
-def _initial_guess(src: Polygon, tgt: Polygon) -> Tuple[float, float, float]:
+def _initial_guess(
+    src: Polygon,
+    tgt: Polygon,
+    fx:  float = 1.0,
+    fy:  float = 1.0,
+) -> Tuple[float, float, float]:
     """
-    Closed-form moment match.
+    Closed-form moment match for a given pair of axis-flip signs ``(fx, fy)``.
 
-    Area scales as ``scale**2`` → ``scale = sqrt(area_tgt / area_src)``.
-    Translation then aligns the area centroids:
-    ``t = centroid_tgt - scale * centroid_src``.
+    A flip (reflection) leaves the area unchanged, so the scale magnitude is
+    still ``scale = sqrt(area_tgt / area_src)``.  The translation aligns the
+    (flipped) source centroid onto the target centroid:
+    ``t = centroid_tgt - scale * (fx, fy) * centroid_src``.
     """
     scale = float(np.sqrt(tgt.area / src.area))
     cs = np.array(src.centroid.coords[0], dtype=float)
     ct = np.array(tgt.centroid.coords[0], dtype=float)
-    tx, ty = ct - scale * cs
+    tx, ty = ct - scale * np.array([fx, fy]) * cs
     return scale, float(tx), float(ty)
 
 
-def fit_isotropic_alignment(
-    src:     Polygon,
-    tgt:     Polygon,
-    refine:  bool = True,
-    maxiter: int  = 2000,
+def _fit_one_flip(
+    src: Polygon,
+    tgt: Polygon,
+    fx:  float,
+    fy:  float,
+    refine:  bool,
+    maxiter: int,
 ) -> AlignmentResult:
-    """
-    Fit an isotropic similarity transform (scale + translation, no rotation)
-    mapping *src* onto *tgt* by maximising boundary overlap.
-
-    The closed-form centroid/area match (:func:`_initial_guess`) is used as the
-    starting point.  When *refine* is True, the guess is polished by minimising
-    ``1 - IoU`` with Nelder–Mead (derivative-free, tolerant of IoU's
-    non-smoothness).  The refined result is only kept if it does not decrease
-    the IoU relative to the initialisation.
-
-    Parameters
-    ----------
-    src, tgt : source and target boundary polygons
-    refine   : run the IoU-maximising refinement (default True)
-    maxiter  : maximum optimiser iterations
-
-    Returns
-    -------
-    AlignmentResult
-    """
-    s0, tx0, ty0 = _initial_guess(src, tgt)
-    iou_init = polygon_iou(_apply_to_polygon(src, s0, tx0, ty0), tgt)
+    """Fit scale + translation for a fixed pair of axis-flip signs."""
+    s0, tx0, ty0 = _initial_guess(src, tgt, fx, fy)
+    iou_init = polygon_iou(_apply_to_polygon(src, s0 * fx, s0 * fy, tx0, ty0), tgt)
+    flip_x, flip_y = (fx < 0), (fy < 0)
 
     if not refine:
         return AlignmentResult(
-            scale=s0, tx=tx0, ty=ty0,
-            iou=iou_init, iou_init=iou_init, n_iter=0, refined=False,
+            scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
+            n_iter=0, refined=False, flip_x=flip_x, flip_y=flip_y,
         )
 
     def neg_iou(params: np.ndarray) -> float:
         s, tx, ty = params
-        s = abs(s)                      # keep scale positive without hard bounds
+        s = abs(s)                      # keep scale magnitude positive
         if s == 0.0:
             return 1.0
-        moved = _apply_to_polygon(src, s, tx, ty)
+        moved = _apply_to_polygon(src, s * fx, s * fy, tx, ty)
         return 1.0 - polygon_iou(moved, tgt)
 
     res = minimize(
@@ -219,22 +232,69 @@ def fit_isotropic_alignment(
         method="Nelder-Mead",
         options={"maxiter": maxiter, "xatol": 1e-6, "fatol": 1e-9},
     )
-
     s_r, tx_r, ty_r = float(abs(res.x[0])), float(res.x[1]), float(res.x[2])
     iou_r = 1.0 - float(res.fun)
 
     if iou_r >= iou_init:
         return AlignmentResult(
-            scale=s_r, tx=tx_r, ty=ty_r,
-            iou=iou_r, iou_init=iou_init, n_iter=int(res.nit), refined=True,
+            scale=s_r, tx=tx_r, ty=ty_r, iou=iou_r, iou_init=iou_init,
+            n_iter=int(res.nit), refined=True, flip_x=flip_x, flip_y=flip_y,
         )
-
-    # Refinement made things worse (rare) — fall back to the closed-form guess.
-    log.warning(
-        "IoU refinement (%.4f) did not beat the initial guess (%.4f); "
-        "keeping the closed-form estimate.", iou_r, iou_init,
-    )
+    # Refinement made things worse (rare) — keep the closed-form guess.
     return AlignmentResult(
-        scale=s0, tx=tx0, ty=ty0,
-        iou=iou_init, iou_init=iou_init, n_iter=int(res.nit), refined=False,
+        scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
+        n_iter=int(res.nit), refined=False, flip_x=flip_x, flip_y=flip_y,
     )
+
+
+def fit_isotropic_alignment(
+    src:        Polygon,
+    tgt:        Polygon,
+    refine:     bool = True,
+    allow_flip: bool = True,
+    maxiter:    int  = 2000,
+) -> AlignmentResult:
+    """
+    Fit an isotropic similarity transform (uniform scale + translation, no
+    rotation, optional per-axis flips) mapping *src* onto *tgt* by maximising
+    boundary overlap.
+
+    For each candidate flip combination the closed-form centroid/area match
+    (:func:`_initial_guess`) seeds a Nelder–Mead refinement that minimises
+    ``1 - IoU`` (derivative-free, tolerant of IoU's non-smoothness); the
+    refined estimate is kept only if it does not decrease IoU.  When
+    *allow_flip* is True the four axis-flip combinations — none, flip-x,
+    flip-y, flip-both — are each fitted and the **highest-IoU** result is
+    returned, so a microscope that mirrors an axis is handled automatically.
+
+    Note that flip-both is a 180° point reflection, *not* a free rotation; only
+    axis-aligned reflections are considered, never an arbitrary angle.
+
+    Parameters
+    ----------
+    src, tgt   : source and target boundary polygons
+    refine     : run the IoU-maximising refinement (default True)
+    allow_flip : also try x/y axis flips and keep the best (default True)
+    maxiter    : maximum optimiser iterations per flip combination
+
+    Returns
+    -------
+    AlignmentResult (its ``flip_x`` / ``flip_y`` record which axes were mirrored)
+    """
+    flips = (
+        [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
+        if allow_flip else [(1.0, 1.0)]
+    )
+
+    best: AlignmentResult | None = None
+    for fx, fy in flips:
+        cand = _fit_one_flip(src, tgt, fx, fy, refine, maxiter)
+        if best is None or cand.iou > best.iou:
+            best = cand
+
+    if best.flip_x or best.flip_y:
+        log.info(
+            "Best alignment flips axes (flip_x=%s, flip_y=%s) with IoU=%.4f.",
+            best.flip_x, best.flip_y, best.iou,
+        )
+    return best

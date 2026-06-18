@@ -64,7 +64,8 @@ src/MERci/
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
                     # load_hole_polygons, get_path_stats
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
-                    # (centroid/area init + IoU refinement), polygon_iou, AlignmentResult (scale+translation)
+                    # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
+                    # AlignmentResult (scale + translation + flip_x/flip_y)
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
@@ -96,7 +97,8 @@ notebooks/
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
     align_fovs_across_microscopes.ipynb            # map FOV positions from one scope to another by overlapping
-                                                   #   tissue boundaries (isotropic scale+translation, no rotation)
+                                                   #   tissue boundaries (isotropic scale+translation+optional
+                                                   #   axis flips, no rotation)
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
