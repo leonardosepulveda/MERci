@@ -216,11 +216,32 @@ Commit and push as you go — do not leave finished work uncommitted.
 
 For **every user question/request**, log it to `prompt_history/` (a gitignored,
 local-only folder). This lets project context be reconstructed if the
-conversation history is lost.
+conversation history is lost. There are **two methods** depending on how the
+prompt arrives:
 
-- Create one Markdown file per request, named `{YYYY_MM_DD_HH_MM}_{short_description}.md`
-  (e.g. `2026_06_04_1432_add_prompt_history_convention.md`).
-- Use YAML frontmatter for queryable metadata, then prose sections. Template:
+### Method 1 — user pre-writes the prompt as a file
+
+The user creates a file in `prompt_history/` whose name is **only the date/time**
+(e.g. `2026_06_18_1002.txt`) and writes their request inside it. When asked to read
+and act on it:
+
+1. Read the file and carry out the request.
+2. **Append** the response record to the *same file* (the YAML frontmatter +
+   `## Plan` + `## Summary` sections below; the `## Prompt` is already the file's
+   existing content). Keep the original prompt text intact — append, never rewrite.
+3. **Rename** the file to add a short description, converting it to the standard
+   form `{YYYY_MM_DD_HH_MM}_{short_description}.md`
+   (e.g. `2026_06_18_1002.txt` → `2026_06_18_1002_update_logging_rules.md`).
+
+### Method 2 — user types the prompt in the Claude Code window
+
+Create a **new** file per request, named `{YYYY_MM_DD_HH_MM}_{short_description}.md`
+(e.g. `2026_06_04_1432_add_prompt_history_convention.md`), with the full template
+below including a verbatim `## Prompt` copy.
+
+### Shared format
+
+Use YAML frontmatter for queryable metadata, then prose sections. Template:
 
 ```markdown
 ---
