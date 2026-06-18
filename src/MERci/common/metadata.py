@@ -50,6 +50,7 @@ class SeriesInfo:
     shutter_file:  Optional[str]  = None
     data_dir:      Optional[Path] = None
     extra_meta:    Dict           = field(default_factory=dict)
+    candidate_dirs: List[Path]    = field(default_factory=list)
 
     _regex: "re.Pattern" = field(init=False, repr=False)
 
@@ -67,6 +68,28 @@ class SeriesInfo:
     def build_filename(self, fov_id: int, image_suffix: str = ".dax") -> str:
         """Construct the expected filename for *fov_id* from this series pattern."""
         return self.name.format(fov=fov_id) + image_suffix
+
+    def candidate_paths(self, fov_id: int, image_suffix: str = ".dax") -> List[Path]:
+        """
+        Return every directory where *fov_id*'s image for this series might
+        live, in search order.  Most series have a single candidate; the cells
+        round is allowed to live in either ``data/`` or ``data/cells`` (see
+        :func:`_build_metadata`), so it can have several.
+        """
+        fname = self.build_filename(fov_id, image_suffix)
+        dirs  = self.candidate_dirs or ([self.data_dir] if self.data_dir else [Path(".")])
+        return [Path(d) / fname for d in dirs]
+
+    def resolve_path(self, fov_id: int, image_suffix: str = ".dax") -> Path:
+        """
+        Return the first candidate path that exists on disk, falling back to
+        the primary candidate when none exists yet (e.g. before acquisition).
+        """
+        paths = self.candidate_paths(fov_id, image_suffix)
+        for p in paths:
+            if p.exists():
+                return p
+        return paths[0]
 
 
 @dataclass
@@ -98,6 +121,7 @@ class ExperimentMetadata:
     rounds:      Dict[int, RoundInfo]  # round_id → RoundInfo
     n_fovs:      int
     n_rounds:    int
+    image_suffix: str = ".dax"
 
     # ── Factory ────────────────────────────────────────────────────────────────
 
@@ -127,13 +151,32 @@ class ExperimentMetadata:
     # ── Convenience accessors ──────────────────────────────────────────────────
 
     def all_expected_files(self) -> List[Path]:
-        """Every image file expected across the whole experiment."""
-        return [p for fov in self.fovs.values() for p in fov.files.values()]
+        """
+        Every image file expected across the whole experiment.
+
+        Paths are resolved against each series' candidate directories at call
+        time, so a cells round that landed in ``data/`` rather than
+        ``data/cells`` (or vice-versa) is still reported at its real location.
+        """
+        return [
+            s.resolve_path(fov_id, self.image_suffix)
+            for s in self.all_series
+            for fov_id in sorted(self.fovs)
+        ]
 
     def files_for_round(self, round_id: int) -> List[Path]:
-        """All expected image files for the given round (all FOVs, all series)."""
+        """
+        All expected image files for the given round (all FOVs, all series),
+        resolved to their real on-disk location when present.
+        """
         r = self.rounds.get(round_id)
-        return [] if r is None else [p for ps in r.fov_files.values() for p in ps]
+        if r is None:
+            return []
+        return [
+            s.resolve_path(fov_id, self.image_suffix)
+            for s in r.series
+            for fov_id in sorted(self.fovs)
+        ]
 
     def files_for_fov(self, fov_id: int) -> List[Path]:
         return list(self.fovs[fov_id].files.values())
@@ -185,6 +228,26 @@ class ExperimentMetadata:
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────
+
+def _is_cells_series(s: SeriesInfo) -> bool:
+    """A series is the cells round if its imaging_type is ``cells`` (or, absent
+    that, if ``cells`` appears in its series name)."""
+    if s.imaging_type is not None:
+        return s.imaging_type.strip().lower() == "cells"
+    return "cells" in s.name.lower()
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    """Return *paths* with duplicates removed, preserving first-seen order."""
+    seen: set = set()
+    out:  List[Path] = []
+    for p in paths:
+        key = Path(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
 
 def _pattern_to_regex(pattern: str) -> "re.Pattern":
     """
@@ -317,6 +380,15 @@ def _build_metadata(
         r   = rounds[rid]
         r.series.append(s)
 
+        # Candidate directories, in search order.  The cells round is allowed
+        # to live in either the top-level ``data/`` or a ``data/cells`` subfolder,
+        # so it gets both as fallbacks regardless of what round_info.csv recorded.
+        primary = s.data_dir if s.data_dir is not None else data_dir
+        if _is_cells_series(s):
+            s.candidate_dirs = _dedupe_paths([primary, data_dir, data_dir / "cells"])
+        else:
+            s.candidate_dirs = [primary]
+
         for fov_id in fov_ids:
             try:
                 fname = s.build_filename(fov_id, image_suffix)
@@ -327,18 +399,20 @@ def _build_metadata(
                 )
                 continue
 
-            base_dir = s.data_dir if s.data_dir is not None else data_dir
-            fpath = base_dir / fname
+            # Store the resolved (existing-or-primary) path; stems are identical
+            # across candidates, so thumbnail/sentinel lookups are unaffected.
+            fpath = s.resolve_path(fov_id, image_suffix)
             fovs[fov_id].files[s.name] = fpath
             if rid not in fovs[fov_id].round_ids:
                 fovs[fov_id].round_ids.append(rid)
             r.fov_files.setdefault(fov_id, []).append(fpath)
 
     return ExperimentMetadata(
-        data_dir   = data_dir,
-        all_series = all_series,
-        fovs       = fovs,
-        rounds     = rounds,
-        n_fovs     = n_fovs,
-        n_rounds   = len(round_ids),
+        data_dir     = data_dir,
+        all_series   = all_series,
+        fovs         = fovs,
+        rounds       = rounds,
+        n_fovs       = n_fovs,
+        n_rounds     = len(round_ids),
+        image_suffix = image_suffix,
     )

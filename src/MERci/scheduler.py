@@ -268,15 +268,12 @@ class RoundScheduler:
     # ── Transfer helpers ──────────────────────────────────────────────────────
 
     def _source_dirs_for_round(self, round_id: int) -> List[Path]:
-        """Return the unique data directories that hold files for *round_id*."""
-        round_obj = self.meta.rounds.get(round_id)
-        if round_obj is None:
-            return []
-        dirs = {
-            f.parent
-            for files in round_obj.fov_files.values()
-            for f in files
-        }
+        """Return the unique data directories that hold files for *round_id*.
+
+        Uses the metadata's resolved paths so a cells round that landed in
+        ``data/`` rather than ``data/cells`` (or vice-versa) is transferred
+        from its real location."""
+        dirs = {f.parent for f in self.meta.files_for_round(round_id)}
         return sorted(dirs)
 
     def _process_pending_transfers(self, phase: ExperimentPhase) -> None:

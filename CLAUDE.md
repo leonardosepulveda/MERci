@@ -137,7 +137,7 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 - `transfer_dest` — network path to copy raw data to during fluidics window; `None` = disabled
 - `transfer_min_time` — minimum seconds remaining in the fluidics window before starting a transfer
 
-`ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir`.
+`ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir`/`data_dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir`. Each series carries an ordered list of **candidate directories** (`SeriesInfo.candidate_dirs`); `resolve_path(fov, suffix)` returns the first candidate that exists on disk, falling back to the primary one before acquisition. The **cells round** is treated as a bona fide imaging round (typically `imaging_round=1`) and its files are accepted in **either** `data/cells/` or the top-level `data/`, regardless of which the `data_dir` column records — so `all_fovs_done_for_round`, mosaics, and transfers all find the cells data wherever HAL actually wrote it.
 
 `ExperimentStateMonitor` determines the microscope phase by watching the newest file mtime in `data_dir`:
 - **IMAGING**: a new image file was written within `imaging_idle_threshold` seconds
