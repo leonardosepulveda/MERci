@@ -151,7 +151,11 @@ class KilroyProtocolResolver:
             return self._unique(
                 lambda ts, n: {"cleave", "adaptor"} <= ts, "cleave (adaptors)"
             )
-        return self._unique(lambda ts, n: ts == {"cleave"}, "cleave (direct)")
+        # Direct cleave: a "cleave" protocol that is not the adaptor one. Matches
+        # both a bare "Cleave" and a qualified "Cleave direct" (mirrors hybridize).
+        return self._unique(
+            lambda ts, n: "cleave" in ts and "adaptor" not in ts, "cleave (direct)"
+        )
 
     def hybridize(self, k: int, adaptors: bool) -> str:
         kk = str(int(k))
