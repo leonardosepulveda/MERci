@@ -261,6 +261,7 @@ date: YYYY-MM-DD HH:MM
 title: <short description>
 files_modified:
   - path/relative/to/repo
+elapsed: <e.g. 12m 30s — wall-clock from prompt submission to completion>
 status: completed | in-progress | abandoned
 ---
 
@@ -273,6 +274,13 @@ status: completed | in-progress | abandoned
 ## Summary
 <what was actually done, including any deviations from the plan>
 ```
+
+The `UserPromptSubmit` date/time hook injects `Current local date/time: … (epoch N)`
+on every prompt. Compute **`elapsed`** (written just before `status`) as the finish
+time minus that submit epoch: run `date +%s` (bash) or
+`[DateTimeOffset]::Now.ToUnixTimeSeconds()` (PowerShell) when done and subtract the
+epoch from the message that began the request (the first turn's epoch for a
+multi-turn request). Omit `elapsed` if no submit epoch is available — never guess it.
 
 Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
 and lets all entries be scanned/grepped by metadata without reading every body.
