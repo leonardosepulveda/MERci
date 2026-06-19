@@ -240,6 +240,71 @@ def get_histogram(
     return result
 
 
+# ── Whole-file driver (parallel worker) ────────────────────────────────────────
+
+def analyze_file(
+    image_path:                Path,
+    *,
+    thumbnails_dir:            Path,
+    stats_path:                Path,
+    histogram_path:            Path,
+    sentinel_path:             Path,
+    frame_width:               Optional[int]            = None,
+    frame_height:              Optional[int]            = None,
+    thumbnail_frames:          Optional[List[int]]      = None,
+    thumbnail_size:            Tuple[int, int]          = (200, 200),
+    thumbnail_percentile_clip: Tuple[float, float]      = (1.0, 99.0),
+    histogram_bins:            int                      = 512,
+    histogram_range:           Tuple[int, int]          = (0, 65535),
+) -> str:
+    """
+    Run every FOV-level analysis for one image file: read the stack **once**,
+    then write thumbnails, per-frame stats, and histograms, and finally touch the
+    ``sentinel_path`` to mark the FOV complete.
+
+    This is a top-level, picklable function so it can be dispatched to a
+    :class:`concurrent.futures.ProcessPoolExecutor` worker — the whole file is
+    handled inside a single process (one disk read, all analyses), which is the
+    unit of cross-FOV parallelism used by :class:`MERci.scheduler.FOVScheduler`.
+
+    All output paths are passed in (computed deterministically by the parent from
+    the file stem) so the worker needs neither the config nor the tracker object.
+
+    Returns
+    -------
+    The image filename (for logging by the parent).
+    """
+    # Local import keeps process-spawn overhead off the module top level and
+    # avoids importing the reader in parents that only need the array helpers.
+    from MERci.common.io import read_image
+
+    image_path = Path(image_path)
+    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
+    try:
+        create_thumbnails_for_stack(
+            stack,
+            stem=image_path.stem,
+            output_dir=Path(thumbnails_dir),
+            frame_indices=thumbnail_frames,
+            target_size=thumbnail_size,
+            percentile_clip=thumbnail_percentile_clip,
+        )
+        if not Path(stats_path).exists():
+            measure_stats(stack, Path(stats_path), source_filename=image_path.name)
+        if not Path(histogram_path).exists():
+            get_histogram(
+                stack, Path(histogram_path),
+                bins=histogram_bins, hist_range=histogram_range,
+            )
+    finally:
+        del stack   # release ~200 MB per file promptly
+
+    sentinel = Path(sentinel_path)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    return image_path.name
+
+
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 def load_stats(stats_csv: Path) -> pd.DataFrame:

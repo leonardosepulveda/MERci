@@ -88,12 +88,49 @@ class ExperimentConfig:
     transfer_dest:      Optional[Path]  = None    # network destination root; None = no transfer
     transfer_min_time:  float           = 600.0   # min seconds remaining in fluidics window to start transfer
 
+    # ── Analysis scheduling ──────────────────────────────────────────────────────
+    # Analysis now runs CONTINUOUSLY (during acquisition and fluidics), not only in
+    # the fluidics window.  Two modes control where it reads image data from:
+    #   "same_drive"  (mode B): analyse straight from data_dir on the acquisition
+    #                  drive, during both phases. Simplest; analysis I/O shares the
+    #                  microscope drive (possible contention on slow HDDs).
+    #   "mirror_drive" (mode A): during fluidics, incrementally mirror data_dir to
+    #                  analysis_source_dir on a second drive; analyse continuously
+    #                  from that mirror, so analysis I/O never touches the
+    #                  acquisition drive while the microscope is writing.
+    analysis_mode:        str            = "same_drive"
+    analysis_source_dir:  Optional[Path] = None   # mode A: second-drive mirror to analyse from
+    n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → cpu_count - 2
+
     # ── Derived properties ─────────────────────────────────────────────────────
 
     @property
     def step_size_um(self) -> float:
         """Stage step size in µm, derived from pixel/FOV parameters."""
         return self.pixel_size_um * self.image_size_px * self.non_overlap_fraction
+
+    @property
+    def analysis_data_dir(self) -> Path:
+        """Directory the FOV scheduler discovers and reads image files from.
+
+        ``data_dir`` in same-drive mode; ``analysis_source_dir`` (the second-drive
+        mirror) in mirror mode.
+        """
+        if self.analysis_mode == "mirror_drive":
+            if self.analysis_source_dir is None:
+                raise ValueError(
+                    "analysis_mode='mirror_drive' requires analysis_source_dir to be set."
+                )
+            return self.analysis_source_dir
+        return self.data_dir
+
+    @property
+    def resolved_n_workers(self) -> int:
+        """Number of FOV worker processes to use (>= 1)."""
+        if self.n_analysis_workers is not None:
+            return max(1, int(self.n_analysis_workers))
+        import os
+        return max(1, (os.cpu_count() or 2) - 2)
 
     # ── Initialisation ─────────────────────────────────────────────────────────
 
@@ -110,6 +147,19 @@ class ExperimentConfig:
             self.hal_templates_dir = Path(self.hal_templates_dir)
         if self.transfer_dest is not None:
             self.transfer_dest = Path(self.transfer_dest)
+        if self.analysis_source_dir is not None:
+            self.analysis_source_dir = Path(self.analysis_source_dir)
+
+        if self.analysis_mode not in ("same_drive", "mirror_drive"):
+            raise ValueError(
+                f"analysis_mode must be 'same_drive' or 'mirror_drive', "
+                f"got {self.analysis_mode!r}"
+            )
+        if self.analysis_mode == "mirror_drive" and self.analysis_source_dir is None:
+            raise ValueError(
+                "analysis_mode='mirror_drive' requires analysis_source_dir "
+                "(a directory on a second drive to mirror data into and analyse from)."
+            )
 
         if self.t_max is None:
             self.t_max = (

@@ -62,6 +62,43 @@ def _copy_shutil(src: Path, dst: Path) -> bool:
         return False
 
 
+def mirror_tree(
+    src:         Path,
+    dst:         Path,
+    on_complete: Optional[Callable[[bool], None]] = None,
+) -> threading.Thread:
+    """
+    Incrementally mirror the *contents* of directory ``src`` into ``dst`` in a
+    background daemon thread (additive — never deletes files already in ``dst``).
+
+    Used by the "mirror_drive" analysis mode: during fluidics, the acquisition
+    drive is copied to a second drive so analysis can read from the copy without
+    contending with the microscope's writes.  ``robocopy /E /Z`` skips files that
+    are already up to date, so repeated calls only copy what is new.
+
+    Parameters
+    ----------
+    src         : source directory (the acquisition ``data_dir``)
+    dst         : destination directory (the second-drive mirror)
+    on_complete : called with ``True`` on success, ``False`` on any failure
+
+    Returns
+    -------
+    The started :class:`threading.Thread` (daemon=True).
+    """
+    use_robocopy = platform.system() == "Windows"
+    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+
+    def _run() -> None:
+        ok = copy_fn(Path(src), Path(dst))
+        if on_complete is not None:
+            on_complete(ok)
+
+    t = threading.Thread(target=_run, daemon=True, name=f"mirror-{Path(src).name}")
+    t.start()
+    return t
+
+
 def transfer_round(
     source_dirs:  List[Path],
     dest_root:    Path,

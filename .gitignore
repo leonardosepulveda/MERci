@@ -19,3 +19,6 @@ output/
 
 # Prompt/task history (local only)
 prompt_history/
+
+# Scratch / throwaway test artifacts
+_scratch_*

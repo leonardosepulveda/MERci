@@ -15,22 +15,19 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
-from .common.io       import read_image, discover_image_files
-from .transfer        import transfer_round
+from .common.io       import discover_image_files
+from .transfer        import transfer_round, mirror_tree
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
-from .analysis.fov    import (
-    create_thumbnails_for_stack,
-    measure_stats,
-    get_histogram,
-)
+from .analysis.fov    import analyze_file
 from .analysis.round  import create_mosaic, load_thumbnails_for_round
 from .acquisition.configs import (
     read_hal_flip_vertical,
@@ -45,8 +42,15 @@ log = logging.getLogger(__name__)
 
 class FOVScheduler:
     """
-    Discovers new image files and runs all FOV-level analyses during the
-    [t_min, t_max] fluidics window.
+    Discovers new image files and runs all FOV-level analyses **continuously**
+    (during both acquisition and fluidics), processing FOVs **in parallel**
+    across a pool of worker processes.
+
+    Where it reads from is set by ``config.analysis_mode``:
+      * ``"same_drive"`` — read from ``config.data_dir`` (the acquisition drive).
+      * ``"mirror_drive"`` — during fluidics, incrementally mirror ``data_dir`` to
+        ``config.analysis_source_dir`` on a second drive, and read from that
+        mirror, so analysis I/O never competes with the microscope's writes.
 
     Typical usage (in a notebook cell)::
 
@@ -65,6 +69,22 @@ class FOVScheduler:
         self.meta    = metadata
         self.tracker = tracker
         self.monitor = monitor
+        self._pool: Optional[ProcessPoolExecutor] = None
+        self._mirror_thread = None
+
+    # ── Worker pool lifecycle ───────────────────────────────────────────────────
+
+    def _get_pool(self) -> ProcessPoolExecutor:
+        """Lazily create (and reuse) the FOV worker-process pool."""
+        if self._pool is None:
+            self._pool = ProcessPoolExecutor(max_workers=self.config.resolved_n_workers)
+        return self._pool
+
+    def close(self) -> None:
+        """Shut the worker pool down. Safe to call more than once."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -78,8 +98,10 @@ class FOVScheduler:
 
         On each tick:
         1. Sample the experiment phase.
-        2. If ``should_analyze``, scan for pending files and process them.
-        3. Sleep for ``config.poll_interval`` seconds.
+        2. In ``mirror_drive`` mode, refresh the second-drive mirror while the
+           microscope is idle (fluidics).
+        3. Analyse all pending files (continuously, in parallel across FOVs).
+        4. Sleep for ``config.poll_interval`` seconds.
 
         Parameters
         ----------
@@ -88,37 +110,72 @@ class FOVScheduler:
         max_iterations  : stop after this many ticks (``None`` → run forever)
         """
         iteration = 0
-        while True:
-            phase = self.monitor.snapshot()
+        try:
+            while True:
+                phase = self.monitor.snapshot()
 
-            if on_phase_update is not None:
-                on_phase_update(phase)
+                if on_phase_update is not None:
+                    on_phase_update(phase)
 
-            if phase.should_analyze:
+                # Mode A: mirror the acquisition drive to the second drive while the
+                # microscope is idle, so analysis reads never contend with writes.
+                if self.config.analysis_mode == "mirror_drive" and not phase.is_imaging:
+                    self._maybe_mirror()
+
                 n_processed = self._process_pending()
                 log.info(
-                    "[tick %d] Processed %d FOV file(s). "
-                    "Time since imaging: %.0f s.",
-                    iteration, n_processed, phase.time_since_imaging or 0,
-                )
-            else:
-                log.debug(
-                    "[tick %d] Phase=%s (tsi=%.0f s) – not in window.",
-                    iteration, phase.phase_str, phase.time_since_imaging or -1,
+                    "[tick %d] phase=%s — processed %d FOV file(s).",
+                    iteration, phase.phase_str, n_processed,
                 )
 
-            iteration += 1
-            if max_iterations is not None and iteration >= max_iterations:
-                break
+                iteration += 1
+                if max_iterations is not None and iteration >= max_iterations:
+                    break
 
-            time.sleep(self.config.poll_interval)
+                time.sleep(self.config.poll_interval)
+        finally:
+            self.close()
+
+    # ── Mirror (mode A) ─────────────────────────────────────────────────────────
+
+    def _maybe_mirror(self) -> None:
+        """Start an incremental mirror of data_dir → analysis_source_dir unless one
+        is already running."""
+        if self._mirror_thread is not None and self._mirror_thread.is_alive():
+            return
+        src = self.config.data_dir
+        dst = self.config.analysis_source_dir
+        log.info("Mirror (fluidics): %s → %s", src, dst)
+        self._mirror_thread = mirror_tree(src, dst)
 
     # ── Internal processing ───────────────────────────────────────────────────
 
+    def _build_task(self, fpath: Path) -> Tuple[Path, dict]:
+        """Build the (image_path, kwargs) pair passed to ``analyze_file``."""
+        kwargs = dict(
+            thumbnails_dir            = self.config.analysis_dir / "thumbnails",
+            stats_path                = self.tracker.stats_path(fpath),
+            histogram_path            = self.tracker.histogram_path(fpath),
+            sentinel_path             = self.tracker.fov_sentinel(fpath),
+            frame_width               = self.config.frame_width,
+            frame_height              = self.config.frame_height,
+            thumbnail_frames          = self.config.thumbnail_frames,
+            thumbnail_size            = self.config.thumbnail_size,
+            thumbnail_percentile_clip = self.config.thumbnail_percentile_clip,
+            histogram_bins            = self.config.histogram_bins,
+            histogram_range           = self.config.histogram_range,
+        )
+        return fpath, kwargs
+
     def _process_pending(self) -> int:
-        """Discover and analyse all pending FOV files. Returns count processed."""
+        """Discover and analyse all pending FOV files. Returns count processed.
+
+        Reads from ``config.analysis_data_dir`` (the mirror in mirror mode), and
+        dispatches one worker process per FOV file (each reads the file once and
+        runs every analysis), bounded by ``config.resolved_n_workers``.
+        """
         all_files = discover_image_files(
-            self.config.data_dir, self.config.image_suffix
+            self.config.analysis_data_dir, self.config.image_suffix
         )
         pending = self.tracker.pending_fov_files(all_files)
 
@@ -134,67 +191,40 @@ class FOVScheduler:
             "Pending: %d of %d image files need FOV analysis.",
             len(pending), len(all_files),
         )
+        if not pending:
+            return 0
 
+        tasks = [self._build_task(f) for f in pending]
+        n_workers = self.config.resolved_n_workers
+
+        # Serial path (single worker) — simpler, in-process, easier to debug.
+        if n_workers == 1:
+            count = 0
+            for fpath, kwargs in tasks:
+                try:
+                    analyze_file(fpath, **kwargs)
+                    log.info("Done: %s", fpath.name)
+                    count += 1
+                except Exception:
+                    log.exception("Error processing %s", fpath.name)
+            return count
+
+        # Parallel path — one worker process per FOV file.
+        pool = self._get_pool()
+        futures = {
+            pool.submit(analyze_file, fpath, **kwargs): fpath
+            for fpath, kwargs in tasks
+        }
         count = 0
-        for fpath in pending:
+        for fut in as_completed(futures):
+            fpath = futures[fut]
             try:
-                self._analyse_one_file(fpath)
+                fut.result()
+                log.info("Done: %s", fpath.name)
                 count += 1
             except Exception:
                 log.exception("Error processing %s", fpath.name)
         return count
-
-    def _analyse_one_file(self, fpath: Path) -> None:
-        """
-        Run thumbnail + stats + histogram for one image file.
-        Writes a FOV sentinel when every output file exists.
-        """
-        if self.meta.series_of_file(fpath) is None:
-            log.warning("'%s' is not in imaging_info.csv – processing anyway.",
-                        fpath.name)
-
-        log.info("Analysing: %s", fpath.name)
-        stem = fpath.stem
-
-        # ── Read image once ───────────────────────────────────────────────────
-        stack = read_image(
-            fpath,
-            frame_width=self.config.frame_width,
-            frame_height=self.config.frame_height,
-        )
-        n_frames = len(stack)
-        frames   = self.config.thumbnail_frames or list(range(n_frames))
-
-        try:
-            # ── Thumbnails ────────────────────────────────────────────────────
-            create_thumbnails_for_stack(
-                stack,
-                stem=stem,
-                output_dir=self.config.analysis_dir / "thumbnails",
-                frame_indices=frames,
-                target_size=self.config.thumbnail_size,
-                percentile_clip=self.config.thumbnail_percentile_clip,
-            )
-
-            # ── Stats ─────────────────────────────────────────────────────────
-            stats_out = self.tracker.stats_path(fpath)
-            if not stats_out.exists():
-                measure_stats(stack, stats_out, source_filename=fpath.name)
-
-            # ── Histogram ─────────────────────────────────────────────────────
-            hist_out = self.tracker.histogram_path(fpath)
-            if not hist_out.exists():
-                get_histogram(
-                    stack, hist_out,
-                    bins=self.config.histogram_bins,
-                    hist_range=self.config.histogram_range,
-                )
-        finally:
-            del stack   # release ~200 MB per file promptly
-
-        # Mark complete (written only after all outputs exist)
-        self.tracker.mark_fov_done(fpath)
-        log.info("Done: %s", fpath.name)
 
 
 # ── Round Scheduler ───────────────────────────────────────────────────────────
@@ -225,6 +255,10 @@ class RoundScheduler:
     ) -> None:
         """
         Run the round analysis loop (same tick-sleep structure as FOVScheduler).
+
+        Mosaics are built continuously as soon as a round's FOVs are all done.
+        Optional NAS transfers (``transfer_dest``) still run only during fluidics,
+        when the microscope is idle.
         """
         iteration = 0
         while True:
@@ -233,13 +267,9 @@ class RoundScheduler:
             if on_phase_update is not None:
                 on_phase_update(phase)
 
-            if phase.should_analyze:
-                n_processed = self._process_pending_rounds(phase)
-                log.info("[tick %d] Built mosaics for %d round(s).",
-                         iteration, n_processed)
-            else:
-                log.debug("[tick %d] Phase=%s – not in window.",
-                          iteration, phase.phase_str)
+            n_processed = self._process_pending_rounds(phase)
+            log.info("[tick %d] phase=%s — built mosaics for %d round(s).",
+                     iteration, phase.phase_str, n_processed)
 
             iteration += 1
             if max_iterations is not None and iteration >= max_iterations:
@@ -280,7 +310,12 @@ class RoundScheduler:
         """
         Start background transfers for any rounds that are done but not yet
         transferred, provided there is sufficient time left in the fluidics window.
+
+        Transfers read from the acquisition drive, so they only run while the
+        microscope is idle (fluidics) — never during acquisition.
         """
+        if phase.is_imaging or phase.time_since_imaging is None:
+            return
         time_remaining = self.config.t_max - (phase.time_since_imaging or 0)
         if time_remaining < self.config.transfer_min_time:
             log.info(

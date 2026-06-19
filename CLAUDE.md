@@ -73,14 +73,15 @@ src/MERci/
     data_organization.py  # create_data_organization
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
-    fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram — FOV-level analysis
+    fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
+                    # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
     spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
                           # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
   state.py          # ExperimentStateMonitor — detects imaging vs. fluidics phases by watching file mtimes
   progress.py       # ProgressTracker — sentinel files for fov_done, round_done, round_transferred
-  scheduler.py      # FOVScheduler, RoundScheduler, ExperimentScheduler — main analysis loops
-  transfer.py       # transfer_round — background robocopy/shutil to a network destination
+  scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, ExperimentScheduler — main analysis loops
+  transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
 notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order)
@@ -142,12 +143,17 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 - `fov_subset` — list of FOV ids to restrict analysis; `None` = all FOVs
 - `transfer_dest` — network path to copy raw data to during fluidics window; `None` = disabled
 - `transfer_min_time` — minimum seconds remaining in the fluidics window before starting a transfer
+- `analysis_mode` — `"same_drive"` (default, mode B: analyse from `data_dir`) or `"mirror_drive"` (mode A: mirror `data_dir` → `analysis_source_dir` during fluidics and analyse from that second-drive copy). Analysis runs **continuously** in both modes (not only during fluidics). `config.analysis_data_dir` resolves to the directory the FOV scheduler reads from.
+- `analysis_source_dir` — second-drive mirror directory; **required** when `analysis_mode="mirror_drive"`
+- `n_analysis_workers` — FOV process-pool size; `None` = `cpu_count − 2` (`config.resolved_n_workers`). Each worker holds one image stack (~200 MB) in RAM.
 
 `ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir`/`data_dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir`. Each series carries an ordered list of **candidate directories** (`SeriesInfo.candidate_dirs`); `resolve_path(fov, suffix)` returns the first candidate that exists on disk, falling back to the primary one before acquisition. The **cells round** is treated as a bona fide imaging round (typically `imaging_round=1`) and its files are accepted in **either** `data/cells/` or the top-level `data/`, regardless of which the `data_dir` column records — so `all_fovs_done_for_round`, mosaics, and transfers all find the cells data wherever HAL actually wrote it.
 
 `ExperimentStateMonitor` determines the microscope phase by watching the newest file mtime in `data_dir`:
 - **IMAGING**: a new image file was written within `imaging_idle_threshold` seconds
 - **FLUIDICS**: `t_min ≤ time_since_imaging ≤ t_max` → `should_analyze = True`
+
+`should_analyze` is no longer the analysis gate — FOV/round analysis runs continuously. The phase is still used to time the mode-A mirror and the NAS transfer (both read the acquisition drive, so both run only while the microscope is idle).
 
 `ProgressTracker` tracks completeness via zero-byte sentinel files under `analysis_dir/done/`:
 - `<stem>.fov_done` — FOV analysis complete
@@ -156,7 +162,7 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 
 Multiple notebooks can run concurrently — no shared state.
 
-`FOVScheduler.run_loop()` polls the phase, discovers stable image files (zarr/dax/tiff), and for each pending file generates thumbnails (PNG), per-frame stats (CSV), and histograms (`.npz`). Respects `fov_subset`. `RoundScheduler.run_loop()` assembles **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optionally launches background transfers via `transfer.transfer_round`. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete.
+`FOVScheduler.run_loop()` runs **continuously** (acquisition + fluidics): each tick it (in mirror mode) refreshes the second-drive mirror while idle, discovers stable image files (zarr/dax/tiff) under `config.analysis_data_dir`, and analyses pending files **in parallel across a process pool** (`config.resolved_n_workers`). Each worker runs the top-level `analysis.fov.analyze_file`, which reads the stack once and writes thumbnails (PNG) + per-frame stats (CSV) + histograms (`.npz`) + the FOV sentinel. With `n_analysis_workers=1` it runs serially in-process. Respects `fov_subset`; call `.close()` (done automatically when `run_loop` exits) to shut the pool down. `RoundScheduler.run_loop()` also runs continuously, assembling **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optional background transfers via `transfer.transfer_round` happen only during fluidics. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete.
 
 Typical scheduler setup in a notebook:
 

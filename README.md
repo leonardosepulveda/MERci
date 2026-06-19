@@ -216,20 +216,26 @@ Standalone utility notebooks are also provided under `notebooks/misc/`:
 
 ### How it works
 
-`ExperimentStateMonitor` watches `data/` for new image files.  When imaging finishes and the microscope enters the fluidics step, the analysis window `[t_min, t_max]` opens and the schedulers process all pending files.
+Analysis runs **continuously** — during both acquisition and fluidics — and FOVs are processed **in parallel** across a pool of worker processes, so the analysis keeps up with long, data-heavy experiments instead of being limited to the fluidics gaps.
+
+`ExperimentStateMonitor` still watches `data/` to tell imaging from fluidics, but only to time drive-bound background work (the mirror and the NAS transfer), not to gate analysis. `t_max` is set automatically from `fluidics_type` (`"adaptor"` → 100 min, `"direct"` → 50 min; override explicitly for a custom value).
+
+**Analysis modes** (`config.analysis_mode`) control where analysis reads image data from, so its I/O need not fight the microscope's writes on a slow HDD:
+
+| Mode | `analysis_mode` | Reads from | Best when |
+|---|---|---|---|
+| **B** | `"same_drive"` (default) | the acquisition drive (`data/`) | one fast drive, or contention is acceptable |
+| **A** | `"mirror_drive"` | a 2nd drive (`analysis_source_dir`), mirrored from `data/` during fluidics | the acquisition drive is a slow HDD — analysis reads never touch it during acquisition |
+
+**Parallelism** — `config.n_analysis_workers` worker processes (default `cpu_count − 2`) each handle one FOV: read the stack once, run all analyses, write outputs. Each worker holds one stack (~200 MB) in RAM, so lower it if memory is tight; set `1` to run serially in-process.
 
 ```
-Imaging ends          t_min          t_max     Next round starts
-     │                  │              │              │
-─────┼──────────────────┼──────────────┼──────────────┼────
-                        └── analysis window ──┘
+            Acquisition (hours)            Fluidics (~60–100 min)
+═══════════════════════════════════════╪══════════════════════════╪═══ ...
+  analysis runs the whole time            mirror (mode A) + NAS transfer
+  (mode A: from 2nd-drive mirror;          run here, while the drive is idle
+   mode B: from data/)
 ```
-
-`t_max` is set automatically from `fluidics_type`:
-- `"adaptor"` (default) → 100 min
-- `"direct"` → 50 min
-
-Override `t_max` explicitly to use a custom value.
 
 ### Image format support
 
@@ -237,7 +243,7 @@ MERci reads `.zarr` (default), `.dax`, and `.tiff` image stacks.  The format is 
 
 ### FOV-level analysis (`FOVScheduler`)
 
-For each image file, produces:
+Continuously discovers pending image files and dispatches one worker process per FOV (each reads the file once and runs every analysis). For each image file, produces:
 - `analysis/thumbnails/{stem}_frame{n:03d}.png` — contrast-stretched thumbnails
 - `analysis/stats/{stem}_stats.csv` — per-frame min/mean/median/max/std/p01/p99
 - `analysis/histograms/{stem}_histograms.npz` — per-frame intensity histograms
@@ -277,7 +283,10 @@ config = ExperimentConfig(
     positions_txt  = SAMPLE_DIR / "positions"  / f"positions_{SAMPLE_NAME}.txt",
     image_suffix   = ".zarr",                   # or ".dax" / ".tiff"
     fluidics_type  = "adaptor",                 # sets t_max = 100 min; use "direct" for 50 min
-    # transfer_dest = Path(r"\\NAS\experiments"), # optional: copy data during fluidics window
+    # analysis_mode       = "mirror_drive",       # mode A: analyse from a 2nd drive (default "same_drive")
+    # analysis_source_dir = Path(r"E:\merci_mirror\LT027\data"),  # required for mirror_drive
+    # n_analysis_workers  = 6,                     # FOV worker processes (default cpu_count - 2; 1 = serial)
+    # transfer_dest = Path(r"\\NAS\experiments"), # optional: copy data to NAS during fluidics window
     # fov_subset    = [0, 1, 2],                  # optional: restrict to a subset of FOVs
 )
 meta    = ExperimentMetadata.load(config.round_info_csv, config.positions_txt, config.data_dir,
