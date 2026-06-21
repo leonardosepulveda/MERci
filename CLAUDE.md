@@ -65,7 +65,9 @@ src/MERci/
                     # load_hole_polygons, get_path_stats
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
-                    # AlignmentResult (scale + translation + flip_x/flip_y)
+                    # AlignmentResult (scale + translation + flip_x/flip_y);
+                    # bead-drift refinement: select_bead_frame, phase_drift (skimage
+                    # phase_cross_correlation, à la fishtank), compute_fov_drifts
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
@@ -97,9 +99,10 @@ notebooks/
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
-    align_fovs_across_microscopes.ipynb            # map FOV positions from one scope to another by overlapping
+    align_fovs_across_microscopes.ipynb            # map FOV positions from one scope to another: Part 1 overlaps
                                                    #   tissue boundaries (isotropic scale+translation+optional
-                                                   #   axis flips, no rotation)
+                                                   #   axis flips, no rotation); Part 2 refines per-FOV bead drift
+                                                   #   via phase_cross_correlation. Inputs are explicit per-dir paths.
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)

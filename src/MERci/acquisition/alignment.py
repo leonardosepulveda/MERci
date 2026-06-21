@@ -32,9 +32,10 @@ import csv
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from shapely.affinity import scale as _shp_scale, translate as _shp_translate
 from shapely.geometry import Polygon
@@ -298,3 +299,157 @@ def fit_isotropic_alignment(
             best.flip_x, best.flip_y, best.iou,
         )
     return best
+
+
+# ── Per-FOV bead drift refinement ───────────────────────────────────────────
+#
+# The boundary fit above is a *coarse* whole-sample transform. After moving the
+# stage insert and re-imaging fiducial beads on the target microscope at the
+# coarse-predicted positions, a small residual drift remains per FOV. We measure
+# it the way fishtank's `align_experiments` does its coarse stage — image phase
+# cross-correlation between the reference (source) and moving (target) bead frame
+# — applied independently to each FOV, giving one (dx, dy) correction per FOV.
+# (Ref: jweissmanlab/fishtank, src/fishtank/scripts/align_experiments_script.py,
+#  which calls skimage.registration.phase_cross_correlation for its coarse shift.)
+
+
+def select_bead_frame(
+    frame_table: pd.DataFrame,
+    bead_color:  Optional[float] = None,
+    which:       str             = "first",
+) -> int:
+    """
+    Return the frame index of the fiducial-bead frame within a frame table.
+
+    The frame table has columns ``color``, ``channel``, ``z`` (one row per camera
+    frame; see ``acquisition.configs.get_frame_table``).  Fiducial beads are
+    imaged in a dedicated colour confined to a single z-plane (e.g. 488 nm at
+    z=0, bracketing the multi-z data stack), so when *bead_color* is ``None`` the
+    bead colour is auto-detected as the non-blank colour whose frames all sit at
+    one z value (preferring the one with the fewest frames when several qualify).
+
+    Parameters
+    ----------
+    frame_table : DataFrame with ``color`` and ``z`` columns
+    bead_color  : force a specific bead colour (nm) instead of auto-detecting
+    which       : which bead frame to use when several exist —
+                  ``"first"`` (default), ``"last"``, or ``"middle"``
+
+    Returns
+    -------
+    int frame index into the image stack.
+    """
+    ft = frame_table
+    if "color" not in ft.columns or "z" not in ft.columns:
+        raise ValueError("frame_table must have 'color' and 'z' columns.")
+
+    if bead_color is None:
+        single_plane = []  # (n_frames, color)
+        for color, g in ft.dropna(subset=["color"]).groupby("color"):
+            if g["z"].nunique() == 1:
+                single_plane.append((len(g), color))
+        if not single_plane:
+            raise ValueError(
+                "Could not auto-detect a single-z-plane fiducial colour; "
+                "pass bead_color explicitly."
+            )
+        single_plane.sort()                      # fewest frames first
+        bead_color = single_plane[0][1]
+
+    frames = [int(i) for i, c in zip(ft.index, ft["color"]) if c == bead_color]
+    if not frames:
+        raise ValueError(
+            f"No frames with bead colour {bead_color} in frame table "
+            f"(colours present: {sorted(set(ft['color'].dropna()))})."
+        )
+    if which == "first":
+        return frames[0]
+    if which == "last":
+        return frames[-1]
+    if which == "middle":
+        return frames[len(frames) // 2]
+    raise ValueError("which must be 'first', 'last', or 'middle'.")
+
+
+def phase_drift(
+    ref2d:           np.ndarray,
+    mov2d:           np.ndarray,
+    upsample_factor: int = 10,
+) -> Tuple[np.ndarray, float]:
+    """
+    Subpixel registration shift between two 2-D bead images, via
+    ``skimage.registration.phase_cross_correlation`` (the same primitive
+    fishtank uses for its coarse alignment).
+
+    Parameters
+    ----------
+    ref2d, mov2d    : 2-D images (reference = source scope, moving = target scope)
+    upsample_factor : subpixel precision (1/upsample_factor px); 10 → 0.1 px
+
+    Returns
+    -------
+    (shift, error) where ``shift`` is ``np.array([dy, dx])`` in pixels — the
+    offset that, applied to *mov2d*, registers it onto *ref2d* — and ``error`` is
+    the normalised RMS registration error returned by scikit-image.
+    """
+    from skimage.registration import phase_cross_correlation
+
+    ref = np.asarray(ref2d, dtype=float)
+    mov = np.asarray(mov2d, dtype=float)
+    shift, error, _ = phase_cross_correlation(ref, mov, upsample_factor=upsample_factor)
+    return np.asarray(shift, dtype=float), float(error)
+
+
+def compute_fov_drifts(
+    pairs:           Sequence[Tuple[int, "Path", "Path"]],
+    ref_frame:       int,
+    mov_frame:       int,
+    pixel_size_um:   float,
+    *,
+    upsample_factor: int   = 10,
+    sign_x:          float = 1.0,
+    sign_y:          float = 1.0,
+    frame_width:     Optional[int] = None,
+    frame_height:    Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Measure per-FOV bead drift between paired source and target image files.
+
+    For each ``(fov_id, ref_path, mov_path)`` it reads both stacks, takes the
+    chosen single z-slice (``ref_frame`` / ``mov_frame``), and registers them
+    with :func:`phase_drift`.  The pixel shift is converted to target stage
+    micrometres via *pixel_size_um* and the axis-sign factors.
+
+    The ``sign_x`` / ``sign_y`` factors (±1) map image (col, row) pixel axes onto
+    the target stage (x, y) axes; the correct signs depend on the microscope's
+    camera↔stage convention and **must be confirmed against the data** (the
+    notebook's quiver plot is for exactly this check). Defaults assume image +x→
+    stage +x and image +y→stage +y.
+
+    Returns
+    -------
+    DataFrame with columns ``fov, dy_px, dx_px, error, drift_x_um, drift_y_um``.
+    """
+    from MERci.common.io import read_image
+
+    rows = []
+    for fov_id, ref_path, mov_path in pairs:
+        ref_stack = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
+        mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
+        try:
+            shift, error = phase_drift(
+                ref_stack[ref_frame], mov_stack[mov_frame], upsample_factor
+            )
+        finally:
+            del ref_stack, mov_stack
+        dy, dx = float(shift[0]), float(shift[1])
+        rows.append({
+            "fov":        int(fov_id),
+            "dy_px":      dy,
+            "dx_px":      dx,
+            "error":      error,
+            "drift_x_um": dx * pixel_size_um * sign_x,
+            "drift_y_um": dy * pixel_size_um * sign_y,
+        })
+    return pd.DataFrame(rows, columns=["fov", "dy_px", "dx_px", "error",
+                                       "drift_x_um", "drift_y_um"])
