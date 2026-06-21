@@ -138,7 +138,14 @@
     </valve_cmd>
 </valve_commands>
 
-<!-- 
+    <protocol name = "Hybridize Readouts">
+     	<valve duration = "5">Readouts</valve>
+    	<pump duration = "900">Flow 3 mL</pump>
+     	<valve duration = "5">Set Wash</valve>
+    	<pump duration = "450">Flow 3 mL</pump>
+     </protocol>
+
+    <!-- 
 	speed 200 ~= 833 uL / 10 sec
 	1 uL corresponds to 1.2 pump position units
 	
@@ -213,17 +220,18 @@
 
     </protocol>    
     
+        <protocol name = "Flow SSC then Image Buffer">
+     	<valve duration = "5">Set SSC</valve>
+    	<pump duration = "300">Flow 2 mL</pump>
+     	<valve duration = "5">Set Image</valve>
+    	<pump duration = "300">Flow 2 mL</pump>
+    </protocol>
+
     <protocol name = "Hybridize 1 Adaptor">
      	<valve duration = "5">Set Hyb 1</valve>
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
       <protocol name = "Hybridize 2 Adaptor">
@@ -231,12 +239,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 3 Adaptor">
@@ -244,12 +246,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 4 Adaptor">
@@ -257,12 +253,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 5 Adaptor">
@@ -270,12 +260,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 6 Adaptor">
@@ -283,12 +267,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 7 Adaptor">
@@ -296,12 +274,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 8 Adaptor">
@@ -309,12 +281,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 9 Adaptor">
@@ -322,12 +288,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-    	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 10 Adaptor">
@@ -335,12 +295,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 11 Adaptor">
@@ -348,12 +302,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 12 Adaptor">
@@ -361,12 +309,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 13 Adaptor">
@@ -374,12 +316,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 14 Adaptor">
@@ -387,12 +323,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 15 Adaptor">
@@ -400,12 +330,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 16 Adaptor">
@@ -413,12 +337,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 17 Adaptor">
@@ -426,12 +344,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 18 Adaptor">
@@ -439,12 +351,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 19 Adaptor">
@@ -452,12 +358,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 20 Adaptor">
@@ -465,12 +365,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 21 Adaptor">
@@ -478,12 +372,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
     	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <protocol name = "Hybridize 22 Adaptor">
@@ -491,12 +379,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
 	 
 	 <protocol name = "Hybridize 23 Adaptor">
@@ -504,12 +386,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
 	 
 	 <protocol name = "Hybridize 24 Adaptor">
@@ -517,12 +393,6 @@
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
-		<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-		<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     	<valve duration = "5">Set Image</valve>
-    	<pump duration = "300">Flow 3 mL</pump>
      </protocol>
      
      <!--
