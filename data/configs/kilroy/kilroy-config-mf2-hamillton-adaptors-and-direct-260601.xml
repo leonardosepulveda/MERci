@@ -138,13 +138,7 @@
     </valve_cmd>
 </valve_commands>
 
-    <protocol name = "Hybridize Readouts">
-     	<valve duration = "5">Readouts</valve>
-    	<pump duration = "900">Flow 3 mL</pump>
-     	<valve duration = "5">Set Wash</valve>
-    	<pump duration = "450">Flow 3 mL</pump>
-     </protocol>
-
+    
     <!-- 
 	speed 200 ~= 833 uL / 10 sec
 	1 uL corresponds to 1.2 pump position units
@@ -226,6 +220,13 @@
      	<valve duration = "5">Set Image</valve>
     	<pump duration = "300">Flow 2 mL</pump>
     </protocol>
+
+	<protocol name = "Hybridize Readouts">
+     	<valve duration = "5">Readouts</valve>
+    	<pump duration = "900">Flow 3 mL</pump>
+     	<valve duration = "5">Set Wash</valve>
+    	<pump duration = "450">Flow 3 mL</pump>
+     </protocol>
 
     <protocol name = "Hybridize 1 Adaptor">
      	<valve duration = "5">Set Hyb 1</valve>
