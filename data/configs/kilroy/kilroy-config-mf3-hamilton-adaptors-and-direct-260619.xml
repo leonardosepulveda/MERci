@@ -250,6 +250,17 @@
 		<pump duration = "300">Stop Flow</pump>
 	</protocol>
 
+	<protocol name = "Flow SSC then Image Buffer">
+		<valve duration = "10">SSC</valve>
+		<pump duration = "300">0.5 mL/min</pump>
+		<pump duration = "90">Stop Flow</pump>
+
+		<valve duration = "10">Image Buffer</valve>
+		<pump duration = "300">0.5 mL/min</pump>
+		<pump duration = "300">Stop Flow</pump>
+	</protocol>
+
+
     <protocol name = "Flow Image Buffer 10 min">
 		<valve duration = "10">Image Buffer</valve>
         <pump duration = "270">0.5 mL/min</pump>
