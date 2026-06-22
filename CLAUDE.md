@@ -66,8 +66,9 @@ src/MERci/
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
-                    # bead-drift refinement: select_bead_frame, phase_drift (skimage
-                    # phase_cross_correlation, à la fishtank), compute_fov_drifts
+                    # bead-drift refinement: bead_frame_indices, select_bead_frame, extract_bead_frames
+                    # (write bead-only .tiff), phase_drift (skimage phase_cross_correlation, à la
+                    # fishtank), compute_fov_drifts
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
@@ -103,6 +104,9 @@ notebooks/
                                                    #   tissue boundaries (isotropic scale+translation+optional
                                                    #   axis flips, no rotation); Part 2 refines per-FOV bead drift
                                                    #   via phase_cross_correlation. Inputs are explicit per-dir paths.
+    extract_source_bead_frames.ipynb               # run at the source scope: write a compact per-FOV bead-only
+                                                   #   .tiff (+ compact frame table) so only the bead frames move
+                                                   #   to the NAS for align_fovs Part 2
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)

@@ -313,13 +313,12 @@ def fit_isotropic_alignment(
 #  which calls skimage.registration.phase_cross_correlation for its coarse shift.)
 
 
-def select_bead_frame(
+def bead_frame_indices(
     frame_table: pd.DataFrame,
     bead_color:  Optional[float] = None,
-    which:       str             = "first",
-) -> int:
+) -> List[int]:
     """
-    Return the frame index of the fiducial-bead frame within a frame table.
+    Return **all** fiducial-bead frame indices within a frame table, in order.
 
     The frame table has columns ``color``, ``channel``, ``z`` (one row per camera
     frame; see ``acquisition.configs.get_frame_table``).  Fiducial beads are
@@ -332,12 +331,10 @@ def select_bead_frame(
     ----------
     frame_table : DataFrame with ``color`` and ``z`` columns
     bead_color  : force a specific bead colour (nm) instead of auto-detecting
-    which       : which bead frame to use when several exist —
-                  ``"first"`` (default), ``"last"``, or ``"middle"``
 
     Returns
     -------
-    int frame index into the image stack.
+    list of int frame indices (the bead frames, in table order).
     """
     ft = frame_table
     if "color" not in ft.columns or "z" not in ft.columns:
@@ -362,6 +359,22 @@ def select_bead_frame(
             f"No frames with bead colour {bead_color} in frame table "
             f"(colours present: {sorted(set(ft['color'].dropna()))})."
         )
+    return frames
+
+
+def select_bead_frame(
+    frame_table: pd.DataFrame,
+    bead_color:  Optional[float] = None,
+    which:       str             = "first",
+) -> int:
+    """
+    Return a single fiducial-bead frame index from a frame table.
+
+    Thin wrapper over :func:`bead_frame_indices` that picks one of the bead frames
+    by *which* — ``"first"`` (default), ``"last"``, or ``"middle"``. See
+    :func:`bead_frame_indices` for the (auto-detectable) *bead_color*.
+    """
+    frames = bead_frame_indices(frame_table, bead_color)
     if which == "first":
         return frames[0]
     if which == "last":
@@ -369,6 +382,42 @@ def select_bead_frame(
     if which == "middle":
         return frames[len(frames) // 2]
     raise ValueError("which must be 'first', 'last', or 'middle'.")
+
+
+def extract_bead_frames(
+    image_path:   "Path",
+    out_path:     "Path",
+    frame_indices: Sequence[int],
+    frame_width:  Optional[int] = None,
+    frame_height: Optional[int] = None,
+) -> List[int]:
+    """
+    Read *image_path*, keep only *frame_indices* (the full-resolution frames), and
+    write them to *out_path* as a multi-page ``.tiff``.
+
+    Used by the source-side bead-extraction notebook to shrink each ~30-frame
+    acquisition down to just its fiducial frames (full frames — phase
+    cross-correlation needs the image, not fitted positions), so only the small
+    file is moved to the NAS for the target-side drift step.
+
+    Returns
+    -------
+    the list of frame indices written (so callers can build a matching compact
+    frame table).
+    """
+    import tifffile
+    from MERci.common.io import read_image
+
+    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
+    try:
+        idx = [int(i) for i in frame_indices]
+        sel = np.stack([np.asarray(stack[i]) for i in idx]).astype(stack.dtype)
+    finally:
+        del stack
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(str(out_path), sel)
+    return idx
 
 
 def phase_drift(

@@ -214,6 +214,7 @@ Standalone utility notebooks are also provided under `notebooks/misc/`:
 - `MF2_60XSil1.3_zcorrection.ipynb` — z-correction for the MF2 60× silicone objective.
 - `reconstruct_frame_table_from_configs.ipynb` — inverse of `prepare_imaging/01`: rebuild a `frame_table_*.csv` from an existing HAL config + its shutter file (recover a lost frame table or verify HAL/shutter consistency).
 - `align_fovs_across_microscopes.ipynb` — transfer FOV positions to a second microscope after moving the stage insert. **Part 1** overlaps the two tissue-boundary polygons to fit an isotropic transform (scale + translation + optional x/y flips, no rotation). **Part 2** (optional) refines per-FOV residual drift from fiducial-bead images via `phase_cross_correlation` (the coarse-alignment primitive from [fishtank](https://github.com/jweissmanlab/fishtank)), and writes drift-corrected positions, a per-FOV vector plot, and a drift-distance histogram.
+- `extract_source_bead_frames.ipynb` — run at the **source** microscope before Part 2: writes a compact per-FOV `.tiff` containing only the full-resolution fiducial-bead frames (≈2 of ~30 frames) plus a matching compact frame table, so only the small bead files need to cross the NAS to the target microscope.
 
 ### How it works
 
@@ -306,7 +307,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 |---|---|
 | `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `get_color_to_channel_dict`, `create_shutter_file`, `create_hal_config`, `format_z_offsets_from_frame_table`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices`, `reconstruct_frame_table`, `read_shutter_reference`, `parse_z_offsets`, `parse_shutter_events` |
 | `acquisition.positions` | `create_grid_positions`, `generate_scanning_path`, `filter_scanning_path`, `close_scanning_path`, `load_hole_polygons`, `get_path_stats` |
-| `acquisition.alignment` | `load_boundary_polygon`, `fit_isotropic_alignment`, `polygon_iou`, `AlignmentResult`, `select_bead_frame`, `phase_drift`, `compute_fov_drifts` |
+| `acquisition.alignment` | `load_boundary_polygon`, `fit_isotropic_alignment`, `polygon_iou`, `AlignmentResult`, `bead_frame_indices`, `select_bead_frame`, `extract_bead_frames`, `phase_drift`, `compute_fov_drifts` |
 | `acquisition.dave` | `create_round_info`, `create_dave_config`, `annotate_dave_with_round_info`, `series_to_movie_name`, `get_hal_frame_count` |
 | `acquisition.data_organization` | `create_data_organization` |
 | `acquisition.display` | `print_frame_table`, `display_xml` |
