@@ -307,7 +307,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 |---|---|
 | `acquisition.configs` | `get_frame_table`, `get_color_sequence_name`, `get_color_to_channel_dict`, `create_shutter_file`, `create_hal_config`, `format_z_offsets_from_frame_table`, `read_hal_flip_vertical`, `find_frame_table_for_hal_config`, `get_color_frame_indices`, `reconstruct_frame_table`, `read_shutter_reference`, `parse_z_offsets`, `parse_shutter_events` |
 | `acquisition.positions` | `create_grid_positions`, `generate_scanning_path`, `filter_scanning_path`, `close_scanning_path`, `load_hole_polygons`, `get_path_stats` |
-| `acquisition.alignment` | `load_boundary_polygon`, `fit_isotropic_alignment`, `polygon_iou`, `AlignmentResult`, `bead_frame_indices`, `select_bead_frame`, `extract_bead_frames`, `phase_drift`, `compute_fov_drifts` |
+| `acquisition.alignment` | `load_boundary_polygon`, `fit_isotropic_alignment`, `polygon_iou`, `AlignmentResult`, `bead_frame_indices`, `select_bead_frame`, `extract_bead_frames`, `apply_orientation`, `phase_drift`, `compute_fov_drifts` |
 | `acquisition.dave` | `create_round_info`, `create_dave_config`, `annotate_dave_with_round_info`, `series_to_movie_name`, `get_hal_frame_count` |
 | `acquisition.data_organization` | `create_data_organization` |
 | `acquisition.display` | `print_frame_table`, `display_xml` |

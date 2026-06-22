@@ -67,8 +67,9 @@ src/MERci/
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
                     # bead-drift refinement: bead_frame_indices, select_bead_frame, extract_bead_frames
-                    # (write bead-only .tiff), phase_drift (skimage phase_cross_correlation, à la
-                    # fishtank), compute_fov_drifts
+                    # (write bead-only .tiff), apply_orientation (inter-scope flip/transpose/rot to
+                    # reconcile camera handedness HAL flip flags miss), phase_drift (skimage
+                    # phase_cross_correlation, à la fishtank), compute_fov_drifts (mov_orient param)
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),

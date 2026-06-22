@@ -420,6 +420,39 @@ def extract_bead_frames(
     return idx
 
 
+_ORIENTATIONS = ("none", "fliplr", "flipud", "transpose", "rot90", "rot180", "rot270")
+
+
+def apply_orientation(img: np.ndarray, orient: str = "none") -> np.ndarray:
+    """
+    Re-orient a 2-D image to reconcile a fixed pixel-axis convention difference
+    between two microscopes (camera handedness / 90° mounting), which ``HAL``'s
+    ``flip_horizontal``/``flip_vertical``/``transpose`` flags do **not** capture
+    when they are identical on both scopes but the optical paths still differ.
+
+    *orient* is one of: ``"none"`` (default), ``"fliplr"``, ``"flipud"``,
+    ``"transpose"``, ``"rot90"``, ``"rot180"``, ``"rot270"``. Apply it to the
+    *moving* (target) image before cross-correlation/overlay so it shares the
+    reference (source) image's orientation.
+    """
+    a = np.asarray(img)
+    if orient in (None, "none"):
+        return a
+    if orient == "fliplr":
+        return a[:, ::-1]
+    if orient == "flipud":
+        return a[::-1, :]
+    if orient == "transpose":
+        return a.T
+    if orient == "rot90":
+        return np.rot90(a, 1)
+    if orient == "rot180":
+        return np.rot90(a, 2)
+    if orient == "rot270":
+        return np.rot90(a, 3)
+    raise ValueError(f"orient must be one of {_ORIENTATIONS}, got {orient!r}")
+
+
 def phase_drift(
     ref2d:           np.ndarray,
     mov2d:           np.ndarray,
@@ -458,6 +491,7 @@ def compute_fov_drifts(
     upsample_factor: int   = 10,
     sign_x:          float = 1.0,
     sign_y:          float = 1.0,
+    mov_orient:      str   = "none",
     frame_width:     Optional[int] = None,
     frame_height:    Optional[int] = None,
 ) -> pd.DataFrame:
@@ -465,9 +499,17 @@ def compute_fov_drifts(
     Measure per-FOV bead drift between paired source and target image files.
 
     For each ``(fov_id, ref_path, mov_path)`` it reads both stacks, takes the
-    chosen single z-slice (``ref_frame`` / ``mov_frame``), and registers them
-    with :func:`phase_drift`.  The pixel shift is converted to target stage
-    micrometres via *pixel_size_um* and the axis-sign factors.
+    chosen single z-slice (``ref_frame`` / ``mov_frame``), re-orients the target
+    slice by *mov_orient* (see :func:`apply_orientation`), and registers it onto
+    the source slice with :func:`phase_drift`.  The pixel shift is converted to
+    target stage micrometres via *pixel_size_um* and the axis-sign factors.
+
+    *mov_orient* corrects a fixed pixel-axis convention difference between the two
+    microscopes (e.g. one image is flipped/transposed/rotated relative to the
+    other) that is NOT reflected in HAL's flip flags. Phase cross-correlation only
+    recovers a translation, so if the two scopes' images differ by an orientation
+    (or pixel scale), they will not colocalise until that is corrected first — set
+    *mov_orient* to whatever the bead overlay shows is needed (default ``"none"``).
 
     The ``sign_x`` / ``sign_y`` factors (±1) map image (col, row) pixel axes onto
     the target stage (x, y) axes; the correct signs depend on the microscope's
@@ -487,7 +529,9 @@ def compute_fov_drifts(
         mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
         try:
             shift, error = phase_drift(
-                ref_stack[ref_frame], mov_stack[mov_frame], upsample_factor
+                ref_stack[ref_frame],
+                apply_orientation(mov_stack[mov_frame], mov_orient),
+                upsample_factor,
             )
         finally:
             del ref_stack, mov_stack
