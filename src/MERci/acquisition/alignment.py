@@ -546,3 +546,144 @@ def compute_fov_drifts(
         })
     return pd.DataFrame(rows, columns=["fov", "dy_px", "dx_px", "error",
                                        "drift_x_um", "drift_y_um"])
+
+
+# ── Bead-detection + point-set registration (modality-robust) ───────────────
+#
+# Phase cross-correlation needs the two images to look alike. Across modalities
+# (epi vs spinning-disk confocal) the raw bead frames differ, so we instead
+# DETECT bead centroids in each image and register the two point sets by the
+# shift on which the most bead pairs agree (pairwise-displacement voting — a
+# Hough/consensus approach robust to spurious or non-matching beads). The
+# returned ``score`` (inlier fraction) flags FOVs where the bead sets don't
+# actually correspond.
+
+
+def detect_beads(
+    img2d:        np.ndarray,
+    min_dist_px:  float = 5.0,
+    thresh_sigma: float = 5.0,
+    max_beads:    Optional[int] = None,
+) -> np.ndarray:
+    """
+    Detect bead centroids in a 2-D image, returning an ``(N, 2)`` array of
+    ``(row, col)`` positions (wraps
+    :func:`MERci.analysis.spot_localization.detect_beads_2d`).
+
+    When *max_beads* is set and more are found, the brightest *max_beads* are
+    kept (ranked by intensity at the detected pixel).
+    """
+    from MERci.analysis.spot_localization import detect_beads_2d
+
+    im = np.asarray(img2d)
+    pts = detect_beads_2d(im, min_dist_px, thresh_sigma).astype(float)
+    if max_beads and len(pts) > max_beads:
+        inten = im[pts[:, 0].astype(int), pts[:, 1].astype(int)]
+        pts = pts[np.argsort(inten)[::-1][:max_beads]]
+    return pts
+
+
+def register_point_translation(
+    src_xy:       np.ndarray,
+    tgt_xy:       np.ndarray,
+    max_shift_px: float = 1024.0,
+    bin_px:       float = 4.0,
+) -> dict:
+    """
+    Find the pure translation that best maps the *tgt* point set onto *src*, by
+    voting over all pairwise displacements ``src_i - tgt_j`` and taking the
+    histogram peak (then refining with the inliers near it).
+
+    Returns ``{dy, dx, n_inliers, score}`` where ``(dy, dx)`` is the shift in
+    pixels (apply to *tgt* to register onto *src*, matching :func:`phase_drift`'s
+    convention) and ``score`` is ``n_inliers / min(n_src, n_tgt)`` — a 0–1
+    confidence that the two bead sets share a common translation.
+    """
+    src = np.asarray(src_xy, float)
+    tgt = np.asarray(tgt_xy, float)
+    if len(src) == 0 or len(tgt) == 0:
+        return {"dy": np.nan, "dx": np.nan, "n_inliers": 0, "score": 0.0}
+
+    D = (src[:, None, :] - tgt[None, :, :]).reshape(-1, 2)        # displacements
+    m = (np.abs(D[:, 0]) <= max_shift_px) & (np.abs(D[:, 1]) <= max_shift_px)
+    D = D[m]
+    if len(D) == 0:
+        return {"dy": np.nan, "dx": np.nan, "n_inliers": 0, "score": 0.0}
+
+    nb = max(1, int(2 * max_shift_px / bin_px))
+    rng = [[-max_shift_px, max_shift_px], [-max_shift_px, max_shift_px]]
+    H, ye, xe = np.histogram2d(D[:, 0], D[:, 1], bins=nb, range=rng)
+    iy, ix = np.unravel_index(int(H.argmax()), H.shape)
+    dy0 = 0.5 * (ye[iy] + ye[iy + 1])
+    dx0 = 0.5 * (xe[ix] + xe[ix + 1])
+
+    r = 2 * bin_px
+    inl = D[(np.abs(D[:, 0] - dy0) < r) & (np.abs(D[:, 1] - dx0) < r)]
+    dy, dx = (inl.mean(0) if len(inl) else (dy0, dx0))
+    score = len(inl) / max(1, min(len(src), len(tgt)))
+    return {"dy": float(dy), "dx": float(dx), "n_inliers": int(len(inl)), "score": float(score)}
+
+
+def compute_fov_drifts_beads(
+    pairs:         Sequence[Tuple[int, "Path", "Path"]],
+    pixel_size_um: float,
+    *,
+    min_dist_px:   float = 5.0,
+    thresh_sigma:  float = 5.0,
+    max_beads:     int   = 800,
+    max_shift_px:  float = 1024.0,
+    bin_px:        float = 4.0,
+    mov_orient:    str   = "none",
+    sign_x:        float = 1.0,
+    sign_y:        float = 1.0,
+    frame_width:   Optional[int] = None,
+    frame_height:  Optional[int] = None,
+    progress_every: int  = 50,
+) -> pd.DataFrame:
+    """
+    Per-FOV bead drift by detection + point-set registration (modality-robust
+    alternative to :func:`compute_fov_drifts`).
+
+    For each ``(fov, ref_path, mov_path)`` it max-projects both stacks, detects
+    beads in each (the target is first re-oriented by *mov_orient*), registers
+    the point sets with :func:`register_point_translation`, and converts the
+    pixel shift to target stage µm.
+
+    Returns a DataFrame with columns ``fov, dy_px, dx_px, n_src, n_tgt,
+    n_inliers, score, drift_x_um, drift_y_um``. A low ``score`` means the bead
+    sets did not find a common shift (e.g. the two scopes imaged different beads).
+    """
+    from MERci.common.io import read_image
+
+    def _proj(stack):
+        a = np.asarray(stack)
+        return a.max(0) if a.ndim == 3 else a
+
+    rows = []
+    for k, (fov, ref_path, mov_path) in enumerate(pairs):
+        ref = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
+        mov = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
+        try:
+            ref2d = _proj(ref)
+            mov2d = apply_orientation(_proj(mov), mov_orient)
+        finally:
+            del ref, mov
+        sp = detect_beads(ref2d, min_dist_px, thresh_sigma, max_beads)
+        tp = detect_beads(mov2d, min_dist_px, thresh_sigma, max_beads)
+        reg = register_point_translation(sp, tp, max_shift_px, bin_px)
+        dy, dx = reg["dy"], reg["dx"]
+        rows.append({
+            "fov":        int(fov),
+            "dy_px":      dy,
+            "dx_px":      dx,
+            "n_src":      int(len(sp)),
+            "n_tgt":      int(len(tp)),
+            "n_inliers":  reg["n_inliers"],
+            "score":      reg["score"],
+            "drift_x_um": dx * pixel_size_um * sign_x if np.isfinite(dx) else np.nan,
+            "drift_y_um": dy * pixel_size_um * sign_y if np.isfinite(dy) else np.nan,
+        })
+        if progress_every and (k + 1) % progress_every == 0:
+            log.info("bead drift: %d/%d FOVs done", k + 1, len(pairs))
+    return pd.DataFrame(rows, columns=["fov", "dy_px", "dx_px", "n_src", "n_tgt",
+                                       "n_inliers", "score", "drift_x_um", "drift_y_um"])
