@@ -75,7 +75,11 @@ src/MERci/
     dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
                     # series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
-                    # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names
+                    # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names.
+                    # + protocol/command consistency: load_kilroy_commands, iter_protocol_references,
+                    #   check_kilroy_consistency (flag protocol steps naming an undefined valve/pump command,
+                    #   with fuzzy-matched suggestions), format_consistency_report, fix_kilroy_consistency
+                    #   (apply confirmed name fixes in place, backup *.bak, preserve CRLF + ISO-8859-1)
     data_organization.py  # create_data_organization
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
@@ -110,6 +114,9 @@ notebooks/
     extract_source_bead_frames.ipynb               # run at the source scope: write a compact per-FOV bead-only
                                                    #   .tiff (+ compact frame table) so only the bead frames move
                                                    #   to the NAS for align_fovs Part 2
+    verify_kilroy_protocol_consistency.ipynb       # verify a Kilroy config's protocols only reference defined
+                                                   #   valve/pump commands; fuzzy-suggest + (after confirm) rewrite
+                                                   #   mismatches in place (backup to *.bak), via kilroy.py helpers
 data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
