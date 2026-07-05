@@ -17,3 +17,15 @@ from .positions import (
     get_path_stats,
 )
 from .display import print_frame_table, display_xml
+from .kilroy import (
+    load_kilroy_protocols,
+    find_kilroy_config,
+    KilroyProtocolResolver,
+    load_kilroy_commands,
+    iter_protocol_references,
+    check_kilroy_consistency,
+    format_consistency_report,
+    fix_kilroy_consistency,
+    ProtocolReference,
+    ConsistencyIssue,
+)

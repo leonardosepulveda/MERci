@@ -25,13 +25,34 @@ Public API
 - ``KilroyProtocolResolver`` — map logical Dave steps (cleave / hybridize k /
   readouts / image buffer) to concrete Kilroy protocol names; raises a clear
   error when a required step has no matching protocol.
+
+Protocol/command consistency
+----------------------------
+A Kilroy config also has an *internal* consistency requirement, independent of any
+Dave recipe: every ``<valve>``/``<pump>`` step inside a ``<protocol>`` names a
+valve/pump command by its text, and that name **must** exist as a
+``<valve_cmd>``/``<pump_cmd>`` in the command sections — otherwise Kilroy errors at
+load. Typos and inconsistent naming (e.g. ``"Wash buffer"`` vs ``"Wash Buffer"``,
+or a stray trailing space) break this silently until run time. The consistency API
+below verifies that link and proposes fuzzy-matched fixes:
+
+- ``load_kilroy_commands(path)`` — the defined valve/pump command names.
+- ``check_kilroy_consistency(path)`` — list of ``ConsistencyIssue`` for every
+  protocol step whose command name is not defined, each with the closest-matching
+  defined command as a suggested fix.
+- ``format_consistency_report(issues)`` — human-readable summary of the issues.
+- ``fix_kilroy_consistency(path, fixes)`` — apply confirmed name corrections to the
+  config file in place (backing up the original to ``*.bak``), preserving the
+  file's CRLF line endings and ISO-8859-1 encoding.
 """
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable, List, Sequence, Set
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 
 # ── Kilroy config parsing ────────────────────────────────────────────────────
@@ -188,3 +209,277 @@ class KilroyProtocolResolver:
                 f"Fluidics protocol(s) not found in Kilroy config: {missing}. "
                 f"Available protocols: {self.protocols}"
             )
+
+
+# ── Protocol ↔ command consistency ───────────────────────────────────────────
+
+@dataclass
+class ProtocolReference:
+    """A single ``<valve>``/``<pump>`` step inside a protocol.
+
+    Attributes
+    ----------
+    protocol : str
+        Name of the ``<protocol>`` the step belongs to.
+    kind : str
+        ``"valve"`` or ``"pump"`` — which command section it must resolve against.
+    name : str
+        The command name referenced, i.e. the element's text **verbatim** (leading
+        or trailing whitespace preserved, so whitespace-only mismatches are visible).
+    """
+
+    protocol: str
+    kind: str
+    name: str
+
+
+@dataclass
+class ConsistencyIssue:
+    """One undefined command name referenced by one or more protocol steps.
+
+    Attributes
+    ----------
+    kind : str
+        ``"valve"`` or ``"pump"``.
+    referenced : str
+        The command name used in the protocol(s) that has no matching command
+        definition (verbatim, including any stray whitespace).
+    protocols : list of str
+        Protocol names that reference this undefined command, in first-seen order.
+    count : int
+        Total number of steps (across all protocols) that reference it.
+    suggestion : str or None
+        Closest defined command of the same kind (highest string similarity), or
+        ``None`` if that section defines no commands at all.
+    score : float
+        Similarity ratio in ``[0, 1]`` between *referenced* and *suggestion*
+        (``difflib`` ratio, compared case-insensitively). 1.0 means they differ
+        only by letter case and/or surrounding whitespace.
+    normalized_match : bool
+        ``True`` when *referenced* equals *suggestion* after stripping and
+        case-folding — i.e. a trivial whitespace/case fix, safe to auto-apply.
+    """
+
+    kind: str
+    referenced: str
+    protocols: List[str]
+    count: int
+    suggestion: Optional[str]
+    score: float
+    normalized_match: bool
+
+
+def load_kilroy_commands(path: Path) -> Dict[str, List[str]]:
+    """
+    Return the valve and pump command names defined in a Kilroy config.
+
+    Reads the ``name`` attribute of every ``<valve_cmd>`` and ``<pump_cmd>``.
+    Commands that are XML-commented out (e.g. an old ``<pump_commands>`` block) are
+    ignored, matching what Kilroy actually loads. Kilroy files use ISO-8859-1.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the Kilroy config XML.
+
+    Returns
+    -------
+    dict
+        ``{"valve": [names...], "pump": [names...]}`` in document order.
+    """
+    root = ET.fromstring(Path(path).read_text(encoding="ISO-8859-1"))
+    valve = [el.get("name").strip() for el in root.iter("valve_cmd") if el.get("name")]
+    pump = [el.get("name").strip() for el in root.iter("pump_cmd") if el.get("name")]
+    return {"valve": valve, "pump": pump}
+
+
+def iter_protocol_references(path: Path) -> List[ProtocolReference]:
+    """
+    Return every ``<valve>``/``<pump>`` step across all protocols in the config.
+
+    The element text is kept verbatim (not stripped) so whitespace-only mismatches
+    remain detectable. Non-command children of a protocol (e.g. XML comments) are
+    skipped.
+    """
+    root = ET.fromstring(Path(path).read_text(encoding="ISO-8859-1"))
+    refs: List[ProtocolReference] = []
+    for proto in root.iter("protocol"):
+        pname = (proto.get("name") or "").strip()
+        for el in proto:
+            if el.tag in ("valve", "pump"):
+                refs.append(ProtocolReference(pname, el.tag, el.text or ""))
+    return refs
+
+
+def _closest_command(name: str, candidates: Sequence[str]) -> Tuple[Optional[str], float]:
+    """
+    Return the (candidate, similarity) whose case-folded form is most similar to
+    *name*, using ``difflib.SequenceMatcher`` ratio. Returns ``(None, 0.0)`` when
+    *candidates* is empty. Comparison is case-insensitive and whitespace-trimmed so
+    a pure case/whitespace difference scores 1.0.
+    """
+    target = name.strip().casefold()
+    best: Optional[str] = None
+    best_score = 0.0
+    for cand in candidates:
+        score = SequenceMatcher(None, target, cand.strip().casefold()).ratio()
+        if score > best_score:
+            best, best_score = cand, score
+    return best, best_score
+
+
+def check_kilroy_consistency(path: Path) -> List[ConsistencyIssue]:
+    """
+    Verify that every protocol step names a command that actually exists.
+
+    A step is consistent when its command name matches a defined command name
+    **exactly**. Each distinct undefined name is reported once as a
+    ``ConsistencyIssue`` carrying the protocols that use it and the closest-matching
+    defined command as a suggested fix.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the Kilroy config XML.
+
+    Returns
+    -------
+    list of ConsistencyIssue
+        Empty when the config is fully consistent. Sorted by kind then referenced
+        name for stable display.
+    """
+    commands = load_kilroy_commands(path)
+    defined = {"valve": set(commands["valve"]), "pump": set(commands["pump"])}
+
+    # Group undefined references by (kind, verbatim name); track which protocols use
+    # each and how many steps in total, so one report line covers all occurrences.
+    grouped: Dict[Tuple[str, str], Dict[str, object]] = {}
+    for ref in iter_protocol_references(path):
+        if ref.name in defined[ref.kind]:
+            continue
+        key = (ref.kind, ref.name)
+        entry = grouped.setdefault(key, {"protocols": [], "count": 0})
+        entry["count"] = int(entry["count"]) + 1  # type: ignore[assignment]
+        protos: List[str] = entry["protocols"]  # type: ignore[assignment]
+        if ref.protocol not in protos:
+            protos.append(ref.protocol)
+
+    issues: List[ConsistencyIssue] = []
+    for (kind, referenced), entry in grouped.items():
+        suggestion, score = _closest_command(referenced, commands[kind])
+        normalized_match = (
+            suggestion is not None
+            and referenced.strip().casefold() == suggestion.strip().casefold()
+        )
+        issues.append(
+            ConsistencyIssue(
+                kind=kind,
+                referenced=referenced,
+                protocols=list(entry["protocols"]),  # type: ignore[arg-type]
+                count=int(entry["count"]),  # type: ignore[arg-type]
+                suggestion=suggestion,
+                score=score,
+                normalized_match=normalized_match,
+            )
+        )
+
+    issues.sort(key=lambda i: (i.kind, i.referenced))
+    return issues
+
+
+def format_consistency_report(issues: Sequence[ConsistencyIssue]) -> str:
+    """
+    Render a human-readable summary of ``check_kilroy_consistency`` output.
+
+    Shows each undefined command, the protocols that reference it, and the suggested
+    fix with its similarity score. ``[normalized]`` marks case/whitespace-only
+    differences (safe to apply); other suggestions are the nearest string match and
+    should be reviewed before applying.
+    """
+    if not issues:
+        return "OK - all protocol steps reference defined valve/pump commands."
+
+    lines = [f"Found {len(issues)} undefined command reference(s):", ""]
+    for issue in issues:
+        protos = ", ".join(issue.protocols)
+        lines.append(f"  [{issue.kind}] {issue.referenced!r}  (in {issue.count} step(s))")
+        lines.append(f"        used by protocol(s): {protos}")
+        if issue.suggestion is None:
+            lines.append("        no defined commands of this kind to match against")
+        else:
+            tag = " [normalized]" if issue.normalized_match else ""
+            lines.append(
+                f"        suggested fix -> {issue.suggestion!r} "
+                f"(similarity {issue.score:.2f}){tag}"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def fix_kilroy_consistency(
+    path:   Path,
+    fixes:  "Mapping[Tuple[str, str], str] | Iterable[Tuple[str, str, str]]",
+    *,
+    backup: bool = True,
+) -> Tuple[int, List[Tuple[str, str, str, int]]]:
+    """
+    Apply confirmed command-name corrections to a Kilroy config, in place.
+
+    Each fix rewrites the text of matching ``<valve>``/``<pump>`` steps from a wrong
+    command name to a correct one, wherever it appears in any protocol. Only the
+    step text is touched: attributes (e.g. ``duration``), comments, formatting, the
+    file's CRLF line endings, and its ISO-8859-1 encoding are all preserved (the
+    edit is a targeted text substitution, not an XML re-serialisation, so the rich
+    hand-written config layout is kept intact).
+
+    Parameters
+    ----------
+    path : Path
+        Path to the Kilroy config XML to modify.
+    fixes : mapping or iterable
+        Either a mapping ``{(kind, wrong_name): correct_name}`` or an iterable of
+        ``(kind, wrong_name, correct_name)`` triples, where ``kind`` is ``"valve"``
+        or ``"pump"``. Typically the confirmed subset of ``check_kilroy_consistency``
+        suggestions.
+    backup : bool, default True
+        When any replacement is made, first copy the original file to
+        ``<path>.bak`` (byte-for-byte) before overwriting.
+
+    Returns
+    -------
+    (total, applied) : tuple
+        *total* is the number of steps rewritten. *applied* is a list of
+        ``(kind, wrong_name, correct_name, n_replaced)`` — one per requested fix,
+        so callers can flag any fix that matched nothing (``n_replaced == 0``).
+    """
+    path = Path(path)
+    items: List[Tuple[Tuple[str, str], str]] = (
+        list(fixes.items())
+        if isinstance(fixes, Mapping)
+        else [((kind, wrong), right) for (kind, wrong, right) in fixes]
+    )
+
+    # Read as bytes then decode so newlines are NOT translated: this keeps the
+    # config's Windows CRLF endings intact on write (text-mode I/O would rewrite
+    # them and HAL/Kilroy require CRLF).
+    original_bytes = path.read_bytes()
+    text = original_bytes.decode("ISO-8859-1")
+
+    total = 0
+    applied: List[Tuple[str, str, str, int]] = []
+    for (kind, wrong), right in items:
+        # Match <valve ...>WRONG</valve> (or pump), capturing the open/close tags so
+        # attributes are preserved; only the text between them is replaced.
+        pattern = re.compile(
+            r"(<" + kind + r"\b[^>]*>)" + re.escape(wrong) + r"(</" + kind + r">)"
+        )
+        text, n = pattern.subn(lambda m: m.group(1) + right + m.group(2), text)
+        total += n
+        applied.append((kind, wrong, right, n))
+
+    if total:
+        if backup:
+            path.with_suffix(path.suffix + ".bak").write_bytes(original_bytes)
+        path.write_bytes(text.encode("ISO-8859-1"))
+
+    return total, applied
