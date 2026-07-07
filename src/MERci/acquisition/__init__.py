@@ -18,6 +18,11 @@ from .positions import (
     filter_scanning_path,
     close_scanning_path,
     get_path_stats,
+    BoundarySpec,
+    discover_boundary_files,
+    load_boundary_polygon,
+    create_transit_path,
+    build_boundary_path,
 )
 from .display import print_frame_table, display_xml
 from .kilroy import (

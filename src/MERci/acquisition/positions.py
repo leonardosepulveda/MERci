@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from shapely.geometry import Polygon, box as shapely_box
@@ -321,3 +323,216 @@ def get_path_stats(coords: np.ndarray) -> Tuple[float, float]:
         return 0.0, 0.0
     dists = np.linalg.norm(np.diff(coords, axis=0), axis=1)
     return float(dists.sum()), float(dists.max())
+
+
+# ── Multi-tissue / multi-boundary discovery ─────────────────────────────────────
+
+@dataclass
+class BoundarySpec:
+    """One tissue-boundary input file and where it sits in the acquisition order.
+
+    Attributes
+    ----------
+    tissue : int
+        Tissue section index (1-based). Always 1 for the single-tissue and legacy
+        layouts.
+    boundary : int
+        Boundary index within the tissue (1-based).
+    path : Path
+        The ``*boundary_positions*.txt`` file for this boundary.
+    label : str
+        Short segment label used in output filenames: ``"T{t}B{b}"`` for the
+        multi-tissue layout, ``"B{b}"`` for a single tissue with several
+        boundaries, and ``""`` for the legacy single-boundary layout.
+    """
+
+    tissue:   int
+    boundary: int
+    path:     Path
+    label:    str
+
+
+def discover_boundary_files(positions_dir: Path) -> Tuple[List[BoundarySpec], str]:
+    """
+    Auto-detect the tissue/boundary layout from the filenames in *positions_dir*.
+
+    Three layouts are recognised, in priority order:
+
+    * **multi**  – ``tissue_{t}_boundary_positions_{b}.txt`` (several tissue
+      sections, each possibly split across several boundary files). Labels
+      ``T{t}B{b}``.
+    * **single** – ``boundary_positions_{b}.txt`` (one tissue, several
+      boundaries). Labels ``B{b}``.
+    * **legacy** – a lone ``boundary_positions.txt`` (one boundary). Label ``""``.
+
+    Boundaries are returned in acquisition order: sorted by tissue, then boundary.
+    This global order defines the ``transit_k`` numbering used by the caller
+    (``transit_k`` connects boundary *k* to boundary *k+1*, wrapping the last back
+    to the first).
+
+    Parameters
+    ----------
+    positions_dir : directory holding the boundary files
+
+    Returns
+    -------
+    (specs, mode) : (list of BoundarySpec, str)
+        *mode* is ``"multi"``, ``"single"`` or ``"legacy"``.
+
+    Raises
+    ------
+    FileNotFoundError
+        if no boundary file of any recognised layout is present.
+    """
+    positions_dir = Path(positions_dir)
+
+    multi_re  = re.compile(r"^tissue_(\d+)_boundary_positions_(\d+)\.txt$", re.IGNORECASE)
+    single_re = re.compile(r"^boundary_positions_(\d+)\.txt$", re.IGNORECASE)
+
+    multi:  List[BoundarySpec] = []
+    single: List[BoundarySpec] = []
+    for p in sorted(positions_dir.glob("*.txt")):
+        m = multi_re.match(p.name)
+        if m:
+            t, b = int(m.group(1)), int(m.group(2))
+            multi.append(BoundarySpec(t, b, p, f"T{t}B{b}"))
+            continue
+        s = single_re.match(p.name)
+        if s:
+            b = int(s.group(1))
+            single.append(BoundarySpec(1, b, p, f"B{b}"))
+
+    if multi:
+        multi.sort(key=lambda s: (s.tissue, s.boundary))
+        return multi, "multi"
+
+    if single:
+        single.sort(key=lambda s: s.boundary)
+        return single, "single"
+
+    legacy = positions_dir / "boundary_positions.txt"
+    if legacy.exists():
+        return [BoundarySpec(1, 1, legacy, "")], "legacy"
+
+    raise FileNotFoundError(
+        f"No boundary files found in {positions_dir}. Expected one of: "
+        f"'tissue_<t>_boundary_positions_<b>.txt', 'boundary_positions_<b>.txt', "
+        f"or 'boundary_positions.txt'."
+    )
+
+
+def load_boundary_polygon(path: Path) -> Polygon:
+    """
+    Load a tissue-boundary polygon from a comma-separated ``x,y`` file.
+
+    Lines that cannot be parsed as two floats (e.g. headers or ``#`` comments)
+    are skipped. Requires at least three valid vertices.
+
+    Parameters
+    ----------
+    path : path to the boundary ``.txt`` file
+
+    Returns
+    -------
+    shapely.geometry.Polygon
+    """
+    path = Path(path)
+    coords: List[Tuple[float, float]] = []
+    with path.open() as fh:
+        for row in csv.reader(fh):
+            if len(row) >= 2:
+                try:
+                    coords.append((float(row[0]), float(row[1])))
+                except ValueError:
+                    pass  # skip header/comment lines
+    if len(coords) < 3:
+        raise ValueError(f"{path} has fewer than 3 valid (x, y) vertices.")
+    return Polygon(coords)
+
+
+# ── Transit path between boundaries ──────────────────────────────────────────────
+
+def create_transit_path(
+    point_a:        np.ndarray,
+    point_b:        np.ndarray,
+    step_size:      float,
+    spacing_factor: float = 2.0,
+) -> np.ndarray:
+    """
+    Build the transit FOV path from *point_a* to *point_b*.
+
+    Transit FOVs move the stage smoothly between two tissue boundaries. The path
+    starts at *point_a* (the last FOV of one boundary), ends at *point_b* (the
+    first FOV of the next), and places intermediate FOVs along the straight line
+    between them, spaced about ``spacing_factor × step_size`` apart.
+
+    The intermediate count is ``round(dist / spacing)`` so both endpoints are hit
+    exactly and the realised spacing is as close to the target as an integer
+    number of equal steps allows. When the two points are closer than one spacing,
+    only the two endpoints are returned.
+
+    Parameters
+    ----------
+    point_a, point_b : ``(2,)`` ``(x, y)`` endpoints (µm)
+    step_size        : grid spacing (µm)
+    spacing_factor   : target transit spacing as a multiple of *step_size*
+                       (default 2.0 → transit FOVs every two grid steps)
+
+    Returns
+    -------
+    ``(M, 2)`` array of transit coordinates, endpoints included (``M >= 2``).
+    """
+    a = np.asarray(point_a, dtype=float).reshape(2)
+    b = np.asarray(point_b, dtype=float).reshape(2)
+    spacing = spacing_factor * step_size
+    dist    = float(np.linalg.norm(b - a))
+
+    n_intervals = int(round(dist / spacing)) if spacing > 0 else 0
+    n_intervals = max(1, n_intervals)                 # at least the two endpoints
+
+    ts  = np.linspace(0.0, 1.0, n_intervals + 1)      # includes 0 (A) and 1 (B)
+    pts = a[None, :] + ts[:, None] * (b - a)[None, :]
+    return pts
+
+
+# ── Per-boundary FOV path ────────────────────────────────────────────────────────
+
+def build_boundary_path(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    direction:        str            = "vertical",
+    return_side:      Optional[str]  = None,
+) -> np.ndarray:
+    """
+    Build the ordered FOV path for a single boundary.
+
+    Convenience wrapper that runs the standard per-boundary pipeline:
+    :func:`create_grid_positions` → :func:`generate_scanning_path` →
+    :func:`filter_scanning_path`, optionally followed by
+    :func:`close_scanning_path`.
+
+    Parameters
+    ----------
+    boundary_polygon : the tissue boundary for this segment
+    hole_polygons    : exclusion polygons (applied to this boundary)
+    step_size        : grid spacing (µm)
+    fov_size_um      : camera FOV side length (µm)
+    direction        : boustrophedon direction for
+                       :func:`generate_scanning_path`
+    return_side      : if given, :func:`close_scanning_path` moves that side's
+                       points to the end; if ``None`` (default) the raw snake
+                       order is kept — preferred in the multi-boundary layout,
+                       where the transit segments handle travel between boundaries
+
+    Returns
+    -------
+    ``(M, 2)`` ordered stage coordinates for this boundary.
+    """
+    grid, _, _ = create_grid_positions(boundary_polygon, step_size)
+    path       = generate_scanning_path(grid, direction=direction)
+    filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+    if return_side is not None and len(filtered) > 1:
+        filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
+    return filtered
