@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
@@ -71,6 +71,92 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
             f"Supported values: {list(_COLOUR_TO_CHANNEL)}"
         )
     return _COLOUR_TO_CHANNEL[microscope]
+
+
+def _normalise_colour_key(color) -> Optional[int]:
+    """Return *color* as an int wavelength for dict lookup, or ``None`` for NaN.
+
+    Colour values move through the code as ints (``750``) and floats (``750.0``);
+    normalising both a power-dict key and a frame's colour to ``int`` lets them
+    compare equal regardless of which form was used.
+    """
+    if color is None or (isinstance(color, float) and np.isnan(color)):
+        return None
+    return int(round(float(color)))
+
+
+def resolve_power(color, power: Optional[Mapping], default_power: float) -> float:
+    """
+    Look up the laser power for a frame of wavelength *color*.
+
+    Parameters
+    ----------
+    color         : frame colour (nm); ``NaN``/``None`` for a blank frame
+    power         : mapping ``{wavelength_nm: power}`` (keys may be int or float),
+                    or ``None`` to always use *default_power*
+    default_power : power used for blank frames and for any colour absent from
+                    *power*
+
+    Returns
+    -------
+    float
+        The per-colour power, or *default_power* when there is no match.
+    """
+    if power is None:
+        return float(default_power)
+    key = _normalise_colour_key(color)
+    if key is None:
+        return float(default_power)
+    for k, v in power.items():
+        if _normalise_colour_key(k) == key:
+            return float(v)
+    return float(default_power)
+
+
+def power_dict_to_channel_list(
+    power:         Mapping,
+    microscope:    str   = "MF3",
+    default_power: float = 1.0,
+) -> List[float]:
+    """
+    Convert a ``{wavelength_nm: power}`` mapping into the per-channel list that
+    the HAL config ``<default_power>`` element expects.
+
+    The HAL ``<default_power>`` holds one value per hardware channel, ordered by
+    channel index (0, 1, 2, …). Each wavelength maps to a channel via the
+    microscope's colour→channel table, so this places each colour's power at the
+    right index. Channels with no entry in *power* get *default_power*.
+
+    Parameters
+    ----------
+    power         : mapping ``{wavelength_nm: power}`` (keys may be int or float)
+    microscope    : microscope whose colour→channel map is used
+    default_power : value for channels not named in *power*
+
+    Returns
+    -------
+    list of float
+        One power per channel, index = channel number, length = channel count.
+    """
+    ch_map = get_color_to_channel_dict(microscope)
+    # Real (non-blank) channels only: {int wavelength -> channel index}.
+    colour_to_channel = {
+        _normalise_colour_key(c): int(ch)
+        for c, ch in ch_map.items()
+        if _normalise_colour_key(c) is not None
+    }
+    n_channels = max(colour_to_channel.values()) + 1
+    channel_power = [float(default_power)] * n_channels
+    for color, value in power.items():
+        key = _normalise_colour_key(color)
+        if key is None or key not in colour_to_channel:
+            raise ValueError(
+                f"Power specified for wavelength {color!r}, which has no channel "
+                f"on microscope '{microscope}'. Known wavelengths: "
+                f"{sorted(k for k in colour_to_channel)}"
+            )
+        channel_power[colour_to_channel[key]] = float(value)
+    return channel_power
 
 
 # ── Frame table ───────────────────────────────────────────────────────────────
@@ -183,6 +269,35 @@ def get_frame_table(
     return pd.DataFrame(rows, columns=["color", "channel", "z"])
 
 
+def get_transit_frame_table(
+    bead_z:  float = 0,
+    n_blank: int   = 2,
+) -> pd.DataFrame:
+    """
+    Build the frame table for a **transit** segment: *n_blank* laser-off frames
+    at *bead_z*.
+
+    Transit FOVs sit between two tissue boundaries and are visited only to move
+    the stage smoothly (no data is collected), so every frame is blank (colour
+    and channel ``NaN``) and stays at the bead focus. Written to a shutter file
+    this yields no ``<event>`` elements — i.e. *n_blank* dark frames — and the
+    HAL ``<frames>`` count is *n_blank*.
+
+    Parameters
+    ----------
+    bead_z  : z position (µm above coverslip) held for every transit frame
+    n_blank : number of blank frames per transit FOV (default 2)
+
+    Returns
+    -------
+    pd.DataFrame with columns ``["color", "channel", "z"]``.
+    """
+    if n_blank < 1:
+        raise ValueError(f"n_blank must be >= 1, got {n_blank!r}.")
+    rows = [{"color": np.nan, "channel": np.nan, "z": bead_z} for _ in range(n_blank)]
+    return pd.DataFrame(rows, columns=["color", "channel", "z"])
+
+
 def get_color_sequence_name(
     frame_table: pd.DataFrame,
     separator:   str = "-",
@@ -223,8 +338,9 @@ def get_color_sequence_name(
 def create_shutter_file(
     frame_table:   pd.DataFrame,
     output_path:   Path,
-    oversampling:  int   = 1,
-    default_power: float = 1.0,
+    oversampling:  int             = 1,
+    default_power: float           = 1.0,
+    power:         Optional[Mapping] = None,
 ) -> None:
     """
     Write a HAL shutter XML file from *frame_table*.
@@ -234,7 +350,12 @@ def create_shutter_file(
     frame_table   : DataFrame produced by :func:`get_frame_table`
     output_path   : destination path; written with Windows (CRLF) line endings
     oversampling  : value for the ``<oversampling>`` XML element
-    default_power : laser power written for every ``<event>``
+    default_power : laser power for any colour not named in *power* (and the
+                    value used for every event when *power* is ``None``)
+    power         : optional mapping ``{wavelength_nm: power}`` giving a
+                    per-colour laser power. Each ``<event>``'s ``<power>`` is set
+                    from its frame colour; colours absent from the mapping fall
+                    back to *default_power*. Keys may be int or float.
     """
     df   = frame_table.sort_index()
     root = ET.Element("repeat")
@@ -255,9 +376,11 @@ def create_shutter_file(
             root.append(ET.Comment(_z_comment(z, color)))
             last_z = z
 
+        event_power = resolve_power(color, power, default_power)
+
         event = ET.SubElement(root, "event")
         ET.SubElement(event, "channel").text = str(int(channel))
-        ET.SubElement(event, "power").text   = f"{default_power:.1f}"
+        ET.SubElement(event, "power").text   = f"{event_power:.3f}"
         ET.SubElement(event, "on").text      = f"{float(frame):.1f}"
         ET.SubElement(event, "off").text     = f"{float(frame + 1):.1f}"
 
