@@ -21,13 +21,18 @@ Open notebooks from their folders under `MERci/notebooks/` (`prepare_imaging/`, 
 
 ## Deployment model
 
-This repo is cloned directly into each new experiment folder (`SAMPLE_DIR`) as `SAMPLE_DIR/MERci/`. No `pip install` is needed — dependencies come from the `merci_env` conda environment. Notebooks live two levels under the repo root (e.g. `MERci/notebooks/prepare_imaging/`), so each notebook resolves paths as:
+This repo is cloned directly into each new experiment folder (`SAMPLE_DIR`) as `SAMPLE_DIR/MERci/`. No `pip install` is needed — dependencies come from the `merci_env` conda environment. Most notebooks live two levels under the repo root (e.g. `MERci/notebooks/analysis/`), so they resolve paths as:
 
 ```python
 MERCI_DIR  = Path(os.getcwd()).parent.parent   # MERci/
 SAMPLE_DIR = MERCI_DIR.parent                   # experiment root
 sys.path.insert(0, str(MERCI_DIR / "src"))      # MERci/src
 ```
+
+The `prepare_imaging/` notebooks now live **three** levels under the repo root
+(`MERci/notebooks/prepare_imaging/<variant>/`, where `<variant>` is
+`reference`, `tumor`, or `lineage_tracing`), so they use
+`MERCI_DIR = Path(os.getcwd()).parent.parent.parent`.
 
 ## Experiment folder layout
 
@@ -56,13 +61,17 @@ src/MERci/
     io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
                     # save_positions_array, discover_image_files
   acquisition/
-    configs.py      # get_frame_table, get_color_sequence_name, get_color_to_channel_dict, create_shutter_file,
-                    # create_hal_config, format_z_offsets_from_frame_table
+    configs.py      # get_frame_table, get_transit_frame_table (N blank frames), get_color_sequence_name,
+                    # get_color_to_channel_dict, create_shutter_file (per-colour power via power={nm:power}),
+                    # create_hal_config, format_z_offsets_from_frame_table,
+                    # resolve_power / power_dict_to_channel_list (colour->power, channel-ordered HAL default_power)
                     # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
                     # + reconstruct_frame_table (inverse: hal+shutter XML -> frame table) and its parsers
                     #   read_shutter_reference, parse_z_offsets, parse_shutter_events
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
                     # load_hole_polygons, get_path_stats
+                    # + multi-tissue: discover_boundary_files (auto multi/single/legacy), load_boundary_polygon,
+                    #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
@@ -72,8 +81,9 @@ src/MERci/
                     # phase_cross_correlation, à la fishtank), compute_fov_drifts (mov_orient param);
                     # modality-robust path: detect_beads, register_point_translation (consensus
                     # voting + inlier-fraction score), compute_fov_drifts_beads
-    dave.py         # create_round_info, create_dave_config, annotate_dave_with_round_info,
-                    # series_to_movie_name, get_hal_frame_count
+    dave.py         # create_round_info, create_round_info_multitissue (per (round,segment) rows +
+                    #   positions_file/tissue/segment cols), create_dave_config (positions_dir= enables
+                    #   per-segment loops), annotate_dave_with_round_info, series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
                     # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names.
                     # + protocol/command consistency: load_kilroy_commands, iter_protocol_references,
@@ -94,11 +104,16 @@ src/MERci/
   transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
 notebooks/
-  prepare_imaging/  # Pre-experiment notebooks (run in order)
-    01_create_hal_config_and_shutters.ipynb        # define imaging sequence, write HAL XML and CSV
-    02_create_positions_from_tissue_boundary.ipynb # generate FOV scanning grid
-    03_create_dave_config.ipynb                    # generate round_info.csv and Dave recipe XML
-    04_create_data_organization.ipynb              # MERlin data-organization setup
+  prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
+    reference/       # canonical, fully-featured templates (keep up to date)
+    tumor/           # copy tuned for a single tissue section per coverslip
+    lineage_tracing/ # copy tuned for multiple tissue sections per coverslip
+      01_create_hal_config_and_shutters.ipynb        # imaging sequence, per-channel POWER, HAL/shutter for
+                                                     #   bits+cells, and a transit HAL config (blank frames)
+      02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
+                                                     #   per-tissue positions files; creates data/ subfolders
+      03_create_dave_config.ipynb                    # round_info.csv + Dave recipe (per-segment when >1 boundary)
+      04_create_data_organization.ipynb              # MERlin data-organization setup (transit-safe series pick)
   analysis/         # Online-analysis notebooks (run during the experiment)
     01_fov_scheduler.ipynb                         # FOV-level scheduler (thumbnails, stats, histograms)
     02_round_scheduler.ipynb                       # round-level scheduler (mosaics, optional data transfer)
@@ -129,9 +144,10 @@ data/
 
 ### Pre-experiment workflow
 
-Run the four `prepare_imaging/` notebooks in order before starting the microscope.
+Run the four `prepare_imaging/<variant>/` notebooks (variant = `reference` /
+`tumor` / `lineage_tracing`) in order before starting the microscope.
 
-**01** (`prepare_imaging/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Writes:
+**01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets each shutter `<event>`'s `<power>` (actual acquisition power, by frame colour) and the HAL `<default_power>` (channel-ordered via `power_dict_to_channel_list`). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs. Writes:
 - `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}-epi.xml`
 - `SAMPLE_DIR/settings/shutter-{name}.xml` — shutter event XML
 - `SAMPLE_DIR/metadata/frame_table_{name}.csv` — frame table
@@ -139,13 +155,13 @@ Run the four `prepare_imaging/` notebooks in order before starting the microscop
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**02** (`prepare_imaging/02_create_positions_from_tissue_boundary.ipynb`): reads `boundary_positions.txt` and `hole*.txt` from `SAMPLE_DIR/positions/`, builds a regular boustrophedon FOV grid (`create_grid_positions` → `generate_scanning_path`), filters by polygon–polygon overlap (`filter_scanning_path`), reorders return points (`close_scanning_path`), and saves `SAMPLE_DIR/positions/positions_{SAMPLE_NAME}.txt`.
+**02** (`prepare_imaging/<variant>/02_create_positions_from_tissue_boundary.ipynb`): builds the FOV scanning positions for one or more tissue sections. It **auto-detects the layout** from the boundary filenames in `SAMPLE_DIR/positions/` (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**03** (`prepare_imaging/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells). The Kilroy config for the microscope is resolved (via `find_kilroy_config`, falling back to MF2 when the microscope has no config) and passed to `create_dave_config` as the source of fluidic protocol names: every protocol written into the Dave recipe is resolved to — and required to exist as — a `<protocol>` in that Kilroy config, raising `ValueError` otherwise (e.g. adaptor mode on a Kilroy config lacking a readouts protocol). Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+**03** (`prepare_imaging/<variant>/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. With a single boundary it uses the classic single-positions recipe (`create_round_info` + one `<loop>` per imaging round). With **multiple boundaries** it builds a **segment-aware** `round_info` (`create_round_info_multitissue`: one row per (round, segment) — boundary movies with the cells/bits config + transit movies with the transit config, plus `positions_file`, `tissue`, `segment` columns) and a **per-segment** Dave recipe (`create_dave_config(positions_dir=…)`: each boundary/transit segment is its own `<loop>` — "Imaging Round NN - <segment>" — with its own movie, HAL config and positions file, in order; fluidics loops stay between rounds). HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells); the transit HAL config from notebook 01 is auto-detected too. The Kilroy config for the microscope is resolved (via `find_kilroy_config`, falling back to MF2 when the microscope has no config) and passed to `create_dave_config` as the source of fluidic protocol names: every protocol written into the Dave recipe is resolved to — and required to exist as — a `<protocol>` in that Kilroy config, raising `ValueError` otherwise. Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
 
-**04** (`prepare_imaging/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
+**04** (`prepare_imaging/<variant>/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Picks the bits/cells series by `imaging_type` (so a multi-boundary `round_info`'s transit movies are never selected). Note: multi-tissue MERlin analysis is per tissue / per boundary — confirm the intended workflow before relying on the generated data-organization. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The user defines the `round_bit_color` mapping (round, bit, color_nm) to match the codebook. Writes:
 - `SAMPLE_DIR/metadata/round_bit_color_map.csv`
 - `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
 - Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
@@ -222,7 +238,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 ## Running notebooks
 
-Notebooks auto-detect `SAMPLE_DIR` from their own location: `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. This assumes notebooks are run from a second-level subfolder (`MERci/notebooks/<group>/`). Do not hardcode absolute paths in notebooks.
+Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`. Do not hardcode absolute paths in notebooks.
 
 ## Scope constraint
 
