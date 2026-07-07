@@ -137,6 +137,119 @@ def create_round_info(
     )
 
 
+def create_round_info_multitissue(
+    microscope:         str,
+    n_bits:             int,
+    bits_hal_config:    str,
+    cells_hal_config:   str,
+    transit_hal_config: str,
+    sample_dir:         Path,
+    boundaries:         Sequence,
+    mode:               str,
+    sample_name:        str,
+) -> pd.DataFrame:
+    """
+    Build a **segment-aware** ``round_info`` for a multi-boundary experiment.
+
+    Each imaging round visits the boundaries in order with a transit segment
+    between consecutive boundaries (wrapping the last back to the first), exactly
+    as laid out by ``notebooks/prepare_imaging/02``. This produces **one row per
+    (round, segment)** — so each round has several movies: a boundary movie
+    (cells/bits HAL config) per boundary and a transit movie (transit HAL config,
+    blank frames) per transit.
+
+    Round 1 is the cells acquisition; rounds 2…N+1 are bits #1…#N. Every row also
+    carries the ``positions_file`` (basename in ``positions/``) and the per-tissue
+    ``data_dir`` subfolder the segment writes to.
+
+    Parameters
+    ----------
+    microscope         : microscope id, e.g. ``"MF3"``
+    n_bits             : number of bits (hyb) rounds
+    bits_hal_config    : HAL config filename for boundary movies in bits rounds
+    cells_hal_config   : HAL config filename for boundary movies in the cells round
+    transit_hal_config : HAL config filename for transit movies (blank frames)
+    sample_dir         : experiment root; used to build ``data_dir`` paths
+    boundaries         : ordered ``BoundarySpec`` list from
+                         :func:`MERci.acquisition.positions.discover_boundary_files`
+    mode               : ``"multi"``, ``"single"`` or ``"legacy"`` (from the same
+                         discovery call); selects the data-folder layout
+    sample_name        : experiment name used in the positions filenames
+
+    Returns
+    -------
+    pd.DataFrame with columns ``imaging_round``, ``imaging_type`` (``cells`` /
+    ``bits`` / ``transit``), ``series``, ``hal_config``, ``data_dir``,
+    ``positions_file``, ``tissue``, ``segment``.
+    """
+    mic          = microscope.lower()
+    n_boundaries = len(boundaries)
+    # As many transits as boundaries (each wraps to the next), unless there is
+    # only one boundary — then there is nothing to transit between.
+    n_transits   = n_boundaries if n_boundaries > 1 else 0
+    data         = Path(sample_dir) / "data"
+
+    def _seg_dir(tissue: int, kind: str, is_cells: bool) -> str:
+        base = data / f"tissue_{tissue}" if mode == "multi" else data
+        if kind == "transit":
+            return str(base / "transit")
+        return str(base / ("cells" if is_cells else "hybs"))
+
+    # Ordered segment templates for one round's traversal (round-independent):
+    # (kind, tissue, label, positions_file).
+    seg_templates: List[tuple] = []
+    for k, spec in enumerate(boundaries):
+        seg_templates.append(
+            ("boundary", spec.tissue, spec.label,
+             f"positions_{sample_name}_{spec.label}.txt")
+        )
+        if n_transits:
+            seg_templates.append(
+                ("transit", spec.tissue, f"transit_{k + 1}",
+                 f"positions_{sample_name}_transit_{k + 1}.txt")
+            )
+
+    rows: List[dict] = []
+
+    def _emit(rnd: int, is_cells: bool, movie_prefix: str, hal_boundary: str) -> None:
+        for kind, tissue, label, posfile in seg_templates:
+            if kind == "boundary":
+                rows.append({
+                    "imaging_round":  rnd,
+                    "imaging_type":   "cells" if is_cells else "bits",
+                    "series":         f"{movie_prefix}_{label}_{{fov:03d}}",
+                    "hal_config":     hal_boundary,
+                    "data_dir":       _seg_dir(tissue, "boundary", is_cells),
+                    "positions_file": posfile,
+                    "tissue":         tissue,
+                    "segment":        label,
+                })
+            else:
+                rows.append({
+                    "imaging_round":  rnd,
+                    "imaging_type":   "transit",
+                    "series":         f"hal-{mic}-epi-transit_r{rnd:02d}_{label}_{{fov:03d}}",
+                    "hal_config":     transit_hal_config,
+                    "data_dir":       _seg_dir(tissue, "transit", is_cells),
+                    "positions_file": posfile,
+                    "tissue":         tissue,
+                    "segment":        label,
+                })
+
+    # Round 1: cells.
+    _emit(1, is_cells=True, movie_prefix=f"hal-{mic}-epi-cells", hal_boundary=cells_hal_config)
+    # Rounds 2…N+1: bits #1…#N (movie series number tracks the bit/hyb index).
+    for bit_idx in range(1, n_bits + 1):
+        _emit(bit_idx + 1, is_cells=False,
+              movie_prefix=f"hal-{mic}-epi_{bit_idx:02d}", hal_boundary=bits_hal_config)
+
+    return pd.DataFrame(
+        rows,
+        columns=["imaging_round", "imaging_type", "series", "hal_config",
+                 "data_dir", "positions_file", "tissue", "segment"],
+    )
+
+
 # ── Dave config builder ────────────────────────────────────────────────────────
 
 def create_dave_config(
@@ -150,9 +263,22 @@ def create_dave_config(
     num_focus_checks:     int  = 50,
     fluidics_protocols:   Optional[Sequence[str]] = None,
     kilroy_config:        Optional[Path] = None,
+    positions_dir:        Optional[Path] = None,
 ) -> None:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
+
+    **Positions model.** Two layouts are supported:
+
+    * *single-positions* (default) — every movie in a round iterates the one
+      ``positions_file``; each imaging round is a single ``<loop>``.
+    * *per-segment* — used when ``round_info`` has a ``positions_file`` column and
+      ``positions_dir`` is given (the multi-boundary layout from
+      ``create_round_info_multitissue``). Because a Dave loop iterates exactly one
+      positions file, each segment (boundary or transit) becomes its **own**
+      ``<loop>`` — named ``"Imaging Round NN - <segment>"`` — with its own movie,
+      HAL config and positions file, in ``round_info`` row order. Fluidics loops
+      still sit between rounds (after a round's last segment loop).
 
     Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
     precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb
@@ -203,6 +329,12 @@ def create_dave_config(
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
 
+    # Per-segment layout: active when round_info carries a positions_file column
+    # AND a positions_dir is given (the multi-boundary layout). Otherwise every
+    # movie in a round shares the single positions_file.
+    segment_mode  = ("positions_file" in round_info.columns and positions_dir is not None)
+    positions_dir = Path(positions_dir) if positions_dir is not None else None
+
     # Resolve fluidic protocol names against the Kilroy config that will run this
     # experiment, so every protocol written here exists as a Kilroy <protocol>.
     resolver = (
@@ -210,17 +342,16 @@ def create_dave_config(
         if kilroy_config is not None else None
     )
 
-    def _round_is_cells(rid: int) -> bool:
-        """A round is a cells round if its imaging_type is 'cells' (or, absent
-        that column, every series name contains 'cells')."""
+    def _round_has_bits(rid: int) -> bool:
+        """True if round *rid* images bits (not just cells / transit)."""
         rrows = round_info[round_info["imaging_round"] == rid]
         if "imaging_type" in round_info.columns:
             types = {str(t).strip().lower() for t in rrows["imaging_type"].dropna()}
             if types:
-                return types == {"cells"}
-        return all("cells" in str(s) for s in rrows["series"])
+                return "bits" in types
+        return any("cells" not in str(s) for s in rrows["series"])
 
-    bits_round_ids   = [rid for rid in round_ids if not _round_is_cells(rid)]
+    bits_round_ids   = [rid for rid in round_ids if _round_has_bits(rid)]
     first_bits_round = bits_round_ids[0] if bits_round_ids else None
 
     root = ET.Element("recipe")
@@ -229,46 +360,31 @@ def create_dave_config(
     imaging_loop_vars:  list[tuple[str, str]]       = []
     fluidics_loop_vars: list[tuple[str, list[str]]] = []
 
-    for idx, round_id in enumerate(round_ids):
-        is_last  = (idx == n_rounds - 1)
-        rows     = round_info[round_info["imaging_round"] == round_id]
-        img_name = f"Imaging Round {round_id:02d}"
+    def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str) -> None:
+        """Append one <movie> (resolving its HAL frame count) to *parent_loop*."""
+        movie_name   = series_to_movie_name(str(row["series"]))
+        hal_stem     = Path(str(row["hal_config"])).stem
+        hal_path     = settings_dir / (hal_stem + ".xml")
+        try:
+            n_frames = get_hal_frame_count(hal_path)
+        except (FileNotFoundError, ValueError):
+            n_frames = 0
 
-        # ── Imaging loop ───────────────────────────────────────────────────────
-        img_loop = ET.SubElement(seq, "loop")
-        img_loop.set("name", img_name)
+        movie   = ET.SubElement(parent_loop, "movie")
+        name_el = ET.SubElement(movie, "name")
+        name_el.set("increment", "Yes")
+        name_el.text = movie_name
+        ET.SubElement(movie, "length").text     = str(n_frames)
+        ET.SubElement(movie, "parameters").text = hal_stem
+        cf = ET.SubElement(movie, "check_focus")
+        ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
+        ET.SubElement(cf, "focus_scan")
+        ET.SubElement(movie, "overwrite").text = "False"
+        ve = ET.SubElement(movie, "variable_entry")
+        ve.set("name", variable_name)
 
-        for _, row in rows.iterrows():
-            movie_name   = series_to_movie_name(str(row["series"]))
-            hal_filename = str(row["hal_config"])
-            hal_stem     = Path(hal_filename).stem
-            hal_path     = settings_dir / (hal_stem + ".xml")
-
-            try:
-                n_frames = get_hal_frame_count(hal_path)
-            except (FileNotFoundError, ValueError):
-                n_frames = 0
-
-            movie = ET.SubElement(img_loop, "movie")
-            name_el = ET.SubElement(movie, "name")
-            name_el.set("increment", "Yes")
-            name_el.text = movie_name
-
-            ET.SubElement(movie, "length").text = str(n_frames)
-            ET.SubElement(movie, "parameters").text = hal_stem
-
-            cf = ET.SubElement(movie, "check_focus")
-            ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
-            ET.SubElement(cf, "focus_scan")
-
-            ET.SubElement(movie, "overwrite").text = "False"
-
-            ve = ET.SubElement(movie, "variable_entry")
-            ve.set("name", img_name)
-
-        imaging_loop_vars.append((img_name, str(positions_file)))
-
-        # ── Fluidics loop ──────────────────────────────────────────────────────
+    def _add_fluidics(round_id: int, is_last: bool) -> None:
+        """Append the between-round fluidics loop that FOLLOWS *round_id*."""
         if not is_last:
             next_round = round_id + 1
             fl_name    = f"Fluidics Round {next_round:02d}"
@@ -315,20 +431,43 @@ def create_dave_config(
                     "Wash and Imaging Buffers",
                 ]
         elif include_final_cleave:
-            fl_name      = "Fluidics Final"
+            fl_name = "Fluidics Final"
             if resolver is not None:
                 fl_protocols = [resolver.cleave(adaptors=use_adaptors)]
             else:
                 fl_protocols = ["Cleave adaptors" if use_adaptors else "Cleave direct"]
         else:
-            fl_name = None
+            return
 
-        if fl_name is not None:
-            fl_loop = ET.SubElement(seq, "loop")
-            fl_loop.set("name", fl_name)
-            ve = ET.SubElement(fl_loop, "variable_entry")
-            ve.set("name", fl_name)
-            fluidics_loop_vars.append((fl_name, fl_protocols))
+        fl_loop = ET.SubElement(seq, "loop")
+        fl_loop.set("name", fl_name)
+        ve = ET.SubElement(fl_loop, "variable_entry")
+        ve.set("name", fl_name)
+        fluidics_loop_vars.append((fl_name, fl_protocols))
+
+    for idx, round_id in enumerate(round_ids):
+        is_last = (idx == n_rounds - 1)
+        rows    = round_info[round_info["imaging_round"] == round_id]
+
+        if segment_mode:
+            # One loop per segment (a Dave loop iterates a single positions file).
+            for _, row in rows.iterrows():
+                seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
+                lname = f"Imaging Round {round_id:02d} - {seg}"
+                loop  = ET.SubElement(seq, "loop")
+                loop.set("name", lname)
+                _add_movie(loop, row, lname)
+                imaging_loop_vars.append((lname, str(positions_dir / str(row["positions_file"]))))
+        else:
+            # Single loop for the round; all movies share positions_file.
+            img_name = f"Imaging Round {round_id:02d}"
+            img_loop = ET.SubElement(seq, "loop")
+            img_loop.set("name", img_name)
+            for _, row in rows.iterrows():
+                _add_movie(img_loop, row, img_name)
+            imaging_loop_vars.append((img_name, str(positions_file)))
+
+        _add_fluidics(round_id, is_last)
 
     # ── Loop variables ─────────────────────────────────────────────────────────
     for lname, pos_path in imaging_loop_vars:
