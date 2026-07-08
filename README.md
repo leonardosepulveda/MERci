@@ -370,7 +370,7 @@ Use `read_image(path)` to load any of the three formats without knowing the type
 | 405 | 4 |
 | blank | NaN |
 
-**MFX** (4 channels, no 750, distinct ordering):
+**MFX, ST2** (4 channels, no 750, distinct ordering):
 
 | Wavelength (nm) | Channel index |
 |---|---|

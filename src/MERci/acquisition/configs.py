@@ -53,6 +53,8 @@ _COLOUR_TO_CHANNEL: Dict[str, Dict] = {
     "MF5": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
     # MFX has only 4 channels (no 750) with a distinct ordering: 0:650, 1:560, 2:488, 3:405
     "MFX": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
+    # ST2 shares MFX's 4-channel mapping (no 750)
+    "ST2": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
 }
 
 
