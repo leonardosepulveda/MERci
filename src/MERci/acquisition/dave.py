@@ -77,6 +77,35 @@ def get_hal_frame_count(hal_config_path: Path) -> int:
     return int(el.text.strip())
 
 
+def count_positions(positions_path: Path) -> int:
+    """
+    Count the FOV positions in a ``positions_*.txt`` file.
+
+    One FOV per non-blank line (``x,y``); ``#`` comments and blank lines are
+    ignored, matching :func:`MERci.common.metadata._read_positions`.  This equals
+    the number of iterations Dave runs for a ``<loop>`` bound to this file, which
+    is what the per-segment ``start`` offsets (see
+    :func:`create_round_info_multitissue`) are built from.
+
+    Parameters
+    ----------
+    positions_path : path to the comma-separated positions file
+
+    Returns
+    -------
+    int : number of valid ``x,y`` FOV lines
+    """
+    n = 0
+    with Path(positions_path).open() as fh:
+        for raw in fh:
+            line = raw.split("#")[0].strip()
+            if not line:
+                continue
+            if len(line.split(",")) >= 2:
+                n += 1
+    return n
+
+
 # ── round_info builder ─────────────────────────────────────────────────────────
 
 def create_round_info(
@@ -162,6 +191,22 @@ def create_round_info_multitissue(
     carries the ``positions_file`` (basename in ``positions/``) and the per-tissue
     ``data_dir`` subfolder the segment writes to.
 
+    **Consolidated movie names + continuous FOV index.** Within a round, all
+    boundary movies share ONE movie name (e.g. ``hal-mf3-epi-cells`` /
+    ``hal-mf3-epi_01``) and all transit movies share one name
+    (``hal-mf3-epi-transit_rNN``) — the per-segment label is dropped from the movie
+    name. To keep the per-loop indices from colliding, each row carries an
+    ``fov_start`` offset (running FOV count of the preceding segments of the same
+    group, in traversal order) and a fixed ``fov_pad`` width; these become the
+    ``start``/``pad`` attributes on the Dave ``<name>`` (see
+    :func:`create_dave_config`). Boundary FOVs therefore number continuously
+    ``0…(ΣboundaryFOVs−1)`` and transit FOVs ``0…(ΣtransitFOVs−1)`` across segments,
+    while the loops stay separate so the boundary→transit interleaving is preserved.
+    The positions files (written by notebook 02) must already exist — they are read
+    to count FOVs. **The recipe this produces requires the patched Dave**
+    (``dave_fov_offset_patch``); stock Dave ignores ``start``/``pad`` and the shared
+    names would overwrite each other.
+
     Parameters
     ----------
     microscope         : microscope id, e.g. ``"MF3"``
@@ -180,7 +225,7 @@ def create_round_info_multitissue(
     -------
     pd.DataFrame with columns ``imaging_round``, ``imaging_type`` (``cells`` /
     ``bits`` / ``transit``), ``series``, ``hal_config``, ``data_dir``,
-    ``positions_file``, ``tissue``, ``segment``.
+    ``positions_file``, ``tissue``, ``segment``, ``fov_start``, ``fov_pad``.
     """
     mic          = microscope.lower()
     n_boundaries = len(boundaries)
@@ -188,6 +233,7 @@ def create_round_info_multitissue(
     # only one boundary — then there is nothing to transit between.
     n_transits   = n_boundaries if n_boundaries > 1 else 0
     data         = Path(sample_dir) / "data"
+    pos_dir      = Path(sample_dir) / "positions"
 
     def _seg_dir(tissue: int, kind: str, is_cells: bool) -> str:
         base = data / f"tissue_{tissue}" if mode == "multi" else data
@@ -209,31 +255,81 @@ def create_round_info_multitissue(
                  f"positions_{sample_name}_transit_{k + 1}.txt")
             )
 
+    # ── Continuous FOV numbering across segments ────────────────────────────────
+    # We want every boundary movie in a round to share ONE movie name (e.g.
+    # ``hal-mf3-epi-cells``) with a single running FOV index 0…(ΣtBoundaryFOVs−1),
+    # and likewise every transit movie to share one name — while KEEPING the
+    # per-segment loops so the boundary→transit interleaving is preserved.
+    #
+    # Dave numbers each loop 0…n−1 independently, so shared names would collide.
+    # The patched ``v2Generator`` accepts a per-movie ``start`` offset and fixed
+    # ``pad`` (see ``dave_fov_offset_patch``); we compute them here from the FOV
+    # counts of the positions files that Dave will iterate. ``start`` for a segment
+    # is the number of FOVs in the preceding segments of the SAME group (boundary
+    # vs transit), in traversal order; ``pad`` is a fixed zero-pad width wide enough
+    # for the whole group (≥3 to keep the conventional 3-digit index).
+    #
+    # NOTE: because the movie names are now shared, the generated recipe REQUIRES
+    # the patched Dave. Under stock Dave the ``start``/``pad`` attributes are
+    # ignored and the shared names would overwrite each other.
+    counts = [count_positions(pos_dir / posfile) for (_, _, _, posfile) in seg_templates]
+
+    def _group_pad(total: int) -> int:
+        # Digits needed for the largest index (total-1); floor at 3 so the index
+        # keeps the conventional 3-wide form the analysis side expects.
+        return max(3, len(str(total - 1))) if total > 0 else 3
+
+    boundary_total = sum(c for (t, c) in zip(seg_templates, counts) if t[0] == "boundary")
+    transit_total  = sum(c for (t, c) in zip(seg_templates, counts) if t[0] == "transit")
+    boundary_pad   = _group_pad(boundary_total)
+    transit_pad    = _group_pad(transit_total)
+
+    # Enrich each template with its running start offset and group pad.
+    enriched: List[dict] = []
+    b_off = t_off = 0
+    for (kind, tissue, label, posfile), cnt in zip(seg_templates, counts):
+        if kind == "boundary":
+            start, pad = b_off, boundary_pad
+            b_off += cnt
+        else:
+            start, pad = t_off, transit_pad
+            t_off += cnt
+        enriched.append({"kind": kind, "tissue": tissue, "label": label,
+                         "posfile": posfile, "start": start, "pad": pad})
+
     rows: List[dict] = []
 
     def _emit(rnd: int, is_cells: bool, movie_prefix: str, hal_boundary: str) -> None:
-        for kind, tissue, label, posfile in seg_templates:
-            if kind == "boundary":
+        for seg in enriched:
+            tissue, label, posfile = seg["tissue"], seg["label"], seg["posfile"]
+            start, pad = seg["start"], seg["pad"]
+            if seg["kind"] == "boundary":
+                # Shared movie name (no per-segment label): the continuous index
+                # comes from start/pad, not from the name.
                 rows.append({
                     "imaging_round":  rnd,
                     "imaging_type":   "cells" if is_cells else "bits",
-                    "series":         f"{movie_prefix}_{label}_{{fov:03d}}",
+                    "series":         f"{movie_prefix}_{{fov:0{pad}d}}",
                     "hal_config":     hal_boundary,
                     "data_dir":       _seg_dir(tissue, "boundary", is_cells),
                     "positions_file": posfile,
                     "tissue":         tissue,
                     "segment":        label,
+                    "fov_start":      start,
+                    "fov_pad":        pad,
                 })
             else:
                 rows.append({
                     "imaging_round":  rnd,
                     "imaging_type":   "transit",
-                    "series":         f"hal-{mic}-epi-transit_r{rnd:02d}_{label}_{{fov:03d}}",
+                    "series":         f"hal-{mic}-epi-transit_r{rnd:02d}_{{fov:0{pad}d}}",
                     "hal_config":     transit_hal_config,
                     "data_dir":       _seg_dir(tissue, "transit", is_cells),
                     "positions_file": posfile,
                     "tissue":         tissue,
                     "segment":        label,
+                    "fov_start":      start,
+                    "fov_pad":        pad,
                 })
 
     # Round 1: cells.
@@ -246,7 +342,8 @@ def create_round_info_multitissue(
     return pd.DataFrame(
         rows,
         columns=["imaging_round", "imaging_type", "series", "hal_config",
-                 "data_dir", "positions_file", "tissue", "segment"],
+                 "data_dir", "positions_file", "tissue", "segment",
+                 "fov_start", "fov_pad"],
     )
 
 
@@ -279,6 +376,14 @@ def create_dave_config(
       ``<loop>`` — named ``"Imaging Round NN - <segment>"`` — with its own movie,
       HAL config and positions file, in ``round_info`` row order. Fluidics loops
       still sit between rounds (after a round's last segment loop).
+
+      When the rows carry ``fov_start``/``fov_pad`` (produced by
+      ``create_round_info_multitissue``), each movie ``<name>`` is emitted with
+      ``start``/``pad`` attributes so all boundary movies share one name with a
+      single running FOV index and all transit movies likewise — see that function.
+      This makes the recipe depend on the patched Dave ``v2Generator``
+      (``dave_fov_offset_patch``); stock Dave ignores the attributes and the shared
+      names would collide.
 
     Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
     precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb
@@ -374,6 +479,15 @@ def create_dave_config(
         name_el = ET.SubElement(movie, "name")
         name_el.set("increment", "Yes")
         name_el.text = movie_name
+        # Continuous FOV numbering across per-segment loops (multi-boundary layout):
+        # when round_info carries fov_start/fov_pad, emit them as the patched Dave's
+        # <name start=… pad=…> so boundary (and transit) movies share one name yet
+        # keep a single running, non-colliding index. Absent columns → stock Dave
+        # numbering (single-positions layout is unaffected).
+        if "fov_start" in row.index and pd.notna(row.get("fov_start")):
+            name_el.set("start", str(int(row["fov_start"])))
+        if "fov_pad" in row.index and pd.notna(row.get("fov_pad")):
+            name_el.set("pad", str(int(row["fov_pad"])))
         ET.SubElement(movie, "length").text     = str(n_frames)
         ET.SubElement(movie, "parameters").text = hal_stem
         cf = ET.SubElement(movie, "check_focus")
