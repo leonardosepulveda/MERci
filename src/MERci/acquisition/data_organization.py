@@ -32,7 +32,7 @@ def create_data_organization(
 
     Parameters
     ----------
-    bits_frame_table  : frame table for bits rounds (from ``metadata/frame_table_*.csv``)
+    bits_frame_table  : frame table for bits rounds (from ``metadata/frame-table-*.csv``)
     cells_frame_table : frame table for the cells round
     round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples
     readouts          : readouts.csv DataFrame; must have columns

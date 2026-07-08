@@ -27,10 +27,10 @@ Usage
 ...     bead_z=0, bead_seq=[488, np.nan], color_seq=[560, 650],
 ...     end_seq=[np.nan, np.nan], z_pos=np.arange(1, 20.5, 0.5),
 ... )
->>> name = get_color_sequence_name(frame_table)   # e.g. "blkf2-560f49-650f49"
->>> create_shutter_file(frame_table, output_dir / f"shutter_{name}.xml")
->>> create_hal_config(template, frame_table, f"shutter_{name}.xml",
-...                   output_dir / f"hal-config-mf3-epi_{name}.xml")
+>>> name = get_color_sequence_name(frame_table)   # e.g. "blkf2_560f49_650f49"
+>>> create_shutter_file(frame_table, output_dir / shutter_filename("bits", name))
+>>> create_hal_config(template, frame_table, shutter_filename("bits", name),
+...                   output_dir / hal_config_filename("mf3", "bits", name))
 """
 from __future__ import annotations
 
@@ -300,21 +300,26 @@ def get_transit_frame_table(
 
 def get_color_sequence_name(
     frame_table: pd.DataFrame,
-    separator:   str = "-",
+    separator:   str = "_",
     scan_mode:   str = "interleaved",
 ) -> str:
     """
     Build a compact human-readable name for a colour sequence.
 
-    Returns something like ``"blkf2-560f49-650f49"`` where ``blkf2`` means
+    Returns something like ``"blkf2_560f49_650f49"`` where ``blkf2`` means
     two blank (NaN) frames and ``560f49`` means forty-nine 560 nm frames.
-    A ``"-seq"`` suffix is appended when *scan_mode* is ``"sequential"`` to
+    A ``"_seq"`` suffix is appended when *scan_mode* is ``"sequential"`` to
     prevent filename collisions with the interleaved variant.
+
+    The tokens are joined by underscores so the whole colour name reads as a
+    single filename field; the hyphen is reserved for the structural prefix of
+    config/shutter/frame-table filenames (see :func:`sequence_stem` and the
+    ``*_filename`` helpers).
 
     Parameters
     ----------
     frame_table : DataFrame with a ``"color"`` column
-    separator   : string placed between name tokens (default ``"-"``)
+    separator   : string placed between name tokens (default ``"_"``)
     scan_mode   : ``"interleaved"`` (default) or ``"sequential"``
     """
     col     = frame_table["color"]
@@ -331,6 +336,48 @@ def get_color_sequence_name(
     if scan_mode == "sequential":
         name += separator + "seq"
     return name
+
+
+# ── Filename naming rule ────────────────────────────────────────────────────────
+# A single round's three artefacts (HAL config, shutter, frame table) share one
+# stem ``{kind}-{name}`` where *kind* is ``bits`` / ``cells`` / ``transit`` and
+# *name* is the underscore-joined colour-sequence name from
+# ``get_color_sequence_name`` (e.g. ``blkf5_488f2_560f25_650f25_750f25``). Hyphens
+# delimit the structural prefix; underscores live only inside *name*. This keeps
+# the analysis-side resolver ``find_frame_table_for_hal_config`` a simple
+# ``shutter-`` -> ``frame-table-`` rewrite.
+
+_VALID_KINDS = ("bits", "cells", "transit")
+
+
+def sequence_stem(kind: str, name: str) -> str:
+    """
+    Return the shared ``{kind}-{name}`` stem for a round's filenames.
+
+    Parameters
+    ----------
+    kind : ``"bits"``, ``"cells"`` or ``"transit"``
+    name : colour-sequence name from :func:`get_color_sequence_name`
+           (underscore-joined, e.g. ``"blkf5_488f2_560f25_650f25_750f25"``)
+    """
+    if kind not in _VALID_KINDS:
+        raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}.")
+    return f"{kind}-{name}"
+
+
+def hal_config_filename(microscope: str, kind: str, name: str) -> str:
+    """HAL config filename, e.g. ``hal-config-mf3-bits-blkf5_488f2_….xml``."""
+    return f"hal-config-{microscope.lower()}-{sequence_stem(kind, name)}.xml"
+
+
+def shutter_filename(kind: str, name: str) -> str:
+    """Shutter filename, e.g. ``shutter-bits-blkf5_488f2_….xml``."""
+    return f"shutter-{sequence_stem(kind, name)}.xml"
+
+
+def frame_table_filename(kind: str, name: str) -> str:
+    """Frame-table filename, e.g. ``frame-table-bits-blkf5_488f2_….csv``."""
+    return f"frame-table-{sequence_stem(kind, name)}.csv"
 
 
 # ── Shutter XML ───────────────────────────────────────────────────────────────
@@ -531,8 +578,9 @@ def find_frame_table_for_hal_config(
     Locate the frame-table CSV that corresponds to *hal_config_path*.
 
     Strategy: read the ``<shutters>`` element from the HAL config
-    (``shutter-{name}.xml``), strip the ``shutter-`` prefix to recover
-    *name*, and return ``metadata_dir/frame_table_{name}.csv`` if it exists.
+    (``shutter-{stem}.xml``), strip the ``shutter-`` prefix to recover the
+    ``{kind}-{name}`` stem, and return ``metadata_dir/frame-table-{stem}.csv``
+    if it exists. (Legacy ``frame_table_{stem}.csv`` is accepted as a fallback.)
 
     Returns ``None`` when the frame table cannot be found.
     """
@@ -542,13 +590,19 @@ def find_frame_table_for_hal_config(
         m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
         if not m:
             return None
-        shutter_stem = Path(m.group(1).strip()).stem  # shutter-{name}
+        shutter_stem = Path(m.group(1).strip()).stem  # shutter-{stem}
         if shutter_stem.startswith("shutter-"):
-            name = shutter_stem[len("shutter-"):]
+            stem = shutter_stem[len("shutter-"):]
         else:
-            name = shutter_stem
-        candidate = Path(metadata_dir) / f"frame_table_{name}.csv"
-        return candidate if candidate.exists() else None
+            stem = shutter_stem
+        candidates = [
+            Path(metadata_dir) / f"frame-table-{stem}.csv",   # current convention
+            Path(metadata_dir) / f"frame_table_{stem}.csv",   # legacy fallback
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
     except Exception:
         return None
 

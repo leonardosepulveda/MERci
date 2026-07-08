@@ -61,10 +61,13 @@ src/MERci/
     io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
                     # save_positions_array, discover_image_files
   acquisition/
-    configs.py      # get_frame_table, get_transit_frame_table (N blank frames), get_color_sequence_name,
+    configs.py      # get_frame_table, get_transit_frame_table (N blank frames), get_color_sequence_name
+                    # (underscore-joined tokens, e.g. blkf5_488f2_560f25_650f25_750f25),
                     # get_color_to_channel_dict, create_shutter_file (per-colour power via power={nm:power}),
                     # create_hal_config, format_z_offsets_from_frame_table,
-                    # resolve_power / power_dict_to_channel_list (colour->power, channel-ordered HAL default_power)
+                    # resolve_power / power_dict_to_channel_list (colour->power, channel-ordered HAL default_power),
+                    # naming rule: sequence_stem + hal_config_filename / shutter_filename / frame_table_filename
+                    # (stem = "{kind}-{name}", kind in bits/cells/transit; hyphens delimit the prefix)
                     # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
                     # + reconstruct_frame_table (inverse: hal+shutter XML -> frame table) and its parsers
                     #   read_shutter_reference, parse_z_offsets, parse_shutter_events
@@ -152,11 +155,15 @@ data/
 Run the four `prepare_imaging/<variant>/` notebooks (variant = `reference` /
 `tumor` / `lineage_tracing`) in order before starting the microscope.
 
-**01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets each shutter `<event>`'s `<power>` (actual acquisition power, by frame colour) and the HAL `<default_power>` (channel-ordered via `power_dict_to_channel_list`). Auto-generates a compact name via `get_color_sequence_name`. Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs. Writes:
-- `SAMPLE_DIR/settings/hal-config-{microscope}-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}-epi.xml`
-- `SAMPLE_DIR/settings/shutter-{name}.xml` — shutter event XML
-- `SAMPLE_DIR/metadata/frame_table_{name}.csv` — frame table
+**01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets each shutter `<event>`'s `<power>` (actual acquisition power, by frame colour) and the HAL `<default_power>` (channel-ordered via `power_dict_to_channel_list`). Auto-generates a compact colour name via `get_color_sequence_name` (underscore-joined tokens, e.g. `blkf5_488f2_560f25_650f25_750f25`). Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs.
+
+**Naming rule.** Each round's three artefacts share a stem `{kind}-{name}` (kind = `bits`/`cells`/`transit`), built by the `configs` helpers `hal_config_filename` / `shutter_filename` / `frame_table_filename`. Hyphens delimit the structural prefix; underscores live only inside `{name}`. So for the bits round with `{name}=blkf5_488f2_560f25_650f25_750f25`:
+- `SAMPLE_DIR/settings/hal-config-{mic}-bits-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}-epi.xml`
+- `SAMPLE_DIR/settings/shutter-bits-{name}.xml` — shutter event XML
+- `SAMPLE_DIR/metadata/frame-table-bits-{name}.csv` — frame table
 - `SAMPLE_DIR/metadata/shutter_sequence_{name}.png` — visualisation
+
+(cells and transit rounds follow the same pattern with their own `kind`.) The analysis-side `find_frame_table_for_hal_config` mirrors this — it reads `<shutters>`, rewrites the `shutter-` prefix to `frame-table-`, and finds the CSV (legacy `frame_table_{name}.csv` still accepted as a fallback).
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
