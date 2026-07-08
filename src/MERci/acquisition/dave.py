@@ -137,7 +137,7 @@ def create_round_info(
     ``hal_config``, ``data_dir``
     """
     mic      = microscope.lower()
-    data_dir = str(sample_dir / "data")
+    data     = Path(sample_dir) / "data"
     rows: List[dict] = []
 
     # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
@@ -146,18 +146,22 @@ def create_round_info(
         "imaging_type":  "cells",
         "series":        f"hal-{mic}-epi-cells_{{fov:03d}}",
         "hal_config":    cells_hal_config,
-        "data_dir":      str(sample_dir / "data" / "cells"),
+        "data_dir":      str(data / "cells"),
     })
 
     # Imaging Rounds 2 … N+1: bits #1 … #N.  The series number tracks the
-    # bit/hyb index (1…N); the imaging_round is bit_idx + 1.
+    # bit/hyb index (1…N); the imaging_round is bit_idx + 1.  Each bits round
+    # writes into its own subfolder ``data/hybs/H{NN}`` (NN = bit/hyb index), so
+    # the rounds are spread across folders instead of piling into one ``data/``.
+    # ``create_dave_config`` emits a matching ``<change_directory>`` before each
+    # round's imaging loop.
     for bit_idx in range(1, n_bits + 1):
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}-epi_{bit_idx:02d}_{{fov:03d}}",
             "hal_config":    bits_hal_config,
-            "data_dir":      data_dir,
+            "data_dir":      str(data / "hybs" / f"H{bit_idx:02d}"),
         })
 
     return pd.DataFrame(
@@ -235,11 +239,15 @@ def create_round_info_multitissue(
     data         = Path(sample_dir) / "data"
     pos_dir      = Path(sample_dir) / "positions"
 
-    def _seg_dir(tissue: int, kind: str, is_cells: bool) -> str:
+    def _seg_dir(tissue: int, kind: str, is_cells: bool, hyb_idx: Optional[int] = None) -> str:
         base = data / f"tissue_{tissue}" if mode == "multi" else data
         if kind == "transit":
             return str(base / "transit")
-        return str(base / ("cells" if is_cells else "hybs"))
+        if is_cells:
+            return str(base / "cells")
+        # bits: separate each hyb round into its own subfolder ``hybs/H{NN}``
+        # (NN = bit/hyb index) so rounds are spread across folders.
+        return str(base / "hybs" / f"H{hyb_idx:02d}")
 
     # Ordered segment templates for one round's traversal (round-independent):
     # (kind, tissue, label, positions_file).
@@ -299,7 +307,8 @@ def create_round_info_multitissue(
 
     rows: List[dict] = []
 
-    def _emit(rnd: int, is_cells: bool, movie_prefix: str, hal_boundary: str) -> None:
+    def _emit(rnd: int, is_cells: bool, movie_prefix: str, hal_boundary: str,
+              hyb_idx: Optional[int] = None) -> None:
         for seg in enriched:
             tissue, label, posfile = seg["tissue"], seg["label"], seg["posfile"]
             start, pad = seg["start"], seg["pad"]
@@ -311,7 +320,7 @@ def create_round_info_multitissue(
                     "imaging_type":   "cells" if is_cells else "bits",
                     "series":         f"{movie_prefix}_{{fov:0{pad}d}}",
                     "hal_config":     hal_boundary,
-                    "data_dir":       _seg_dir(tissue, "boundary", is_cells),
+                    "data_dir":       _seg_dir(tissue, "boundary", is_cells, hyb_idx),
                     "positions_file": posfile,
                     "tissue":         tissue,
                     "segment":        label,
@@ -337,7 +346,8 @@ def create_round_info_multitissue(
     # Rounds 2…N+1: bits #1…#N (movie series number tracks the bit/hyb index).
     for bit_idx in range(1, n_bits + 1):
         _emit(bit_idx + 1, is_cells=False,
-              movie_prefix=f"hal-{mic}-epi_{bit_idx:02d}", hal_boundary=bits_hal_config)
+              movie_prefix=f"hal-{mic}-epi_{bit_idx:02d}", hal_boundary=bits_hal_config,
+              hyb_idx=bit_idx)
 
     return pd.DataFrame(
         rows,
@@ -361,6 +371,7 @@ def create_dave_config(
     fluidics_protocols:   Optional[Sequence[str]] = None,
     kilroy_config:        Optional[Path] = None,
     positions_dir:        Optional[Path] = None,
+    create_data_dirs:     bool = True,
 ) -> None:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
@@ -391,6 +402,16 @@ def create_dave_config(
     number, so a leading cells round does not shift the Kilroy protocol names.
     The last imaging round has no trailing fluidics unless
     ``include_final_cleave=True``.
+
+    **Save location per loop.** When ``round_info`` has a ``data_dir`` column, a
+    ``<change_directory>`` element is emitted immediately before each imaging loop,
+    setting HAL's save directory to that loop's ``data_dir`` (per-segment in the
+    multi-boundary layout, per-round otherwise). This spreads rounds across folders
+    (e.g. ``data/hybs/H01``, ``H02``, …). HAL **requires the directory to exist**
+    (it errors otherwise), and neither Dave nor HAL creates it, so with
+    ``create_data_dirs=True`` (default) this function creates every referenced
+    directory. (``change_directory`` maps to HAL's "Set Directory" message, which is
+    deprecated but still functional — it only emits a warning.)
 
     Parameters
     ----------
@@ -430,9 +451,15 @@ def create_dave_config(
                             raised if any required step has no matching protocol.
                             When ``None`` (legacy), hard-coded protocol names are
                             used and no Kilroy cross-check is performed.
+    create_data_dirs      : if True (default), create every directory named in the
+                            ``data_dir`` column (the targets of the emitted
+                            ``<change_directory>`` elements) so HAL's existence
+                            check passes.  Set False when generating the recipe on a
+                            machine other than the acquisition computer.
     """
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
+    has_data_dir = "data_dir" in round_info.columns
 
     # Per-segment layout: active when round_info carries a positions_file column
     # AND a positions_dir is given (the multi-boundary layout). Otherwise every
@@ -464,6 +491,33 @@ def create_dave_config(
 
     imaging_loop_vars:  list[tuple[str, str]]       = []
     fluidics_loop_vars: list[tuple[str, list[str]]] = []
+    created_dirs:       set[str]                    = set()
+
+    def _add_change_directory(dir_value) -> None:
+        """
+        Emit a ``<change_directory>`` (sets HAL's save dir for the FOLLOWING loop)
+        from *dir_value*, and — when ``create_data_dirs`` — create that folder.
+
+        HAL rejects a directory that does not exist, and nothing in Dave/HAL makes
+        it, so the directory is created here. No-op when the round_info has no
+        ``data_dir`` column or the value is blank/NaN.
+        """
+        if not has_data_dir or not pd.notna(dir_value):
+            return
+        dpath = str(dir_value).strip()
+        if not dpath:
+            return
+        ET.SubElement(seq, "change_directory").text = dpath
+        if create_data_dirs and dpath not in created_dirs:
+            created_dirs.add(dpath)
+            try:
+                Path(dpath).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                # Non-fatal: recipe still written. Warn so the user creates the
+                # folder on the acquisition machine (HAL requires it to exist).
+                print(f"[create_dave_config] WARNING: could not create data dir "
+                      f"{dpath!r}: {exc}. Create it on the acquisition computer "
+                      f"before running Dave.")
 
     def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str) -> None:
         """Append one <movie> (resolving its HAL frame count) to *parent_loop*."""
@@ -565,16 +619,20 @@ def create_dave_config(
 
         if segment_mode:
             # One loop per segment (a Dave loop iterates a single positions file).
+            # Each segment sets its own save directory just before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
                 lname = f"Imaging Round {round_id:02d} - {seg}"
+                _add_change_directory(row.get("data_dir"))
                 loop  = ET.SubElement(seq, "loop")
                 loop.set("name", lname)
                 _add_movie(loop, row, lname)
                 imaging_loop_vars.append((lname, str(positions_dir / str(row["positions_file"]))))
         else:
-            # Single loop for the round; all movies share positions_file.
+            # Single loop for the round; all movies share positions_file and one
+            # save directory (from the round's first row's data_dir).
             img_name = f"Imaging Round {round_id:02d}"
+            _add_change_directory(rows.iloc[0].get("data_dir") if has_data_dir else None)
             img_loop = ET.SubElement(seq, "loop")
             img_loop.set("name", img_name)
             for _, row in rows.iterrows():
