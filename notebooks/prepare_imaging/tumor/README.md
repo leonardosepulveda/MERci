@@ -16,8 +16,10 @@ change only the experiment parameters here.
   `data/{cells,hybs}` (+ `data/transit` only if there are multiple boundaries)
   and `data/mosaic10x`.
 - If `positions/` is empty, notebook 02 falls back to the bundled example set
-  selected by `EXAMPLE_LAYOUT` (default `"single"` here) under
-  `MERci/data/positions/examples/`, so you can test the pipeline immediately.
+  selected by `EXAMPLE_LAYOUT` (default `"legacy"` here; `"single"` also fits a
+  single section) under `MERci/data/positions/examples/`, and copies that
+  example's boundary + hole inputs into `positions/` so notebooks 03/04 find
+  them. Lets you test the pipeline immediately.
 
 ## Parameters to set for a tumor run
 

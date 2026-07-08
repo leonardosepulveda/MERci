@@ -21,7 +21,9 @@ change only the experiment parameters here.
   movie) using the transit HAL config from notebook 01.
 - If `positions/` is empty, notebook 02 falls back to the bundled example set
   selected by `EXAMPLE_LAYOUT` (default `"multi"` here) under
-  `MERci/data/positions/examples/`, so you can test the pipeline immediately.
+  `MERci/data/positions/examples/`, and copies that example's boundary + hole
+  inputs into `positions/` so notebooks 03/04 find them. Lets you test the
+  pipeline immediately.
 
 ## Parameters to set for a lineage-tracing run
 

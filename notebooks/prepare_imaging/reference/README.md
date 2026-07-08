@@ -30,5 +30,7 @@ because it lives three levels under the repo root
 
 If `SAMPLE_DIR/positions/` has no boundary files, notebook 02 falls back to a
 bundled example dataset under `MERci/data/positions/examples/`, selected by the
-`EXAMPLE_LAYOUT` variable (`"legacy"`, `"single"`, or `"multi"`). This lets you
-run the whole pipeline end-to-end before drawing real tissue boundaries.
+`EXAMPLE_LAYOUT` variable (`"legacy"`, `"single"`, or `"multi"`), and copies that
+example's boundary + hole inputs into `positions/` so notebooks 03/04 find them.
+This lets you run the whole pipeline end-to-end before drawing real tissue
+boundaries.
