@@ -29,10 +29,16 @@ SAMPLE_DIR = MERCI_DIR.parent                   # experiment root
 sys.path.insert(0, str(MERCI_DIR / "src"))      # MERci/src
 ```
 
-The `prepare_imaging/` notebooks now live **three** levels under the repo root
+The `prepare_imaging/` notebooks live **three** levels under the repo root
 (`MERci/notebooks/prepare_imaging/<variant>/`, where `<variant>` is
-`reference`, `tumor`, or `lineage_tracing`), so they use
+`reference` or `tumor`), so they use
 `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`.
+
+**Exception — `lineage_tracing`** is split into two acquisition types,
+`lineage_tracing/merfish/` and `lineage_tracing/lineage/` (each a full copy of the
+four notebooks, tuned separately for the MERFISH readout vs. the lineage-barcode
+readout). Those notebooks live **four** levels deep, so they use
+`MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`.
 
 ## Experiment folder layout
 
@@ -111,13 +117,17 @@ notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
     reference/       # canonical, fully-featured templates (keep up to date)
     tumor/           # copy tuned for a single tissue section per coverslip
-    lineage_tracing/ # copy tuned for multiple tissue sections per coverslip
-      01_create_hal_config_and_shutters.ipynb        # imaging sequence, per-channel POWER, HAL/shutter for
-                                                     #   bits+cells, and a transit HAL config (blank frames)
-      02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
-                                                     #   per-tissue positions files; creates data/ subfolders
-      03_create_dave_config.ipynb                    # round_info.csv + Dave recipe (per-segment when >1 boundary)
-      04_create_data_organization.ipynb              # MERlin data-organization setup (transit-safe series pick)
+    lineage_tracing/ # multiple tissue sections per coverslip; split by acquisition type:
+      merfish/       #   MERFISH (codebook) acquisition — full copy of the 4 notebooks
+      lineage/       #   lineage-barcode acquisition — full copy of the 4 notebooks
+                     #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
+      # each of merfish/ and lineage/ contains:
+      #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
+      #                                                #   bits+cells, and a transit HAL config (blank frames)
+      #   02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
+      #                                                #   per-tissue positions files; creates data/ subfolders
+      #   03_create_dave_config.ipynb                 # round_info.csv + Dave recipe (per-segment when >1 boundary)
+      #   04_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick)
   analysis/         # Online-analysis notebooks (run during the experiment)
     01_fov_scheduler.ipynb                         # FOV-level scheduler (thumbnails, stats, histograms)
     02_round_scheduler.ipynb                       # round-level scheduler (mosaics, optional data transfer)
@@ -153,7 +163,10 @@ data/
 ### Pre-experiment workflow
 
 Run the four `prepare_imaging/<variant>/` notebooks (variant = `reference` /
-`tumor` / `lineage_tracing`) in order before starting the microscope.
+`tumor`) in order before starting the microscope. For `lineage_tracing` the four
+notebooks live one level deeper under an acquisition-type subfolder
+(`prepare_imaging/lineage_tracing/{merfish,lineage}/`); run the set for the
+acquisition being prepared.
 
 **01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets each shutter `<event>`'s `<power>` (actual acquisition power, by frame colour) and the HAL `<default_power>` (channel-ordered via `power_dict_to_channel_list`). Auto-generates a compact colour name via `get_color_sequence_name` (underscore-joined tokens, e.g. `blkf5_488f2_560f25_650f25_750f25`). Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs.
 
@@ -252,7 +265,7 @@ Camera frame size also follows from the microscope: `MFX` and `ST2` have 2304×2
 
 ## Running notebooks
 
-Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`. Do not hardcode absolute paths in notebooks.
+Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks (`reference`, `tumor`) are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`; the `lineage_tracing/{merfish,lineage}/` notebooks are **four** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`. Do not hardcode absolute paths in notebooks.
 
 ## Scope constraint
 

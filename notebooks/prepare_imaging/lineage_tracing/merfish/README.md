@@ -1,11 +1,18 @@
-# prepare_imaging / lineage_tracing
+# prepare_imaging / lineage_tracing / merfish
 
-Pre-experiment notebooks tuned for a **lineage-tracing** experiment: **multiple
-tissue sections** per coverslip, each possibly split across several boundaries,
-with transit FOVs between them.
+Pre-experiment notebooks for the **MERFISH** acquisition of a lineage-tracing
+experiment (the gene-expression / codebook readout). One of the two acquisition
+types under `lineage_tracing/`; the other is `../lineage/`.
 
-Copied from `../reference/`. Keep the notebook logic in sync with `reference/`;
-change only the experiment parameters here.
+Same **multi-tissue** layout as `lineage_tracing` (multiple tissue sections per
+coverslip, each possibly split across several boundaries, with transit FOVs between
+them). Duplicated from the shared `lineage_tracing` notebook set — tune the
+parameters here for the MERFISH acquisition. Keep the notebook *logic* in sync with
+`../../reference/`; change only the experiment parameters here.
+
+These notebooks live **four** levels under the repo root
+(`MERci/notebooks/prepare_imaging/lineage_tracing/merfish/`), so they resolve
+`MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`.
 
 ## Expected layout
 
@@ -25,7 +32,7 @@ change only the experiment parameters here.
   inputs into `positions/` so notebooks 03/04 find them. Lets you test the
   pipeline immediately.
 
-## Parameters to set for a lineage-tracing run
+## Parameters to set for a lineage-tracing MERFISH run
 
 Set these in the notebooks to match the assay (values left at the `reference`
 defaults until confirmed):
