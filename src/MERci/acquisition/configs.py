@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
@@ -73,6 +73,40 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
             f"Supported values: {list(_COLOUR_TO_CHANNEL)}"
         )
     return _COLOUR_TO_CHANNEL[microscope]
+
+
+# ── Camera frame size ────────────────────────────────────────────────────────
+# Camera sensor size (square, pixels) per microscope. MFX and ST2 have 2304-px
+# cameras; the MF-series (MF2-MF5) have 2048-px cameras. Choosing the microscope
+# therefore fixes the frame size, which drives the storage estimate
+# (bytes = width * height * bytes_per_pixel * frames).
+_CAMERA_PIXELS: Dict[str, int] = {
+    "MF2": 2048, "MF3": 2048, "MF4": 2048, "MF5": 2048,
+    "MFX": 2304, "ST2": 2304,
+}
+_DEFAULT_CAMERA_PIXELS = 2048
+
+
+def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
+    """
+    Return the ``(width, height)`` camera frame size in pixels for *microscope*.
+
+    MFX and ST2 have 2304×2304 sensors; the MF-series (MF2–MF5) have 2048×2048.
+    An unknown or ``None`` microscope falls back to 2048×2048 (no error, so
+    estimates still run) — extend ``_CAMERA_PIXELS`` for new scopes.
+
+    Parameters
+    ----------
+    microscope : microscope id, case-insensitive (e.g. ``"MF3"``, ``"mfx"``); may
+                 be ``None``
+
+    Returns
+    -------
+    (width, height) : frame size in pixels (square sensor)
+    """
+    key = str(microscope).strip().upper() if microscope is not None else ""
+    n   = _CAMERA_PIXELS.get(key, _DEFAULT_CAMERA_PIXELS)
+    return (n, n)
 
 
 def _normalise_colour_key(color) -> Optional[int]:

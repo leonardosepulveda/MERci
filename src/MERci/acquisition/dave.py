@@ -49,6 +49,7 @@ from xml.dom import minidom
 
 import pandas as pd
 
+from .configs import get_camera_frame_size
 from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
@@ -69,6 +70,23 @@ def series_to_movie_name(series: str) -> str:
     ``hal-mf3-epi-cells_{fov:03d}`` → ``hal-mf3-epi-cells``
     """
     return re.sub(r"_\{[^}]+\}$", "", series)
+
+
+def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
+    """
+    Best-effort microscope id from the ``series`` names in *round_info*.
+
+    MERci series follow ``hal-{mic}-epi…`` (e.g. ``hal-mf3-epi-cells_{fov:03d}``),
+    so the token after ``hal-`` is the microscope. Returns it upper-cased (e.g.
+    ``"MF3"``), or ``None`` if no series matches the pattern.
+    """
+    if "series" not in round_info.columns:
+        return None
+    for s in round_info["series"]:
+        m = re.match(r"hal-([A-Za-z0-9]+)-", str(s))
+        if m:
+            return m.group(1).upper()
+    return None
 
 
 def get_hal_frame_count(hal_config_path: Path) -> int:
@@ -378,7 +396,8 @@ def create_dave_config(
     positions_dir:        Optional[Path] = None,
     create_data_dirs:     bool = True,
     print_estimate:       bool = True,
-    estimate_frame_shape: Sequence[int] = (2048, 2048),
+    microscope:           Optional[str] = None,
+    estimate_frame_shape: Optional[Sequence[int]] = None,
     estimate_bytes_per_pixel: int = 2,
 ) -> Optional["ExperimentEstimate"]:
     """
@@ -468,8 +487,14 @@ def create_dave_config(
                             storage for the recipe (see
                             :func:`estimate_dave_experiment`).  Requires
                             ``kilroy_config`` for the fluidics portion.
-    estimate_frame_shape  : ``(width, height)`` in pixels used for the storage
-                            estimate (camera geometry is not in the HAL config)
+    microscope            : microscope id (e.g. ``"MF3"``, ``"MFX"``, ``"ST2"``)
+                            used to pick the camera frame size for the storage
+                            estimate (MFX/ST2 → 2304², MF-series → 2048²; see
+                            ``configs.get_camera_frame_size``).  When ``None`` it is
+                            inferred from the ``series`` names in ``round_info``.
+    estimate_frame_shape  : explicit ``(width, height)`` in pixels for the storage
+                            estimate; overrides the microscope-derived size.  When
+                            ``None`` (default) the size comes from ``microscope``.
     estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
 
     Returns
@@ -677,12 +702,18 @@ def create_dave_config(
     _write_dave_xml(root, Path(output_path))
 
     if print_estimate:
+        # Frame size: explicit override wins; otherwise from the microscope (given
+        # or inferred from the round_info series names).
+        if estimate_frame_shape is not None:
+            frame_w, frame_h = int(estimate_frame_shape[0]), int(estimate_frame_shape[1])
+        else:
+            frame_w, frame_h = get_camera_frame_size(microscope or _infer_microscope(round_info))
         est = estimate_dave_experiment(
             Path(output_path),
             kilroy_config   = kilroy_config,
             settings_dir    = settings_dir,
-            frame_width     = int(estimate_frame_shape[0]),
-            frame_height    = int(estimate_frame_shape[1]),
+            frame_width     = frame_w,
+            frame_height    = frame_h,
             bytes_per_pixel = estimate_bytes_per_pixel,
         )
         print(format_experiment_estimate(est, per_round=True))

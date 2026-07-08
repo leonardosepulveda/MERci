@@ -248,6 +248,8 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 `MF2`, `MF3`, `MF4`, and `MF5` share the same 5-channel mapping: `{405→4, 488→3, 560→2, 650→1, 750→0}`. `MFX` and `ST2` have only 4 channels with a distinct ordering: `{650→0, 560→1, 488→2, 405→3}` (no 750). `NaN` = blank frame (no laser). Extend `_COLOUR_TO_CHANNEL` in `acquisition/configs.py` for other microscopes.
 
+Camera frame size also follows from the microscope: `MFX` and `ST2` have 2304×2304 sensors; the MF-series (`MF2`–`MF5`) have 2048×2048. `get_camera_frame_size(microscope)` (in `acquisition/configs.py`, mapping `_CAMERA_PIXELS`) returns this; it drives the storage figure in the Dave experiment estimate (`estimate_dave_experiment` / the summary printed by `create_dave_config`).
+
 ## Running notebooks
 
 Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`. Do not hardcode absolute paths in notebooks.
