@@ -25,3 +25,10 @@ Boundary-file layouts recognised by notebook 02 (in `positions/`):
 Each notebook resolves `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`
 because it lives three levels under the repo root
 (`MERci/notebooks/prepare_imaging/<variant>/`).
+
+## Testing without real boundaries
+
+If `SAMPLE_DIR/positions/` has no boundary files, notebook 02 falls back to a
+bundled example dataset under `MERci/data/positions/examples/`, selected by the
+`EXAMPLE_LAYOUT` variable (`"legacy"`, `"single"`, or `"multi"`). This lets you
+run the whole pipeline end-to-end before drawing real tissue boundaries.

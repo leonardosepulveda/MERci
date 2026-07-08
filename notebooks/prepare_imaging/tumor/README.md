@@ -15,6 +15,9 @@ change only the experiment parameters here.
 - Notebook 02 therefore runs in **single**/**legacy** mode and creates top-level
   `data/{cells,hybs}` (+ `data/transit` only if there are multiple boundaries)
   and `data/mosaic10x`.
+- If `positions/` is empty, notebook 02 falls back to the bundled example set
+  selected by `EXAMPLE_LAYOUT` (default `"single"` here) under
+  `MERci/data/positions/examples/`, so you can test the pipeline immediately.
 
 ## Parameters to set for a tumor run
 

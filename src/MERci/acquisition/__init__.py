@@ -20,6 +20,8 @@ from .positions import (
     get_path_stats,
     BoundarySpec,
     discover_boundary_files,
+    has_boundary_files,
+    resolve_boundary_dir,
     load_boundary_polygon,
     create_transit_path,
     build_boundary_path,

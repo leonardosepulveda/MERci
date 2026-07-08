@@ -71,7 +71,8 @@ src/MERci/
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
                     # load_hole_polygons, get_path_stats
                     # + multi-tissue: discover_boundary_files (auto multi/single/legacy), load_boundary_polygon,
-                    #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec
+                    #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec,
+                    #   has_boundary_files / resolve_boundary_dir (fall back to data/positions/examples when empty)
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
@@ -137,6 +138,10 @@ data/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
+    examples/       # ready-made boundary sets for each layout, used as the notebook-02
+                    #   fallback when SAMPLE_DIR/positions is empty:
+                    #   legacy/ (one boundary), single/ (1 tissue, 2 boundaries),
+                    #   multi/ (2 tissues x 2 boundaries)
   readouts.csv      # default codebook readout table (bit number -> readout name), read by prepare_imaging/04
 ```
 
@@ -155,7 +160,7 @@ Run the four `prepare_imaging/<variant>/` notebooks (variant = `reference` /
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**02** (`prepare_imaging/<variant>/02_create_positions_from_tissue_boundary.ipynb`): builds the FOV scanning positions for one or more tissue sections. It **auto-detects the layout** from the boundary filenames in `SAMPLE_DIR/positions/` (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
+**02** (`prepare_imaging/<variant>/02_create_positions_from_tissue_boundary.ipynb`): builds the FOV scanning positions for one or more tissue sections. If `SAMPLE_DIR/positions/` has no boundary files yet, it falls back to a bundled example dataset under `MERci/data/positions/examples/{legacy,single,multi}` (chosen by the notebook's `EXAMPLE_LAYOUT`; per-variant default: tumor→`single`, lineage_tracing/reference→`multi`) via `resolve_boundary_dir`, so the notebook can be run and tested before any real boundaries are drawn. It **auto-detects the layout** from the boundary filenames in the resolved directory (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 

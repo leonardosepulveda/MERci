@@ -19,6 +19,9 @@ change only the experiment parameters here.
   per-segment positions files plus per-tissue FOV-only files.
 - Notebook 03 emits a per-segment Dave recipe (a `<loop>` per boundary/transit
   movie) using the transit HAL config from notebook 01.
+- If `positions/` is empty, notebook 02 falls back to the bundled example set
+  selected by `EXAMPLE_LAYOUT` (default `"multi"` here) under
+  `MERci/data/positions/examples/`, so you can test the pipeline immediately.
 
 ## Parameters to set for a lineage-tracing run
 

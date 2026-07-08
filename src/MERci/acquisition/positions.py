@@ -421,6 +421,78 @@ def discover_boundary_files(positions_dir: Path) -> Tuple[List[BoundarySpec], st
     )
 
 
+def has_boundary_files(positions_dir: Path) -> bool:
+    """Return ``True`` if *positions_dir* holds boundary files of any layout.
+
+    Checks for the multi (``tissue_<t>_boundary_positions_<b>.txt``), single
+    (``boundary_positions_<b>.txt``) or legacy (``boundary_positions.txt``)
+    naming — i.e. whether :func:`discover_boundary_files` would succeed.
+    """
+    positions_dir = Path(positions_dir)
+    if not positions_dir.is_dir():
+        return False
+    multi_re  = re.compile(r"^tissue_\d+_boundary_positions_\d+\.txt$", re.IGNORECASE)
+    single_re = re.compile(r"^boundary_positions_\d+\.txt$", re.IGNORECASE)
+    for p in positions_dir.glob("*.txt"):
+        if multi_re.match(p.name) or single_re.match(p.name):
+            return True
+    return (positions_dir / "boundary_positions.txt").exists()
+
+
+def resolve_boundary_dir(
+    primary_dir:    Path,
+    example_root:   Optional[Path] = None,
+    example_layout: Optional[str]  = None,
+) -> Tuple[Path, bool]:
+    """
+    Pick the directory to read tissue boundaries from, with an example fallback.
+
+    Returns *primary_dir* when it already contains boundary files. Otherwise —
+    handy when the experiment's ``positions/`` folder is still empty — falls back
+    to a bundled example dataset ``example_root/example_layout`` (e.g. the
+    ``MERci/data/positions/examples/{legacy,single,multi}`` sets), so the notebook
+    can be run and tested before any real boundaries are drawn.
+
+    Parameters
+    ----------
+    primary_dir    : the experiment's ``positions/`` directory (preferred)
+    example_root   : directory holding the example layout subfolders; if ``None``
+                     no fallback is attempted
+    example_layout : which example subfolder to use (``"legacy"``, ``"single"``
+                     or ``"multi"``)
+
+    Returns
+    -------
+    (boundary_dir, used_example) : (Path, bool)
+        *used_example* is ``True`` when the example fallback was selected.
+
+    Raises
+    ------
+    FileNotFoundError
+        if *primary_dir* has no boundary files and no usable example fallback
+        is available.
+    """
+    primary_dir = Path(primary_dir)
+    if has_boundary_files(primary_dir):
+        return primary_dir, False
+
+    if example_root is not None and example_layout is not None:
+        example_dir = Path(example_root) / example_layout
+        if has_boundary_files(example_dir):
+            return example_dir, True
+
+    raise FileNotFoundError(
+        f"No boundary files in {primary_dir}"
+        + (
+            f" and no example dataset at {Path(example_root) / example_layout}"
+            if example_root is not None and example_layout is not None
+            else " (and no example fallback was configured)"
+        )
+        + ". Add boundary files, or point example_root/example_layout at a bundled "
+          "example set (e.g. MERci/data/positions/examples/{legacy,single,multi})."
+    )
+
+
 def load_boundary_polygon(path: Path) -> Polygon:
     """
     Load a tissue-boundary polygon from a comma-separated ``x,y`` file.
