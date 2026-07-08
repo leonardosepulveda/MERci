@@ -42,13 +42,18 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 from xml.dom import minidom
 
 import pandas as pd
 
-from .kilroy import KilroyProtocolResolver, load_kilroy_protocols
+from .kilroy import (
+    KilroyProtocolResolver,
+    load_kilroy_protocols,
+    load_protocol_durations,
+)
 
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
@@ -372,7 +377,10 @@ def create_dave_config(
     kilroy_config:        Optional[Path] = None,
     positions_dir:        Optional[Path] = None,
     create_data_dirs:     bool = True,
-) -> None:
+    print_estimate:       bool = True,
+    estimate_frame_shape: Sequence[int] = (2048, 2048),
+    estimate_bytes_per_pixel: int = 2,
+) -> Optional["ExperimentEstimate"]:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
 
@@ -456,6 +464,18 @@ def create_dave_config(
                             ``<change_directory>`` elements) so HAL's existence
                             check passes.  Set False when generating the recipe on a
                             machine other than the acquisition computer.
+    print_estimate        : if True (default), print an estimated run time and raw
+                            storage for the recipe (see
+                            :func:`estimate_dave_experiment`).  Requires
+                            ``kilroy_config`` for the fluidics portion.
+    estimate_frame_shape  : ``(width, height)`` in pixels used for the storage
+                            estimate (camera geometry is not in the HAL config)
+    estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
+
+    Returns
+    -------
+    ExperimentEstimate or None
+        The estimate when ``print_estimate`` is True, else None.
     """
     round_ids = sorted(round_info["imaging_round"].unique())
     n_rounds  = len(round_ids)
@@ -656,6 +676,19 @@ def create_dave_config(
 
     _write_dave_xml(root, Path(output_path))
 
+    if print_estimate:
+        est = estimate_dave_experiment(
+            Path(output_path),
+            kilroy_config   = kilroy_config,
+            settings_dir    = settings_dir,
+            frame_width     = int(estimate_frame_shape[0]),
+            frame_height    = int(estimate_frame_shape[1]),
+            bytes_per_pixel = estimate_bytes_per_pixel,
+        )
+        print(format_experiment_estimate(est, per_round=True))
+        return est
+    return None
+
 
 # ── Dave annotation ────────────────────────────────────────────────────────────
 
@@ -729,6 +762,270 @@ def annotate_dave_with_round_info(
     content = "\r\n".join(new_lines)
     with open(dave_path, "w", encoding="ISO-8859-1", newline="") as fh:
         fh.write(content)
+
+
+# ── Experiment time / storage estimate ──────────────────────────────────────────
+
+@dataclass
+class ExperimentEstimate:
+    """
+    Estimated run time and storage for a Dave recipe.
+
+    Attributes
+    ----------
+    total_time_s    : imaging_time_s + fluidics_time_s (seconds)
+    imaging_time_s  : total time acquiring movies (Σ frames × frame_time over every
+                      FOV-movie)
+    fluidics_time_s : total time in between-round fluidics (Σ Kilroy protocol
+                      durations)
+    total_bytes     : total raw image size (Σ frames × bytes_per_frame over every
+                      FOV-movie)
+    n_fov_movies    : number of per-FOV movies acquired across the whole experiment
+    per_round       : list of ``{"round", "label", "imaging_s", "fluidics_s",
+                      "bytes", "movies"}`` dicts, in recipe order
+    assumptions     : human-readable list of the numbers assumed (frame size, frame
+                      time source, …)
+    warnings        : anything that made the estimate approximate (missing positions
+                      file, unknown protocol, …)
+    """
+    total_time_s:    float
+    imaging_time_s:  float
+    fluidics_time_s: float
+    total_bytes:     int
+    n_fov_movies:    int
+    per_round:       List[dict] = field(default_factory=list)
+    assumptions:     List[str]  = field(default_factory=list)
+    warnings:        List[str]  = field(default_factory=list)
+
+
+def _read_hal_exposure(hal_config_path: Path) -> Optional[float]:
+    """Return the camera ``<exposure_time>`` (seconds) from a HAL config, or None."""
+    try:
+        with open(hal_config_path, "rb") as fh:
+            text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
+        root = ET.fromstring(text)
+        el = root.find(".//exposure_time")
+        if el is not None and el.text:
+            return float(el.text.strip())
+    except (OSError, ValueError, ET.ParseError):
+        pass
+    return None
+
+
+def estimate_dave_experiment(
+    dave_recipe:          Path,
+    kilroy_config:        Optional[Path] = None,
+    settings_dir:         Optional[Path] = None,
+    frame_width:          int   = 2048,
+    frame_height:         int   = 2048,
+    bytes_per_pixel:      int   = 2,
+    frame_time_s:         Optional[float] = None,
+    readout_overhead_s:   float = 0.0,
+    per_movie_overhead_s: float = 0.0,
+) -> ExperimentEstimate:
+    """
+    Estimate total run time and raw storage for a written Dave recipe.
+
+    Reproduces the estimate Dave itself shows (which it obtains from HAL/Kilroy
+    test-mode responses):
+
+    * **movie duration** = ``frames / fps`` — here ``frames × frame_time`` where
+      ``frame_time`` is the HAL config's ``exposure_time`` (+ ``readout_overhead_s``)
+      or the explicit ``frame_time_s`` (HAL: ``tcpControl.calculateMovieStats``);
+    * **movie size** = ``frames × frame_width × frame_height × bytes_per_pixel``
+      (HAL: ``bytes_per_frame × frames``);
+    * **fluidics duration** = Σ of the named protocol's step durations
+      (Kilroy: ``KilroyProtocols.requiredTime``).
+
+    Each imaging loop is multiplied by the FOV count of its positions file (read
+    from the recipe's ``<loop_variable>/<file_path>``).
+
+    Camera frame geometry is not stored in the MERci HAL config, so
+    ``frame_width``/``frame_height``/``bytes_per_pixel`` are parameters (default a
+    2048×2048 uint16 sCMOS frame = 8 MiB/frame); adjust them for other cameras.
+
+    Parameters
+    ----------
+    dave_recipe          : path to the recipe XML written by :func:`create_dave_config`
+    kilroy_config        : Kilroy config XML; source of fluidic protocol durations.
+                           When None, fluidics time is not estimated (reported 0).
+    settings_dir         : directory with the HAL config XMLs; used to read each
+                           movie's ``exposure_time`` when ``frame_time_s`` is None
+    frame_width          : camera frame width in pixels
+    frame_height         : camera frame height in pixels
+    bytes_per_pixel      : bytes per pixel (2 for uint16)
+    frame_time_s         : fixed per-frame time (s); overrides the HAL exposure read
+    readout_overhead_s   : added to each HAL ``exposure_time`` (camera readout etc.)
+    per_movie_overhead_s : fixed seconds added per FOV-movie (stage move, focus, …);
+                           Dave's own estimate omits these, so the default is 0
+
+    Returns
+    -------
+    ExperimentEstimate
+    """
+    recipe = Path(dave_recipe)
+    root   = ET.fromstring(recipe.read_text(encoding="ISO-8859-1"))
+    seq    = root.find("command_sequence")
+    if seq is None:
+        raise ValueError(f"No <command_sequence> in {recipe}")
+
+    # Map each loop_variable name → its expansion: a positions file (imaging) or a
+    # list of Kilroy protocol names (fluidics).
+    lv_kind:  Dict[str, str]        = {}
+    lv_value: Dict[str, object]     = {}
+    for lv in root.findall("loop_variable"):
+        name = lv.get("name", "")
+        fp   = lv.find("file_path")
+        if fp is not None:
+            lv_kind[name], lv_value[name] = "file", (fp.text or "").strip()
+        else:
+            prots = [vp.text.strip() for vp in lv.iter("valve_protocol")
+                     if vp.text and vp.text.strip()]
+            lv_kind[name], lv_value[name] = "fluidics", prots
+
+    proto_dur   = load_protocol_durations(kilroy_config) if kilroy_config else {}
+    frame_bytes = frame_width * frame_height * bytes_per_pixel
+    warnings_list: List[str] = []
+
+    exposure_cache: Dict[str, Optional[float]] = {}
+    def _frame_time(hal_stem: str) -> float:
+        if frame_time_s is not None:
+            return frame_time_s
+        if hal_stem not in exposure_cache:
+            exp = _read_hal_exposure(Path(settings_dir) / (hal_stem + ".xml")) \
+                  if settings_dir is not None else None
+            exposure_cache[hal_stem] = exp
+        exp = exposure_cache[hal_stem]
+        if exp is None:
+            exp = 0.25   # fallback matching create_hal_config's default exposure
+        return exp + readout_overhead_s
+
+    fov_cache: Dict[str, int] = {}
+    def _n_fovs(path_str: str) -> int:
+        if path_str not in fov_cache:
+            p = Path(path_str)
+            if p.exists():
+                fov_cache[path_str] = count_positions(p)
+            else:
+                warnings_list.append(f"positions file not found, FOV count taken as 0: {path_str}")
+                fov_cache[path_str] = 0
+        return fov_cache[path_str]
+
+    imaging_time = fluidics_time = 0.0
+    total_bytes  = 0
+    n_movies     = 0
+    per_round: Dict[int, dict] = {}
+
+    def _round_no(lname: str) -> int:
+        m = re.search(r"Round (\d+)", lname)
+        return int(m.group(1)) if m else 0
+
+    for loop in seq.findall("loop"):
+        lname  = loop.get("name", "")
+        rno    = _round_no(lname)
+        rec    = per_round.setdefault(
+            rno, {"round": rno, "label": f"Round {rno:02d}",
+                  "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0})
+        movies = loop.findall("movie")
+        if movies:                                   # imaging loop
+            path = lv_value.get(lname, "")
+            n_fovs = _n_fovs(path) if lv_kind.get(lname) == "file" else 0
+            loop_time = 0.0
+            loop_bytes = 0
+            for mv in movies:
+                length_el = mv.find("length")
+                frames    = int(length_el.text) if (length_el is not None and length_el.text) else 0
+                par_el    = mv.find("parameters")
+                hal_stem  = (par_el.text or "").strip() if par_el is not None else ""
+                loop_time  += frames * _frame_time(hal_stem) + per_movie_overhead_s
+                loop_bytes += frames * frame_bytes
+            imaging_time += n_fovs * loop_time
+            total_bytes  += n_fovs * loop_bytes
+            n_movies     += n_fovs * len(movies)
+            rec["imaging_s"] += n_fovs * loop_time
+            rec["bytes"]     += n_fovs * loop_bytes
+            rec["movies"]    += n_fovs * len(movies)
+        else:                                        # fluidics loop
+            for prot in lv_value.get(lname, []):
+                if prot in proto_dur:
+                    fluidics_time    += proto_dur[prot]
+                    rec["fluidics_s"] += proto_dur[prot]
+                elif kilroy_config is not None:
+                    warnings_list.append(f"protocol not in Kilroy config, 0 s assumed: {prot!r}")
+
+    if kilroy_config is None:
+        warnings_list.append("no Kilroy config given: fluidics time not estimated (reported as 0)")
+
+    assumptions = [
+        f"frame {frame_width}×{frame_height} × {bytes_per_pixel} B = "
+        f"{frame_bytes / 2**20:.1f} MiB/frame",
+        ("frame time = fixed %.3f s" % frame_time_s) if frame_time_s is not None
+        else "frame time = HAL exposure_time"
+             + (f" + {readout_overhead_s:.3f} s readout" if readout_overhead_s else "")
+             + " (fallback 0.25 s)",
+    ]
+    if per_movie_overhead_s:
+        assumptions.append(f"per-movie overhead = {per_movie_overhead_s:.2f} s")
+
+    return ExperimentEstimate(
+        total_time_s    = imaging_time + fluidics_time,
+        imaging_time_s  = imaging_time,
+        fluidics_time_s = fluidics_time,
+        total_bytes     = total_bytes,
+        n_fov_movies    = n_movies,
+        per_round       = [per_round[k] for k in sorted(per_round)],
+        assumptions     = assumptions,
+        warnings        = warnings_list,
+    )
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format seconds as ``Hh MMm SSs`` (dropping leading zero units)."""
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s   = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
+def _fmt_bytes(n: int) -> str:
+    """Format a byte count in binary units (KiB/MiB/GiB/TiB)."""
+    size = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
+def format_experiment_estimate(est: ExperimentEstimate, per_round: bool = False) -> str:
+    """Render an :class:`ExperimentEstimate` as a readable multi-line report."""
+    lines = [
+        "Estimated experiment cost",
+        f"  FOV-movies:    {est.n_fov_movies}",
+        f"  Imaging time:  {_fmt_duration(est.imaging_time_s)}",
+        f"  Fluidics time: {_fmt_duration(est.fluidics_time_s)}",
+        f"  Total time:    {_fmt_duration(est.total_time_s)}",
+        f"  Storage:       {_fmt_bytes(est.total_bytes)}",
+    ]
+    if per_round and est.per_round:
+        lines.append("  Per round:")
+        for r in est.per_round:
+            lines.append(
+                f"    {r['label']}: {r['movies']} movies, "
+                f"img {_fmt_duration(r['imaging_s'])}, "
+                f"flu {_fmt_duration(r['fluidics_s'])}, "
+                f"{_fmt_bytes(r['bytes'])}")
+    if est.assumptions:
+        lines.append("  Assumptions: " + "; ".join(est.assumptions))
+    if est.warnings:
+        lines.append("  Warnings:")
+        for w in dict.fromkeys(est.warnings):     # de-duplicate, keep order
+            lines.append(f"    - {w}")
+    return "\n".join(lines)
 
 
 # ── XML writer ─────────────────────────────────────────────────────────────────

@@ -70,6 +70,45 @@ def load_kilroy_protocols(path: Path) -> List[str]:
     return [n.strip() for n in names if n and n.strip()]
 
 
+def load_protocol_durations(path: Path) -> Dict[str, float]:
+    """
+    Return ``{protocol_name: duration_seconds}`` for every ``<protocol>`` in a
+    Kilroy config.
+
+    A protocol runs its ``<valve>``/``<pump>`` steps sequentially, waiting each
+    step's ``duration`` (seconds) before the next, so its total time is the sum of
+    those durations — exactly how Kilroy's ``KilroyProtocols.requiredTime`` computes
+    it (``fluidics/kilroyProtocols.py``). Steps without a numeric ``duration`` count
+    as 0. Kilroy files use ISO-8859-1 encoding.
+
+    Parameters
+    ----------
+    path : path to the Kilroy config XML
+
+    Returns
+    -------
+    dict : protocol name → total duration in seconds
+    """
+    text = Path(path).read_text(encoding="ISO-8859-1")
+    root = ET.fromstring(text)
+    durations: Dict[str, float] = {}
+    for proto in root.iter("protocol"):
+        name = (proto.get("name") or "").strip()
+        if not name:
+            continue
+        total = 0.0
+        for step in proto:                       # <valve>/<pump> children
+            raw = step.get("duration")
+            if raw is None:
+                continue
+            try:
+                total += float(raw)
+            except ValueError:
+                pass                              # non-numeric duration → skip
+        durations[name] = total
+    return durations
+
+
 def find_kilroy_config(
     microscope:          str,
     kilroy_dir:          Path,
