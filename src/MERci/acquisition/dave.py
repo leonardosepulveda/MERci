@@ -430,15 +430,20 @@ def create_dave_config(
     The last imaging round has no trailing fluidics unless
     ``include_final_cleave=True``.
 
-    **Save location per loop.** When ``round_info`` has a ``data_dir`` column, a
-    ``<change_directory>`` element is emitted immediately before each imaging loop,
-    setting HAL's save directory to that loop's ``data_dir`` (per-segment in the
-    multi-boundary layout, per-round otherwise). This spreads rounds across folders
-    (e.g. ``data/hybs/H01``, ``H02``, …). HAL **requires the directory to exist**
-    (it errors otherwise), and neither Dave nor HAL creates it, so with
-    ``create_data_dirs=True`` (default) this function creates every referenced
-    directory. (``change_directory`` maps to HAL's "Set Directory" message, which is
-    deprecated but still functional — it only emits a warning.)
+    **Save location per round.** When ``round_info`` has a ``data_dir`` column, a
+    ``<change_directory>`` element sets HAL's save directory (from ``data_dir``) to
+    the upcoming imaging round's folder. It is emitted **before that round's fluidics
+    loop** — so a ``<change_directory>`` precedes every fluidics block — and before
+    the first imaging round (which has no preceding fluidics). Emission is
+    de-duplicated: the directory is not re-set before the round's imaging loop when
+    the fluidics already set it. In the multi-boundary layout a round spans several
+    directories, so the extra per-segment directories are still set before their own
+    segment loops. This spreads rounds across folders (e.g. ``data/hybs/H01``,
+    ``H02``, …). HAL **requires the directory to exist** (it errors otherwise), and
+    neither Dave nor HAL creates it, so with ``create_data_dirs=True`` (default) this
+    function creates every referenced directory. (``change_directory`` maps to HAL's
+    "Set Directory" message, which is deprecated but still functional — it only emits
+    a warning.)
 
     Parameters
     ----------
@@ -537,6 +542,7 @@ def create_dave_config(
     imaging_loop_vars:  list[tuple[str, str]]       = []
     fluidics_loop_vars: list[tuple[str, list[str]]] = []
     created_dirs:       set[str]                    = set()
+    current_dir:        Optional[str]               = None   # last <change_directory> emitted
 
     def _add_change_directory(dir_value) -> None:
         """
@@ -544,15 +550,19 @@ def create_dave_config(
         from *dir_value*, and — when ``create_data_dirs`` — create that folder.
 
         HAL rejects a directory that does not exist, and nothing in Dave/HAL makes
-        it, so the directory is created here. No-op when the round_info has no
-        ``data_dir`` column or the value is blank/NaN.
+        it, so the directory is created here. De-duplicated: emitting the directory
+        that is already active is a no-op, so setting the round's directory before
+        its fluidics does not repeat it before the round's imaging loop. No-op when
+        the round_info has no ``data_dir`` column or the value is blank/NaN.
         """
+        nonlocal current_dir
         if not has_data_dir or not pd.notna(dir_value):
             return
         dpath = str(dir_value).strip()
-        if not dpath:
+        if not dpath or dpath == current_dir:
             return
         ET.SubElement(seq, "change_directory").text = dpath
+        current_dir = dpath
         if create_data_dirs and dpath not in created_dirs:
             created_dirs.add(dpath)
             try:
@@ -598,9 +608,20 @@ def create_dave_config(
 
     def _add_fluidics(round_id: int, is_last: bool) -> None:
         """Append the between-round fluidics loop that FOLLOWS *round_id*."""
+        precede_dir = None   # save dir for the imaging round this fluidics precedes
         if not is_last:
             next_round = round_id + 1
             fl_name    = f"Fluidics Round {next_round:02d}"
+
+            # The directory for the upcoming imaging round (from round_info.data_dir)
+            # is set BEFORE its fluidics block, so a <change_directory> precedes every
+            # fluidics loop. In the multi-segment layout the round spans several
+            # directories; the first segment's is set here and the remaining segments
+            # set theirs before their own loops.
+            if has_data_dir:
+                next_rows = round_info[round_info["imaging_round"] == next_round]
+                if len(next_rows):
+                    precede_dir = next_rows.iloc[0].get("data_dir")
 
             # Hyb number tracks the bit/hyb index of the NEXT imaging round, so a
             # leading cells round does not shift the Kilroy protocol numbers.
@@ -652,6 +673,7 @@ def create_dave_config(
         else:
             return
 
+        _add_change_directory(precede_dir)   # <change_directory> before this fluidics
         fl_loop = ET.SubElement(seq, "loop")
         fl_loop.set("name", fl_name)
         ve = ET.SubElement(fl_loop, "variable_entry")
