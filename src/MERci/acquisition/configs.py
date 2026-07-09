@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
@@ -107,6 +107,62 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
     key = str(microscope).strip().upper() if microscope is not None else ""
     n   = _CAMERA_PIXELS.get(key, _DEFAULT_CAMERA_PIXELS)
     return (n, n)
+
+
+# Camera pixel size projected onto the sample (µm/pixel) per microscope. MFX and
+# ST2 (2304-px sensors) image at 0.0878 µm/px; the MF-series (MF2-MF5, 2048-px)
+# at 0.108 µm/px. Together with the sensor size this fixes the FOV footprint
+# (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning grid
+# in prepare_imaging/02.
+_CAMERA_PIXEL_SIZE_UM: Dict[str, float] = {
+    "MF2": 0.108, "MF3": 0.108, "MF4": 0.108, "MF5": 0.108,
+    "MFX": 0.0878, "ST2": 0.0878,
+}
+_DEFAULT_CAMERA_PIXEL_SIZE_UM = 0.108
+
+
+class FOVGeometry(NamedTuple):
+    """FOV geometry for a microscope: sample-plane pixel size and sensor size."""
+    pixel_size_um: float   # µm per camera pixel projected onto the sample
+    image_size_px: int     # camera sensor size in pixels (square)
+
+
+def get_camera_pixel_size_um(microscope: Optional[str]) -> float:
+    """
+    Return the sample-plane pixel size (µm/pixel) for *microscope*.
+
+    MFX/ST2 → 0.0878 µm/px, MF-series (MF2–MF5) → 0.108 µm/px. Unknown/``None``
+    falls back to 0.108 — extend ``_CAMERA_PIXEL_SIZE_UM`` for new scopes.
+    """
+    key = str(microscope).strip().upper() if microscope is not None else ""
+    return _CAMERA_PIXEL_SIZE_UM.get(key, _DEFAULT_CAMERA_PIXEL_SIZE_UM)
+
+
+def get_fov_geometry(microscope: Optional[str]) -> FOVGeometry:
+    """
+    Return the FOV geometry ``(pixel_size_um, image_size_px)`` for *microscope*.
+
+    Bundles :func:`get_camera_pixel_size_um` and the sensor size from
+    :func:`get_camera_frame_size` so ``prepare_imaging/02`` can derive the scanning
+    grid from the microscope alone instead of hard-coding both numbers:
+
+    * MFX, ST2 → ``(0.0878 µm/px, 2304 px)``
+    * MF2–MF5  → ``(0.108 µm/px, 2048 px)``
+
+    Unknown or ``None`` falls back to the MF-series values.
+
+    Parameters
+    ----------
+    microscope : microscope id, case-insensitive (e.g. ``"MF3"``, ``"mfx"``)
+
+    Returns
+    -------
+    FOVGeometry : named tuple ``(pixel_size_um, image_size_px)`` — unpacks as a
+                  plain tuple, e.g. ``px_um, size_px = get_fov_geometry("MF3")``
+    """
+    width, _ = get_camera_frame_size(microscope)   # square sensor → width == height
+    return FOVGeometry(pixel_size_um=get_camera_pixel_size_um(microscope),
+                       image_size_px=width)
 
 
 def _normalise_colour_key(color) -> Optional[int]:

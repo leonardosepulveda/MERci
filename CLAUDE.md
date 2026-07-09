@@ -261,7 +261,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 
 `MF2`, `MF3`, `MF4`, and `MF5` share the same 5-channel mapping: `{405→4, 488→3, 560→2, 650→1, 750→0}`. `MFX` and `ST2` have only 4 channels with a distinct ordering: `{650→0, 560→1, 488→2, 405→3}` (no 750). `NaN` = blank frame (no laser). Extend `_COLOUR_TO_CHANNEL` in `acquisition/configs.py` for other microscopes.
 
-Camera frame size also follows from the microscope: `MFX` and `ST2` have 2304×2304 sensors; the MF-series (`MF2`–`MF5`) have 2048×2048. `get_camera_frame_size(microscope)` (in `acquisition/configs.py`, mapping `_CAMERA_PIXELS`) returns this; it drives the storage figure in the Dave experiment estimate (`estimate_dave_experiment` / the summary printed by `create_dave_config`).
+Camera geometry also follows from the microscope: `MFX` and `ST2` have 2304×2304 sensors at 0.0878 µm/pixel; the MF-series (`MF2`–`MF5`) have 2048×2048 at 0.108 µm/pixel. `acquisition/configs.py` exposes `get_camera_frame_size(microscope)` (sensor pixels; mapping `_CAMERA_PIXELS`), `get_camera_pixel_size_um(microscope)` (mapping `_CAMERA_PIXEL_SIZE_UM`), and `get_fov_geometry(microscope) -> (pixel_size_um, image_size_px)` which bundles both. Frame size drives the storage figure in the Dave experiment estimate (`estimate_dave_experiment` / the summary printed by `create_dave_config`); `get_fov_geometry` gives `prepare_imaging/02` its scanning-grid geometry from the microscope alone (set `MICROSCOPE` there instead of hard-coding `pixel_size_um`/`image_size_px`).
 
 ## Running notebooks
 
