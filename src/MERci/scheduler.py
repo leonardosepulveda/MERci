@@ -291,8 +291,10 @@ class RoundScheduler:
         Run the round analysis loop (same tick-sleep structure as FOVScheduler).
 
         Mosaics are built continuously as soon as a round's FOVs are all done.
-        Optional NAS transfers (``transfer_dest``) still run only during fluidics,
-        when the microscope is idle.
+        Optional NAS transfers (``transfer_dest``) run only during fluidics
+        (when the microscope is idle) in ``same_drive``/``mirror_drive`` modes,
+        or continuously — skipping only the round on the currently-active drive
+        — in ``round_robin_drives`` mode (see ``_process_pending_transfers``).
         """
         iteration = 0
         while True:
@@ -343,11 +345,36 @@ class RoundScheduler:
     def _process_pending_transfers(self, phase: ExperimentPhase) -> None:
         """
         Start background transfers for any rounds that are done but not yet
-        transferred, provided there is sufficient time left in the fluidics window.
+        transferred.
 
-        Transfers read from the acquisition drive, so they only run while the
-        microscope is idle (fluidics) — never during acquisition.
+        ``round_robin_drives`` mode: each round's data lives on its own
+        physical drive (see ``acquisition.dave.create_round_info(data_drives=…)``),
+        so a completed round on an idle drive can transfer to ``transfer_dest``
+        (e.g. a NAS) continuously, even while HAL is still imaging a different
+        round on a different drive. Gated the same way FOVScheduler defers
+        analysis of the hot round: skip only the round whose drive matches
+        ``meta.actively_writing_round()``'s drive.
+
+        Other modes (``same_drive``/``mirror_drive``): unchanged — transfers
+        read from the single acquisition drive, so they only run once the
+        microscope goes idle (fluidics), and only while there's still enough
+        time left in the fluidics window (``transfer_min_time``).
         """
+        if self.config.analysis_mode == "round_robin_drives":
+            active_round = self.meta.actively_writing_round()
+            active_drive = (
+                self.meta.drive_of_round(active_round) if active_round is not None else None
+            )
+            for rid in self.meta.valid_round_ids():
+                if (
+                    self.tracker.is_round_done(rid)
+                    and not self.tracker.is_round_transferred(rid)
+                    and rid not in self._transfers_in_progress
+                    and (active_drive is None or self.meta.drive_of_round(rid) != active_drive)
+                ):
+                    self._start_transfer_for_round(rid)
+            return
+
         if phase.is_imaging or phase.time_since_imaging is None:
             return
         time_remaining = self.config.t_max - (phase.time_since_imaging or 0)
@@ -366,7 +393,7 @@ class RoundScheduler:
             ):
                 self._start_transfer_for_round(rid, time_remaining)
 
-    def _start_transfer_for_round(self, round_id: int, time_remaining: float) -> None:
+    def _start_transfer_for_round(self, round_id: int, time_remaining: Optional[float] = None) -> None:
         """Launch a background thread to copy round *round_id* to transfer_dest."""
         src_dirs = self._source_dirs_for_round(round_id)
         if not src_dirs:
@@ -374,10 +401,16 @@ class RoundScheduler:
             return
 
         self._transfers_in_progress.add(round_id)
-        log.info(
-            "Round %d: starting transfer of %d dir(s) to %s  (%.0f s remaining).",
-            round_id, len(src_dirs), self.config.transfer_dest, time_remaining,
-        )
+        if time_remaining is not None:
+            log.info(
+                "Round %d: starting transfer of %d dir(s) to %s  (%.0f s remaining).",
+                round_id, len(src_dirs), self.config.transfer_dest, time_remaining,
+            )
+        else:
+            log.info(
+                "Round %d: starting transfer of %d dir(s) to %s.",
+                round_id, len(src_dirs), self.config.transfer_dest,
+            )
 
         def _on_done(success: bool) -> None:
             self._transfers_in_progress.discard(round_id)
