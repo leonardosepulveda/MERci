@@ -131,6 +131,19 @@ src/MERci/
                     #   steps to include: n_optimize_iterations, include_reporting,
                     #   include_segmentation + method), replacing copy+hand-edit of a prior
                     #   experiment's file entirely
+    fishtank_config.py # fishtank input/config-file generation for lineage_tracing/lineage
+                    #   experiments ONLY (analyzed with fishtank, not MERlin — every other
+                    #   variant/acquisition-type uses merlin_config.py above), writing to
+                    #   SAMPLE_DIR/fishtank/. Every schema/script verified against a real
+                    #   reference experiment (see MERci/data/configs/fishtank/):
+                    #   create_color_usage_csv (per-round/color target table — the round-tag
+                    #   mapping is a manual, per-protocol choice, not derived from round_info.csv),
+                    #   create_decoding_strategy_csv, resolve_fishtank_reference_dir (library-
+                    #   version -> shared reference dir, dispatch only), create_fishtank_folder_
+                    #   skeleton, copy_fishtank_reference_files + FishtankScriptsSpec /
+                    #   create_fishtank_scripts — builds every fishtank run script (cellpose,
+                    #   detect-spots, decode-spots, mosaics) from a compact, fully-overridable
+                    #   spec (mirrors MerlinAnalysisSpec)
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
     fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
@@ -152,7 +165,9 @@ notebooks/
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
     lineage_tracing/ # multiple tissue sections per coverslip; split by acquisition type:
       merfish/       #   MERFISH (codebook) acquisition — full copy of the 6 notebooks
-      lineage/       #   lineage-barcode acquisition — full copy of the 6 notebooks
+      lineage/       #   lineage-barcode acquisition — full copy of the 6 notebooks, but with
+                     #     DIFFERENT 04/06 notebooks (see below) — analyzed with fishtank, not
+                     #     MERlin
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
       #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
@@ -160,13 +175,22 @@ notebooks/
       #   02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
       #                                                #   per-tissue positions files; creates data/ subfolders
       #   03_create_dave_config.ipynb                 # round-bit-color map (+ derives N_HYBS), round_info.csv + Dave recipe
-      #   04_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick)
       #   05_create_experiment_info.ipynb             # writes metadata/experiment_info.yaml (auto-fills what MERci
       #                                                #   already knows; biology/cluster-path fields left for the user)
+      # tumor/{epi,disk}/ and lineage_tracing/merfish/ (MERlin-based) additionally have:
+      #   04_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick)
       #   06_create_merlin_scripts.ipynb              # writes SAMPLE_DIR/merlin/ (analysis-parameters JSON via
       #                                                #   MerlinAnalysisSpec, snakemake/cluster-allocation JSON, slurm
       #                                                #   submit script); references the shared codebook/microscope
       #                                                #   files shipped in MERci/data/configs/merlin/ by path
+      # lineage_tracing/lineage/ (fishtank-based) instead has:
+      #   04_create_color_usage.ipynb                 # fishtank's color_usage (manual round-tag mapping,
+      #                                                #   not derived from round_info.csv) + decoding_strategy
+      #   06_create_fishtank_scripts.ipynb            # writes SAMPLE_DIR/fishtank/ (folder skeleton, shared
+      #                                                #   reference files, every run script) via a
+      #                                                #   FishtankScriptsSpec; reads the sibling merfish
+      #                                                #   acquisition's data/positions (../merfish/, confirmed
+      #                                                #   sample layout: <sample_id>/{merfish,lineage}/)
   analysis/         # Online-analysis notebooks (run during the experiment)
     01_fov_scheduler.ipynb                         # FOV-level scheduler (thumbnails, stats, histograms)
     02_round_scheduler.ipynb                       # round-level scheduler (mosaics, optional data transfer)
@@ -200,6 +224,12 @@ data/
       codebooks/     #   C3v1_codebook.csv, LT1v0_codebook.csv, LT2v0_codebook.csv
       snakemake/     #   cluster_resource_allocation_basic.json (template create_cluster_
                     #     resource_allocation transforms)
+    fishtank/       # shared fishtank reference material for lineage_tracing/lineage experiments,
+                    #   copied from a real reference experiment (see fishtank_config.py):
+      reference/v2/  #   intBC_codebook_v2.csv, {HEK3,EMX1,RNF2}_weights_v2.csv,
+                    #     embryo_integration_whitelist.txt — dispatched by LINEAGE_LIB_VERSION
+      scripts_static/ #  plot_drift.py, slurm_stats.sh, check_segmentation.ipynb — generic
+                    #     utilities copied verbatim into every new experiment's fishtank/scripts/
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
     examples/       # ready-made boundary sets for each layout, used as the notebook-02
                     #   fallback when SAMPLE_DIR/positions is empty:
@@ -245,6 +275,40 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 **05** (`prepare_imaging/<variant>/05_create_experiment_info.ipynb`): writes `SAMPLE_DIR/metadata/experiment_info.yaml` — a small, human-readable per-experiment record mirroring the master per-project experiment-info CSVs kept outside the repo (e.g. `experiment_info/lt_experiment_info.csv`), so many experiments' files can later be batch-collected back into one of those tables via `experiment_info.collect_experiment_info`. Auto-fills what MERci already knows (bit count from `round_bit_color_map.csv`, exposure time read from a bits HAL config via `configs.read_hal_exposure_time`, positions file(s) present in `positions/`); leaves cluster destination paths (`data_home`/`merlin_home`/`folder_name`) and biology/sample metadata (fix type, hyb temperature, tissue type, …) as a parameters cell for the user, since MERci has no way to know them.
 
 **06** (`prepare_imaging/<variant>/06_create_merlin_scripts.ipynb`): generates the remaining MERlin input/run files into `SAMPLE_DIR/merlin/`, reading `experiment_info.yaml` (notebook 05). Resolves the codebook/microscope-parameters files shipped in `MERci/data/configs/merlin/{codebooks,microscope}/` by `lib_name`/`microscope` (`merlin_config.resolve_codebook_filename`/`resolve_microscope_parameters_filename`) and sanity-checks the codebook's own bit count against `round_bit_color_map.csv` before proceeding. Builds the analysis-parameters JSON from a `MerlinAnalysisSpec` (`create_merlin_analysis_parameters` — which steps to include: `n_optimize_iterations`, `include_reporting`, `include_segmentation` + method) rather than copying and hand-editing a prior experiment's file, then the cluster-resource-allocation JSON, snakemake parameters JSON, and the slurm submit script (`merlin_config.create_*`). The submit script references the data-organization CSV (`metadata/`, notebook 04) and positions file (`positions/`, notebook 02) by their existing paths, and the shared codebook/microscope files by their path inside this `MERci/` clone — since the clone already lives inside `SAMPLE_DIR/`, no file needs to be copied to a separate shared cluster location.
+
+**`lineage_tracing/lineage` only — 04/06 are fishtank-based, not MERlin.** This
+acquisition type is analyzed with **fishtank**, so its notebooks 04 and 06
+differ from every other variant:
+
+**04** (`lineage_tracing/lineage/04_create_color_usage.ipynb`): writes
+fishtank's `color_usage` CSV (`fishtank_config.create_color_usage_csv`) — a
+per-round/color target table whose round-tag mapping (`"r1"`, `"beads"`,
+`"DAPI"`, `"empty"`, …) is entered **manually**, since it's a per-protocol
+choice not derivable from `round_info.csv`/`round_bit_color_map.csv`. Also
+writes a second, single-row `color_usage_{SAMPLE_NAME}_mf.csv` naming the
+sibling merfish acquisition's cells/DAPI round (for cross-modality
+registration) and a `decoding_strategy` CSV
+(`create_decoding_strategy_csv` — per-target decode method + reference file).
+Writes `SAMPLE_DIR/metadata/color_usage_{SAMPLE_NAME}{,_mf}.csv` and
+`SAMPLE_DIR/metadata/decoding_strategy_{SAMPLE_NAME}.csv`.
+
+**06** (`lineage_tracing/lineage/06_create_fishtank_scripts.ipynb`): builds
+`SAMPLE_DIR/fishtank/` — the folder skeleton (`create_fishtank_folder_skeleton`:
+`params/`, `reference/`, `scripts/`, `output/`, `log/`, plus the shared
+static utility scripts), the shared reference files for the configured
+`LINEAGE_LIB_VERSION` (`copy_fishtank_reference_files`, dispatched via
+`resolve_fishtank_reference_dir` — mirrors the MERlin codebook dispatch), and
+every fishtank run script from a `FishtankScriptsSpec` (`create_fishtank_scripts`
+— cellpose segmentation for both acquisitions, spot detection/decoding,
+DAPI mosaics for cross-modality registration; every field overridable,
+defaulting to a verified reference experiment's values). Assumes the
+confirmed sample layout — the lineage and merfish acquisitions of one sample
+are sibling directories (`<sample_id>/{merfish,lineage}/`, `fishtank/` inside
+the lineage one) — so `MERFISH_SAMPLE_DIR` defaults to `SAMPLE_DIR.parent /
+"merfish"`, and the merfish acquisition's positions file is copied into the
+lineage acquisition's own `positions/` folder (fishtank's generated scripts
+resolve both positions files from one folder, `../../positions/` relative to
+`fishtank/scripts/`).
 
 ### Online-analysis architecture
 

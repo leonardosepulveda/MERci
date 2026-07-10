@@ -41,6 +41,22 @@ defaults until confirmed):
   `N_TRANSIT_BLANK`.
 - `02`: `TRANSIT_SPACING`, `SCAN_DIRECTION`.
 - `03`: `N_HYBS`, `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
-- `04`: `round_bit_color` mapping to match the codebook. Note: multi-tissue
-  MERlin analysis is per tissue / per boundary — confirm the intended workflow
-  before relying on the generated data-organization.
+- `04`: `COLOR_USAGE_ROWS`/`COLOR_USAGE_ROWS_MF` (manual round-tag mapping —
+  which round/color images which target; not derived from `round_info.csv`)
+  and `TARGETS` (decoding strategy).
+- `06`: `MERFISH_SAMPLE_DIR` (defaults to the sibling `../merfish/` acquisition),
+  `LINEAGE_LIB_VERSION`, `REF_SERIES`, and `FishtankScriptsSpec`.
+
+## Analyzed with fishtank, not MERlin
+
+Unlike every other variant/acquisition-type in this repo, `lineage_tracing/
+lineage` experiments are analyzed with **fishtank**, not MERlin — so this
+variant's notebook **04** is `04_create_color_usage.ipynb` (fishtank's
+`color_usage`/`decoding_strategy` config, not MERlin's `data_organization`)
+and notebook **06** is `06_create_fishtank_scripts.ipynb` (writes
+`SAMPLE_DIR/fishtank/`, not `SAMPLE_DIR/merlin/`). See
+`MERci/src/MERci/acquisition/fishtank_config.py` and CLAUDE.md's
+"Pre-experiment workflow" section for details. Assumes the sibling-folder
+layout confirmed for this pipeline: the lineage and merfish acquisitions of
+the same sample are sibling directories (`<sample_id>/{merfish,lineage}/`),
+with `fishtank/` living inside the lineage one.
