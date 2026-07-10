@@ -51,6 +51,11 @@ class FOVScheduler:
       * ``"mirror_drive"`` — during fluidics, incrementally mirror ``data_dir`` to
         ``config.analysis_source_dir`` on a second drive, and read from that
         mirror, so analysis I/O never competes with the microscope's writes.
+      * ``"round_robin_drives"`` — read directly from every drive referenced in
+        ``round_info.csv`` (``config.all_data_roots``), skipping only whichever
+        round HAL is actively writing right now (``meta.actively_writing_round``),
+        so already-completed rounds on other drives analyse immediately with no
+        mirroring step.
 
     Typical usage (in a notebook cell)::
 
@@ -167,17 +172,46 @@ class FOVScheduler:
         )
         return fpath, kwargs
 
+    def _discovery_roots(self) -> List[Path]:
+        """
+        Directories to search for image files.
+
+        ``round_robin_drives`` mode spreads files across every drive named in
+        round_info.csv (``config.all_data_roots``) instead of one root; other
+        modes keep today's single-root behavior (``config.analysis_data_dir``).
+        """
+        if self.config.analysis_mode == "round_robin_drives":
+            return self.config.all_data_roots
+        return [self.config.analysis_data_dir]
+
     def _process_pending(self) -> int:
         """Discover and analyse all pending FOV files. Returns count processed.
 
-        Reads from ``config.analysis_data_dir`` (the mirror in mirror mode), and
-        dispatches one worker process per FOV file (each reads the file once and
-        runs every analysis), bounded by ``config.resolved_n_workers``.
+        Reads from ``config.analysis_data_dir`` (the mirror in mirror mode, or
+        every drive in ``round_robin_drives`` mode — see ``_discovery_roots``),
+        and dispatches one worker process per FOV file (each reads the file
+        once and runs every analysis), bounded by ``config.resolved_n_workers``.
         """
-        all_files = discover_image_files(
-            self.config.analysis_data_dir, self.config.image_suffix
-        )
+        all_files: List[Path] = []
+        for root in self._discovery_roots():
+            try:
+                all_files.extend(
+                    discover_image_files(root, self.config.image_suffix)
+                )
+            except OSError:
+                log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
+        all_files = sorted(set(all_files))
         pending = self.tracker.pending_fov_files(all_files)
+
+        # round_robin_drives: never analyse the round HAL is actively writing
+        # right now — its disk is contended; everything else proceeds as usual.
+        if self.config.analysis_mode == "round_robin_drives":
+            active_round = self.meta.actively_writing_round()
+            active_drive = (
+                self.meta.drive_of_round(active_round) if active_round is not None else None
+            )
+            if active_drive is not None:
+                pending = [f for f in pending if Path(f).drive.lower() != active_drive]
 
         # Restrict to the requested FOV subset when specified
         if self.config.fov_subset is not None:

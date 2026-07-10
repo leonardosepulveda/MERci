@@ -44,7 +44,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 from xml.dom import minidom
 
 import pandas as pd
@@ -129,6 +129,77 @@ def count_positions(positions_path: Path) -> int:
     return n
 
 
+# ── Multi-drive round-robin helpers ─────────────────────────────────────────────
+
+def _normalize_drive_root(drive: Union[str, Path]) -> Path:
+    """
+    Normalize a drive-letter/root string into an absolute path anchor.
+
+    A bare drive letter like ``"D:"`` is a *drive-relative* path under
+    ``pathlib``/Windows: joining onto it (``Path("D:") / "data"``) depends on
+    that drive's process-wide "current directory", an unpredictable legacy
+    mechanism, and would NOT resolve to ``D:\\data``. Appending a trailing
+    separator turns it into the drive's root (``"D:\\"``) so every join below
+    is unambiguously absolute.
+    """
+    s = str(drive)
+    if not s.endswith(("\\", "/")):
+        s += "\\"
+    root = Path(s)
+    if not root.is_absolute():
+        raise ValueError(
+            f"data_drives entry {drive!r} does not resolve to an absolute path "
+            f"(got {root!r}) — use a drive letter (e.g. \"D:\") or an absolute path."
+        )
+    return root
+
+
+def _drive_for_bit(bit_idx: int, data_drives: Sequence[Union[str, Path]]) -> Path:
+    """Round-robin the bit/hyb index (1-based) across *data_drives*."""
+    return _normalize_drive_root(data_drives[(bit_idx - 1) % len(data_drives)])
+
+
+def create_data_drive_skeleton(
+    sample_dir:  Path,
+    n_bits:      int,
+    data_drives: Sequence[Union[str, Path]],
+    mode:        str = "legacy",
+    boundaries:  Optional[Sequence] = None,
+) -> None:
+    """
+    Pre-create the ``data/[tissue_{t}/]hybs/H01..H0N`` folder skeleton on
+    EVERY drive in *data_drives* (not just the one drive each round is
+    actually assigned to), so every disk has an identical, predictable
+    structure before acquisition starts.
+
+    This is a convenience layered on top of ``create_dave_config``'s
+    ``create_data_dirs=True`` (default), which already creates only the one
+    directory each round strictly needs for HAL's existence check — calling
+    this function is optional; skipping it would not break round-robin
+    writing, it would just leave each drive's non-assigned H-folders absent
+    until their round comes up.
+
+    Parameters
+    ----------
+    sample_dir  : experiment root (unused for bits folders, kept for
+                  signature symmetry with ``create_round_info_multitissue``)
+    n_bits      : number of bits (hybridisation) rounds
+    data_drives : drive letters / absolute roots to spread hyb rounds across
+    mode        : ``"multi"``, ``"single"`` or ``"legacy"`` — selects whether
+                  the skeleton is nested under ``tissue_{t}/`` per boundary
+                  (multi) or flat (single/legacy), matching
+                  :func:`create_round_info_multitissue`'s ``_seg_dir`` layout
+    boundaries  : ordered ``BoundarySpec`` list (required when ``mode == "multi"``)
+    """
+    tissues = sorted({b.tissue for b in boundaries}) if (mode == "multi" and boundaries) else [None]
+    for drive in data_drives:
+        root = _normalize_drive_root(drive)
+        for tissue in tissues:
+            base = (root / "data" / f"tissue_{tissue}") if tissue is not None else (root / "data")
+            for bit_idx in range(1, n_bits + 1):
+                (base / "hybs" / f"H{bit_idx:02d}").mkdir(parents=True, exist_ok=True)
+
+
 # ── round_info builder ─────────────────────────────────────────────────────────
 
 def create_round_info(
@@ -137,6 +208,7 @@ def create_round_info(
     bits_hal_config:  str,
     cells_hal_config: str,
     sample_dir:       Path,
+    data_drives:      Optional[Sequence[Union[str, Path]]] = None,
 ) -> pd.DataFrame:
     """
     Build the ``round_info.csv`` dataframe for a standard MERFISH experiment.
@@ -153,6 +225,12 @@ def create_round_info(
     bits_hal_config   : HAL config filename for bits rounds (with ``.xml``)
     cells_hal_config  : HAL config filename for the cells round (with ``.xml``)
     sample_dir        : experiment root directory; used to build ``data_dir`` paths
+    data_drives       : when given, bits rounds are spread round-robin across
+                        these drives (``data_dir`` becomes
+                        ``<drive>/data/hybs/H{NN}`` instead of
+                        ``sample_dir/data/hybs/H{NN}``); the cells round is
+                        unaffected (always ``sample_dir/data/cells``). ``None``
+                        (default) preserves today's single-drive layout.
 
     Returns
     -------
@@ -176,15 +254,18 @@ def create_round_info(
     # bit/hyb index (1…N); the imaging_round is bit_idx + 1.  Each bits round
     # writes into its own subfolder ``data/hybs/H{NN}`` (NN = bit/hyb index), so
     # the rounds are spread across folders instead of piling into one ``data/``.
-    # ``create_dave_config`` emits a matching ``<change_directory>`` before each
-    # round's imaging loop.
+    # When ``data_drives`` is given, that subfolder is additionally rooted at a
+    # round-robin-assigned drive instead of always ``sample_dir`` (so successive
+    # hyb rounds land on different physical disks). ``create_dave_config`` emits
+    # a matching ``<change_directory>`` before each round's imaging loop.
     for bit_idx in range(1, n_bits + 1):
+        bits_root = _drive_for_bit(bit_idx, data_drives) if data_drives else data.parent
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}-epi_{bit_idx:02d}_{{fov:03d}}",
             "hal_config":    bits_hal_config,
-            "data_dir":      str(data / "hybs" / f"H{bit_idx:02d}"),
+            "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
 
     return pd.DataFrame(
@@ -203,6 +284,7 @@ def create_round_info_multitissue(
     boundaries:         Sequence,
     mode:               str,
     sample_name:        str,
+    data_drives:        Optional[Sequence[Union[str, Path]]] = None,
 ) -> pd.DataFrame:
     """
     Build a **segment-aware** ``round_info`` for a multi-boundary experiment.
@@ -247,6 +329,11 @@ def create_round_info_multitissue(
     mode               : ``"multi"``, ``"single"`` or ``"legacy"`` (from the same
                          discovery call); selects the data-folder layout
     sample_name        : experiment name used in the positions filenames
+    data_drives        : when given, bits rounds are spread round-robin across
+                         these drives (each bits ``data_dir`` is rooted at the
+                         assigned drive instead of ``sample_dir``); cells and
+                         transit segments are unaffected. ``None`` (default)
+                         preserves today's single-drive layout.
 
     Returns
     -------
@@ -263,7 +350,14 @@ def create_round_info_multitissue(
     pos_dir      = Path(sample_dir) / "positions"
 
     def _seg_dir(tissue: int, kind: str, is_cells: bool, hyb_idx: Optional[int] = None) -> str:
-        base = data / f"tissue_{tissue}" if mode == "multi" else data
+        # bits: round-robin the drive (if configured) BEFORE appending the
+        # tissue/hybs/H{NN} subtree, so rounds are spread across both folders
+        # and physical disks; cells/transit always stay rooted at sample_dir.
+        if kind != "transit" and not is_cells and data_drives:
+            root = _drive_for_bit(hyb_idx, data_drives) / "data"
+        else:
+            root = data
+        base = root / f"tissue_{tissue}" if mode == "multi" else root
         if kind == "transit":
             return str(base / "transit")
         if is_cells:

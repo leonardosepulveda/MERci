@@ -226,6 +226,44 @@ class ExperimentMetadata:
         """All round ids, sorted."""
         return sorted(self.rounds)
 
+    def drive_of_round(self, round_id: int) -> Optional[str]:
+        """
+        Return the drive/UNC root (e.g. ``"d:"``) of *round_id*'s ``data_dir``,
+        lower-cased, or ``None`` if the round has no ``data_dir`` (or isn't
+        recognised). Used to compare rounds for round-robin multi-drive setups.
+        """
+        for s in self.series_for_round(round_id):
+            if s.data_dir is not None:
+                drive = Path(s.data_dir).drive
+                if drive:
+                    return drive.lower()
+        return None
+
+    def actively_writing_round(self) -> Optional[int]:
+        """
+        Return the round id that HAL is most likely actively writing right
+        now, or ``None`` if no round is mid-write.
+
+        Heuristic: scan round ids from highest to lowest and return the first
+        one that has started (at least one expected file exists) but is not
+        yet complete (not every expected file exists) — rounds proceed
+        strictly in order, so this is the round straddling the write/not-yet-
+        written boundary. Returns ``None`` once the highest-started round is
+        fully on disk (e.g. mid-fluidics, between rounds) — deliberately NOT
+        "highest round with any file", which would keep wrongly reporting the
+        just-finished round as active for its entire following fluidics
+        window.
+        """
+        for rid in sorted(self.valid_round_ids(), reverse=True):
+            files = self.files_for_round(rid)
+            if not files:
+                continue
+            exists = [f.exists() for f in files]
+            if not any(exists):
+                continue
+            return rid if not all(exists) else None
+        return None
+
 
 # ── Internal helpers ────────────────────────────────────────────────────────
 

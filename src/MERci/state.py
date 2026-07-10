@@ -134,7 +134,22 @@ class ExperimentStateMonitor:
             return self._cached_mtime
 
         suffix = self.config.image_suffix
-        files  = list(self.config.data_dir.rglob(f"*{suffix}"))
+        # round_robin_drives: bits-round images live on several physical
+        # drives, never all under config.data_dir alone — scan every root
+        # referenced in round_info.csv (config.all_data_roots), or phase
+        # detection would get stuck reporting WAITING_FOR_DATA the moment
+        # the cells round finishes.
+        roots = (
+            self.config.all_data_roots
+            if self.config.analysis_mode == "round_robin_drives"
+            else [self.config.data_dir]
+        )
+        files: list = []
+        for root in roots:
+            try:
+                files.extend(root.rglob(f"*{suffix}"))
+            except OSError:
+                log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
         if not files:
             return None
 
