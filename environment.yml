@@ -16,3 +16,4 @@ dependencies:
     - ipykernel
     - zarr
     - tifffile
+    - pyyaml

@@ -1,0 +1,145 @@
+{
+    "__default__": {
+        "account": "zhuang_lab",
+        "time": "3:00:00",
+        "n": 1,
+        "partition": "zhuang,sapphire,serial_requeue",
+        "mem": 8000,
+        "constraint": "",
+        "exclude": "",
+        "requeue":false,
+        "gres" : "gpu:0",
+        "out": "~/Scratch/YourExperimentName_%j.stdout.txt",
+        "err": "~/Scratch/YourExperimentName_%j.stderr.txt"
+    },
+    "AdaptiveFilterBarcodes": {
+        "mem": 5000
+    },
+    "AsignCellFOV": {
+        "mem": 2000
+    },
+    "CellposeSegmentation": {
+        "mem": 10000
+    },
+    "CellposeSegmentationDAPI": {
+        "mem": 15000
+    },
+    "CellposeSegmentationpolyT": {
+        "mem": 15000
+    },
+    "CellposeSegmentationSingleChannel3D": {
+        "mem": 10000
+    },
+    "CellPoseSegmentSAM" : {
+        "mem" : 32000,
+        "partition" : "gpu_requeue,gpu",
+        "gres" : "gpu:1",
+        "time" : "0:10:00",
+        "exclude" : "holygpu7c0309,holygpu7c0709,holygpu7c0711,holygpu7c0715"
+    },
+    "CleanCellBoundaries": {
+        "mem": 10000
+    },
+    "CleanCellBoundariesDAPI": {
+        "mem": 10000
+    },
+    "CleanCellBoundariespolyT": {
+        "mem": 10000
+    },
+    "CombineCleanedBoundaries": {
+        "mem": 100000
+    },
+    "CombineCleanedBoundariesDAPI": {
+        "mem": 100000
+    },
+    "CombineCleanedBoundariespolyT": {
+        "mem": 100000
+    },
+    "mosaic_DAPI_10X": {
+        "mem": 15000
+    },
+    "mosaic_DAPI_1X": {
+        "mem": 15000
+    },
+    "mosaic_polyT_10X": {
+        "mem": 15000
+    },
+    "mosaic_polyT_1X": {
+        "mem": 15000
+    },
+    "mosaic_bits_10X": {
+        "mem": 15000
+    },
+    "mosaic_bits_1X": {
+        "mem": 15000
+    },
+    "Decode": {
+        "mem": 10000
+    },
+    "DeconvolutionPreprocess": {
+        "mem": 3000
+    },
+    "CAREPreprocess": {
+        "mem": 5000
+    },
+    "ExportBarcodes": {
+        "mem": 100000
+    },
+    "ExportCellMetadata": {
+        "mem": 20000
+    },
+    "ExportCellMetadataDAPI": {
+        "mem": 20000
+    },
+    "ExportCellMetadatapolyT": {
+        "mem": 20000
+    },
+    "ExportPartitionedBarcodes": {
+        "mem": 15000
+    },
+    "ExportPartitionedBarcodesDAPI": {
+        "mem": 15000
+    },
+    "ExportPartitionedBarcodespolyT": {
+        "mem": 15000
+    },
+    "ExportSumSignals": {
+        "mem": 15000
+    },
+    "FiducialCorrelationWarp": {
+        "mem": 1000
+    },
+    "FilterBarcodes": {
+        "mem": 15000
+    },
+    "GenerateAdaptiveThreshold": {
+        "mem": 50000
+    },
+    "Optimize01": {
+        "mem": 10000
+    },
+    "PartitionBarcodes": {
+        "mem": 5000
+    },
+    "PartitionBarcodesDAPI": {
+        "mem": 5000
+    },
+    "PartitionBarcodespolyT": {
+        "mem": 5000
+    },
+    "PlotPerformance": {
+        "mem": 30000
+    },
+    "RefineCellDatabases": {
+        "mem": 5000
+    },
+    "RefineCellDatabasesDAPI": {
+        "mem": 5000
+    },
+    "RefineCellDatabasespolyT": {
+        "mem": 5000
+    },
+    "SumSignals": {
+        "mem": 3000
+    }
+}

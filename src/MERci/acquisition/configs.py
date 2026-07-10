@@ -662,6 +662,20 @@ def read_hal_flip_vertical(hal_config_path: Path) -> bool:
         return False
 
 
+def read_hal_exposure_time(hal_config_path: Path) -> "Optional[float]":
+    """
+    Return the ``<exposure_time>`` value (seconds) from the HAL config at
+    *hal_config_path*, or ``None`` on any parse error or missing element.
+    """
+    try:
+        with open(hal_config_path, "rb") as fh:
+            text = fh.read().decode("ISO-8859-1")
+        m = re.search(r"<exposure_time[^>]*>([\d.]+)</exposure_time>", text)
+        return float(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def find_frame_table_for_hal_config(
     hal_config_path: Path,
     metadata_dir:    Path,

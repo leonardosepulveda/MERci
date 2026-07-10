@@ -16,6 +16,7 @@ dependencies = [
     "Pillow",
     "shapely",
     "matplotlib",
+    "PyYAML",
 ]
 
 [tool.setuptools.packages.find]

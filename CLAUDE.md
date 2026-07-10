@@ -35,7 +35,7 @@ The `prepare_imaging/` notebooks live **three** levels under the repo root
 `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`.
 
 **Exceptions — `tumor` and `lineage_tracing`** are each split into two acquisition
-types, one full copy of the four notebooks per type: `tumor/epi/` and `tumor/disk/`
+types, one full copy of the six notebooks per type: `tumor/epi/` and `tumor/disk/`
 (epifluorescence vs. spinning-disk confocal, same single-tissue-section layout);
 `lineage_tracing/merfish/` and `lineage_tracing/lineage/` (MERFISH readout vs.
 lineage-barcode readout, same multi-tissue layout). Those notebooks live **four**
@@ -50,12 +50,18 @@ SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
                         positions_{SAMPLE_NAME}.txt (from prepare_imaging/02)
   metadata/          ← frame_table_*.csv, shutter_sequence_*.png (prepare_imaging/01),
                         round_info.csv, round_bit_color_map.csv (prepare_imaging/03),
-                        data_organization_*.csv (prepare_imaging/04)
+                        data_organization_*.csv (prepare_imaging/04),
+                        experiment_info.yaml (prepare_imaging/05)
   settings/          ← hal-config-*.xml, shutter-*.xml (prepare_imaging/01), dave-*.xml (prepare_imaging/03)
   data/              ← raw image files; exact subfolder structure defined by the `dir`
                         column in round_info.csv (written by HAL during acquisition)
   analysis/          ← thumbnails/, stats/, histograms/, mosaics/, done/
                         (produced by the analysis/01 and analysis/02 schedulers)
+  merlin/            ← per-experiment MERlin config/run files (prepare_imaging/06):
+                        analysis/merlin_analysis_{SAMPLE_NAME}.json,
+                        snakemake/{parameters,cluster_resource_allocation}_{SAMPLE_NAME}.json,
+                        slurm/submit/merlin_slurm_{SAMPLE_NAME}.sh
+                        (replaces the old shared ~/Software/merfish-parameters/ location)
 ```
 
 ## Package layout
@@ -67,6 +73,10 @@ src/MERci/
     metadata.py     # ExperimentMetadata — parses round_info.csv + positions.txt
     io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
                     # save_positions_array, discover_image_files
+    experiment_info.py  # ExperimentInfo (core fields + extra dict, mirrors SeriesInfo.extra_meta's
+                    #   pattern for the bc/lt/mf master-CSV schemas), save/load_experiment_info (flat
+                    #   YAML round-trip), collect_experiment_info (batch-read many experiment_info.yaml
+                    #   files into one outer-joined DataFrame, ready to append to a master CSV)
   acquisition/
     configs.py      # get_frame_table, get_transit_frame_table (N blank frames), get_color_sequence_name
                     # (underscore-joined tokens, e.g. blkf5_488f2_560f25_650f25_750f25),
@@ -105,6 +115,22 @@ src/MERci/
                     #   with fuzzy-matched suggestions), format_consistency_report, fix_kilroy_consistency
                     #   (apply confirmed name fixes in place, backup *.bak, preserve CRLF + ISO-8859-1)
     data_organization.py  # create_data_organization
+    merlin_config.py # MERlin input/config-file generation, writing to SAMPLE_DIR/merlin/ instead of
+                    #   the old shared ~/Software/merfish-parameters/ location. Every schema verified
+                    #   against real 2026 templates/outputs (see MERci/data/configs/merlin/):
+                    #   create_microscope_parameters_json, create_codebook_csv (bit_names + gene/
+                    #   Blank-N barcode rows; bit_names derivable from round_bit_color_map.csv +
+                    #   readouts.csv, but the gene->barcode assignment itself must be supplied — a
+                    #   wet-lab library-design input MERci cannot generate), create_cluster_resource_
+                    #   allocation (duplicates a template's "Optimize01" block N times),
+                    #   create_snakemake_parameters, create_slurm_submit_script (ports the current
+                    #   live sbatch template), resolve_codebook_filename / resolve_microscope_
+                    #   parameters_filename (lib_name/microscope -> filename dispatch only) +
+                    #   MerlinAnalysisSpec / create_merlin_analysis_parameters — builds MERlin's
+                    #   warp/optimize/decode/segment task-parameters JSON from a compact spec (which
+                    #   steps to include: n_optimize_iterations, include_reporting,
+                    #   include_segmentation + method), replacing copy+hand-edit of a prior
+                    #   experiment's file entirely
     display.py      # print_frame_table, display_xml (Jupyter helpers)
   analysis/
     fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
@@ -121,12 +147,12 @@ notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
     reference/       # canonical, fully-featured templates (keep up to date)
     tumor/           # single tissue section per coverslip; split by acquisition type:
-      epi/           #   epifluorescence acquisition — full copy of the 4 notebooks
-      disk/          #   spinning-disk confocal acquisition — full copy of the 4 notebooks
+      epi/           #   epifluorescence acquisition — full copy of the 6 notebooks
+      disk/          #   spinning-disk confocal acquisition — full copy of the 6 notebooks
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
     lineage_tracing/ # multiple tissue sections per coverslip; split by acquisition type:
-      merfish/       #   MERFISH (codebook) acquisition — full copy of the 4 notebooks
-      lineage/       #   lineage-barcode acquisition — full copy of the 4 notebooks
+      merfish/       #   MERFISH (codebook) acquisition — full copy of the 6 notebooks
+      lineage/       #   lineage-barcode acquisition — full copy of the 6 notebooks
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
       #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
@@ -135,11 +161,22 @@ notebooks/
       #                                                #   per-tissue positions files; creates data/ subfolders
       #   03_create_dave_config.ipynb                 # round-bit-color map (+ derives N_HYBS), round_info.csv + Dave recipe
       #   04_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick)
+      #   05_create_experiment_info.ipynb             # writes metadata/experiment_info.yaml (auto-fills what MERci
+      #                                                #   already knows; biology/cluster-path fields left for the user)
+      #   06_create_merlin_scripts.ipynb              # writes SAMPLE_DIR/merlin/ (analysis-parameters JSON via
+      #                                                #   MerlinAnalysisSpec, snakemake/cluster-allocation JSON, slurm
+      #                                                #   submit script); references the shared codebook/microscope
+      #                                                #   files shipped in MERci/data/configs/merlin/ by path
   analysis/         # Online-analysis notebooks (run during the experiment)
     01_fov_scheduler.ipynb                         # FOV-level scheduler (thumbnails, stats, histograms)
     02_round_scheduler.ipynb                       # round-level scheduler (mosaics, optional data transfer)
     03_view_mosaics.ipynb                          # display per-color mosaics as they are built
     04_view_intensity_stats.ipynb                  # plot per-frame intensity statistics over rounds
+    05_batch_sample_review.ipynb                   # post-acquisition: verify a batch of experiments' analysis
+                                                   #   is complete (backfill via analyze_file if not), then plot
+                                                   #   per-round intensity/saturation comparisons across the batch —
+                                                   #   the MERlin-independent half of the old cluster-side review
+                                                   #   notebook (excludes anything needing MERlin's decoded output)
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
@@ -157,6 +194,12 @@ data/
   configs/
     hal/            # hal-config-{mic}-epi.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
+    merlin/         # shared MERlin reference files, copied from R:\Software\merfish-parameters\
+                    #   (2026-active files only; see prepare_imaging/06 + merlin_config.py):
+      microscope/    #   MERFISH{3,4,5}.json, STORM2FUSION_2304_60xSil.json (ST2)
+      codebooks/     #   C3v1_codebook.csv, LT1v0_codebook.csv, LT2v0_codebook.csv
+      snakemake/     #   cluster_resource_allocation_basic.json (template create_cluster_
+                    #     resource_allocation transforms)
   positions/        # boundary_positions.txt, hole*.txt — example tissue boundary files
     examples/       # ready-made boundary sets for each layout, used as the notebook-02
                     #   fallback when SAMPLE_DIR/positions is empty:
@@ -169,8 +212,8 @@ data/
 
 ### Pre-experiment workflow
 
-Run the four `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
-order before starting the microscope. For `tumor` and `lineage_tracing` the four
+Run the six `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
+order before starting the microscope. For `tumor` and `lineage_tracing` the six
 notebooks live one level deeper under an acquisition-type subfolder
 (`prepare_imaging/tumor/{epi,disk}/`, `prepare_imaging/lineage_tracing/{merfish,lineage}/`);
 run the set for the acquisition being prepared.
@@ -198,6 +241,10 @@ FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A
 **04** (`prepare_imaging/<variant>/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Picks the bits/cells series by `imaging_type` (so a multi-boundary `round_info`'s transit movies are never selected). Note: multi-tissue MERlin analysis is per tissue / per boundary — confirm the intended workflow before relying on the generated data-organization. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The `round_bit_color` mapping is **defined in notebook 03**; notebook 04 reads it back from `SAMPLE_DIR/metadata/round_bit_color_map.csv` (raising `FileNotFoundError` if notebook 03 has not run). Writes:
 - `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
 - Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
+
+**05** (`prepare_imaging/<variant>/05_create_experiment_info.ipynb`): writes `SAMPLE_DIR/metadata/experiment_info.yaml` — a small, human-readable per-experiment record mirroring the master per-project experiment-info CSVs kept outside the repo (e.g. `experiment_info/lt_experiment_info.csv`), so many experiments' files can later be batch-collected back into one of those tables via `experiment_info.collect_experiment_info`. Auto-fills what MERci already knows (bit count from `round_bit_color_map.csv`, exposure time read from a bits HAL config via `configs.read_hal_exposure_time`, positions file(s) present in `positions/`); leaves cluster destination paths (`data_home`/`merlin_home`/`folder_name`) and biology/sample metadata (fix type, hyb temperature, tissue type, …) as a parameters cell for the user, since MERci has no way to know them.
+
+**06** (`prepare_imaging/<variant>/06_create_merlin_scripts.ipynb`): generates the remaining MERlin input/run files into `SAMPLE_DIR/merlin/`, reading `experiment_info.yaml` (notebook 05). Resolves the codebook/microscope-parameters files shipped in `MERci/data/configs/merlin/{codebooks,microscope}/` by `lib_name`/`microscope` (`merlin_config.resolve_codebook_filename`/`resolve_microscope_parameters_filename`) and sanity-checks the codebook's own bit count against `round_bit_color_map.csv` before proceeding. Builds the analysis-parameters JSON from a `MerlinAnalysisSpec` (`create_merlin_analysis_parameters` — which steps to include: `n_optimize_iterations`, `include_reporting`, `include_segmentation` + method) rather than copying and hand-editing a prior experiment's file, then the cluster-resource-allocation JSON, snakemake parameters JSON, and the slurm submit script (`merlin_config.create_*`). The submit script references the data-organization CSV (`metadata/`, notebook 04) and positions file (`positions/`, notebook 02) by their existing paths, and the shared codebook/microscope files by their path inside this `MERci/` clone — since the clone already lives inside `SAMPLE_DIR/`, no file needs to be copied to a separate shared cluster location.
 
 ### Online-analysis architecture
 
