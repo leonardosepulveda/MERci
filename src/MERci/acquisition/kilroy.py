@@ -217,14 +217,16 @@ class KilroyProtocolResolver:
             return self._unique(
                 lambda ts, n: {"cleave", "adaptor"} <= ts, "cleave (adaptors)"
             )
-        # Prefer an exact "Cleave" match first, mirroring image_buffer()'s exact-name
-        # preference below: some configs (e.g. ST2) also define manual/alternate
-        # cleave variants ("Cleave Slow", "Cleave then image") that are not meant for
-        # automatic Dave-recipe selection but would otherwise tie with a bare
-        # "Cleave" under the generic token predicate and raise a false ambiguity.
-        for p in self.protocols:
-            if p.strip().lower() == "cleave":
-                return p
+        # Prefer an exact "Cleave" or "Cleave Direct" match first, mirroring
+        # image_buffer()'s exact-name preference below: some configs (e.g. ST2)
+        # also define manual/alternate cleave variants ("Cleave then image") that
+        # are not meant for automatic Dave-recipe selection but would otherwise
+        # tie with the canonical direct-cleave protocol under the generic token
+        # predicate and raise a false ambiguity.
+        for exact in ("cleave", "cleave direct"):
+            for p in self.protocols:
+                if " ".join(p.strip().lower().split()) == exact:
+                    return p
         # Direct cleave: a "cleave" protocol that is not the adaptor one. Matches
         # both a bare "Cleave" and a qualified "Cleave direct" (mirrors hybridize).
         return self._unique(
