@@ -32,7 +32,7 @@ class SeriesInfo:
 
     Attributes
     ----------
-    name          : series pattern, e.g. ``hal-mf3-epi_{fov:03d}_00``
+    name          : series pattern, e.g. ``hal-mf3_{fov:03d}_00``
     round_id      : explicit imaging round number (``imaging_round`` column)
     imaging_type  : optional label such as ``"bits"`` or ``"cells"``
     hal_config    : optional HAL config filename for this series
@@ -295,8 +295,8 @@ def _pattern_to_regex(pattern: str) -> "re.Pattern":
 
     Examples
     --------
-    ``hal-mf3-epi_{fov:03d}_00``  →  ``^hal\\-mf3\\-epi_(?P<fov>\\d+)_00$``
-    ``hal-mf3-epi-cells_{fov:03d}`` → ``^hal\\-mf3\\-epi\\-cells_(?P<fov>\\d+)$``
+    ``hal-mf3_{fov:03d}_00``  →  ``^hal\\-mf3_(?P<fov>\\d+)_00$``
+    ``hal-mf3-cells_{fov:03d}`` → ``^hal\\-mf3\\-cells_(?P<fov>\\d+)$``
     """
     parts: List[str] = []
     i = 0

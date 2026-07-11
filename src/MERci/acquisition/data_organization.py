@@ -37,8 +37,8 @@ def create_data_organization(
     round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples
     readouts          : readouts.csv DataFrame; must have columns
                         ``"Bit number"`` and ``"Name"`` (e.g. ``"b1-RS0015"``)
-    bits_series       : series pattern for bits, e.g. ``"hal-mf3-epi_01_{fov:03d}"``
-    cells_series      : series pattern for cells, e.g. ``"hal-mf3-epi_cells_{fov:03d}"``
+    bits_series       : series pattern for bits, e.g. ``"hal-mf3_01_{fov:03d}"``
+    cells_series      : series pattern for cells, e.g. ``"hal-mf3-cells_{fov:03d}"``
     include_dapi      : whether to append a DAPI row from the cells frame table
     dapi_bit_number   : bit number assigned to DAPI (default 47)
 
@@ -134,8 +134,8 @@ def _series_to_image_type(series: str) -> str:
 
     Examples
     --------
-    ``"hal-mf3-epi_01_{fov:03d}"``   → ``"hal-mf3-epi"``
-    ``"hal-mf3-epi_cells_{fov:03d}"`` → ``"hal-mf3-epi_cells"``
+    ``"hal-mf3_01_{fov:03d}"``   → ``"hal-mf3"``
+    ``"hal-mf3_cells_{fov:03d}"`` → ``"hal-mf3_cells"``
     """
     s = re.sub(r"_\{[^}]+\}$", "", series)   # strip _{fov:03d}
     s = re.sub(r"_\d{2}$", "", s)             # strip _01, _02, … if present
@@ -153,9 +153,9 @@ def _series_to_regexp(series: str) -> str:
 
     Examples
     --------
-    ``"hal-mf3-epi_01_{fov:03d}"``   →
+    ``"hal-mf3_01_{fov:03d}"``   →
         ``(?P<imageType>[\\w|-]+)_(?P<imagingRound>[\\w|-]+)_(?P<fov>[0-9]+)``
-    ``"hal-mf3-epi_cells_{fov:03d}"`` →
+    ``"hal-mf3_cells_{fov:03d}"`` →
         ``(?P<imageType>[\\w|-]+)_(?P<fov>[0-9]+)``
     """
     base = re.sub(r"_\{[^}]+\}$", "", series)   # strip _{fov:03d}

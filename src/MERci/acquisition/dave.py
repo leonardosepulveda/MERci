@@ -35,7 +35,7 @@ The ``round_info.csv`` drives everything:
 - the order within a round follows the CSV row order
 - ``hal_config`` names the HAL config file (with or without ``.xml``)
 - ``series`` encodes the base movie name: strip ``_{fov:…}`` suffix to get the
-  dave ``<name>`` element (e.g. ``hal-mf3-epi_01_{fov:03d}`` → ``hal-mf3-epi_01``)
+  dave ``<name>`` element (e.g. ``hal-mf3_01_{fov:03d}`` → ``hal-mf3_01``)
 """
 from __future__ import annotations
 
@@ -66,8 +66,8 @@ def series_to_movie_name(series: str) -> str:
 
     Examples
     --------
-    ``hal-mf3-epi_01_{fov:03d}``    → ``hal-mf3-epi_01``
-    ``hal-mf3-epi-cells_{fov:03d}`` → ``hal-mf3-epi-cells``
+    ``hal-mf3_01_{fov:03d}``    → ``hal-mf3_01``
+    ``hal-mf3-cells_{fov:03d}`` → ``hal-mf3-cells``
     """
     return re.sub(r"_\{[^}]+\}$", "", series)
 
@@ -76,7 +76,7 @@ def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
     """
     Best-effort microscope id from the ``series`` names in *round_info*.
 
-    MERci series follow ``hal-{mic}-epi…`` (e.g. ``hal-mf3-epi-cells_{fov:03d}``),
+    MERci series follow ``hal-{mic}…`` (e.g. ``hal-mf3-cells_{fov:03d}``),
     so the token after ``hal-`` is the microscope. Returns it upper-cased (e.g.
     ``"MF3"``), or ``None`` if no series matches the pattern.
     """
@@ -245,7 +245,7 @@ def create_round_info(
     rows.append({
         "imaging_round": 1,
         "imaging_type":  "cells",
-        "series":        f"hal-{mic}-epi-cells_{{fov:03d}}",
+        "series":        f"hal-{mic}-cells_{{fov:03d}}",
         "hal_config":    cells_hal_config,
         "data_dir":      str(data / "cells"),
     })
@@ -263,7 +263,7 @@ def create_round_info(
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
-            "series":        f"hal-{mic}-epi_{bit_idx:02d}_{{fov:03d}}",
+            "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:03d}}",
             "hal_config":    bits_hal_config,
             "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
@@ -301,9 +301,9 @@ def create_round_info_multitissue(
     ``data_dir`` subfolder the segment writes to.
 
     **Consolidated movie names + continuous FOV index.** Within a round, all
-    boundary movies share ONE movie name (e.g. ``hal-mf3-epi-cells`` /
-    ``hal-mf3-epi_01``) and all transit movies share one name
-    (``hal-mf3-epi-transit_rNN``) — the per-segment label is dropped from the movie
+    boundary movies share ONE movie name (e.g. ``hal-mf3-cells`` /
+    ``hal-mf3_01``) and all transit movies share one name
+    (``hal-mf3-transit_rNN``) — the per-segment label is dropped from the movie
     name. To keep the per-loop indices from colliding, each row carries an
     ``fov_start`` offset (running FOV count of the preceding segments of the same
     group, in traversal order) and a fixed ``fov_pad`` width; these become the
@@ -382,7 +382,7 @@ def create_round_info_multitissue(
 
     # ── Continuous FOV numbering across segments ────────────────────────────────
     # We want every boundary movie in a round to share ONE movie name (e.g.
-    # ``hal-mf3-epi-cells``) with a single running FOV index 0…(ΣtBoundaryFOVs−1),
+    # ``hal-mf3-cells``) with a single running FOV index 0…(ΣtBoundaryFOVs−1),
     # and likewise every transit movie to share one name — while KEEPING the
     # per-segment loops so the boundary→transit interleaving is preserved.
     #
@@ -448,7 +448,7 @@ def create_round_info_multitissue(
                 rows.append({
                     "imaging_round":  rnd,
                     "imaging_type":   "transit",
-                    "series":         f"hal-{mic}-epi-transit_r{rnd:02d}_{{fov:0{pad}d}}",
+                    "series":         f"hal-{mic}-transit_r{rnd:02d}_{{fov:0{pad}d}}",
                     "hal_config":     transit_hal_config,
                     "data_dir":       _seg_dir(tissue, "transit", is_cells),
                     "positions_file": posfile,
@@ -459,11 +459,11 @@ def create_round_info_multitissue(
                 })
 
     # Round 1: cells.
-    _emit(1, is_cells=True, movie_prefix=f"hal-{mic}-epi-cells", hal_boundary=cells_hal_config)
+    _emit(1, is_cells=True, movie_prefix=f"hal-{mic}-cells", hal_boundary=cells_hal_config)
     # Rounds 2…N+1: bits #1…#N (movie series number tracks the bit/hyb index).
     for bit_idx in range(1, n_bits + 1):
         _emit(bit_idx + 1, is_cells=False,
-              movie_prefix=f"hal-{mic}-epi_{bit_idx:02d}", hal_boundary=bits_hal_config,
+              movie_prefix=f"hal-{mic}_{bit_idx:02d}", hal_boundary=bits_hal_config,
               hyb_idx=bit_idx)
 
     return pd.DataFrame(
