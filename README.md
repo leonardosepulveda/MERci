@@ -117,7 +117,7 @@ In **progressive** mode (the default), a stack ending at z=25 with `z_bead=0` an
 
 The compact config name (e.g. `blkf3-488f1-560f49-650f49`) is auto-generated from the frame sequence.
 
-The HAL template is auto-detected from `MERci/data/configs/hal/` by matching the `MICROSCOPE` name (e.g. `hal-config-mf3-epi.xml` for `MICROSCOPE = "MF3"`). A `FileNotFoundError` is raised if no matching template exists.
+The HAL template is auto-detected from `MERci/data/configs/hal/` by matching the `MICROSCOPE` name (e.g. `hal-config-mf3.xml` for `MICROSCOPE = "MF3"`). A `FileNotFoundError` is raised if no matching template exists.
 
 ---
 
@@ -334,9 +334,9 @@ Optional columns: `hal_config`, `dir`, `imaging_type`, `shutter_file`
 
 ```
 imaging_round,series,hal_config,dir
-1,hal-mf3-epi_01_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H01
-1,hal-mf3-epi_cells_{fov:03d},hal-config-mf3-blkf1-405f49-488f1.xml,D:\experiments\my_sample\data\cells
-2,hal-mf3-epi_02_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H02
+1,hal-mf3_01_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H01
+1,hal-mf3-cells_{fov:03d},hal-config-mf3-blkf1-405f49-488f1.xml,D:\experiments\my_sample\data\cells
+2,hal-mf3_02_{fov:03d},hal-config-mf3-blkf3-488f1-560f49-650f49.xml,D:\experiments\my_sample\data\H02
 ```
 
 See the `round_info.csv` section above for column descriptions.
