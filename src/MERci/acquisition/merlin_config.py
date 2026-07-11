@@ -16,7 +16,11 @@ create_microscope_parameters_json — MERlin's per-scope calibration JSON
 create_codebook_csv               — MERlin's gene/barcode codebook CSV
 create_cluster_resource_allocation — per-task slurm resource overrides
 create_snakemake_parameters       — snakemake's top-level parameters JSON
-create_slurm_submit_script        — the sbatch script that runs ``merlin``
+resolve_cluster_sample_dir        — this experiment's acquisition root as
+    addressed from the Linux cluster, whether generated on Windows (predicted
+    from the sample name) or on the cluster itself (its own real path)
+create_slurm_submit_script        — the sbatch script that runs ``merlin``,
+    with every path relative to one ``$SAMPLE_DIR`` bash variable
 resolve_codebook_filename         — lib_name -> codebook filename (dispatch only)
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
 MerlinAnalysisSpec / create_merlin_analysis_parameters — build MERlin's
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -236,8 +241,68 @@ def create_snakemake_parameters(
 
 # ── Slurm submit script ─────────────────────────────────────────────────────
 
+# Cluster project roots, keyed by a token searched for (case-insensitively) in
+# the sample name. Extend this for other projects -- see
+# resolve_cluster_sample_dir.
+_PROJECT_CLUSTER_ROOTS: Dict[str, str] = {
+    "BC": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/breast_cancer/experiments",
+    "LT": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/lineage_tracing/experiments",
+}
+
+
+def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, folder_name: str) -> str:
+    """
+    Resolve this experiment's acquisition-root path as it will be addressed
+    from the Linux cluster -- the directory holding this MERci clone,
+    metadata/, positions/, and merlin/ as siblings.
+
+    The generated slurm script works identically whether it's produced on the
+    microscope computer / a laptop (Windows), before the experiment folder is
+    transferred to the cluster, or regenerated on the cluster itself
+    afterwards:
+
+    * On Linux (already running on the cluster), *sample_dir*'s own current
+      absolute path already IS that answer -- no guessing needed.
+    * On Windows, that path doesn't exist yet, so it is predicted from
+      *sample_name*: a name containing ``"BC"`` resolves under the
+      breast_cancer project root, ``"LT"`` under lineage_tracing (see
+      ``_PROJECT_CLUSTER_ROOTS``), joined with *folder_name*'s own directory
+      (its trailing ``/data`` stripped) -- e.g. ``{sample_name}/merfish`` from
+      ``folder_name = "{sample_name}/merfish/data"``.
+
+    Parameters
+    ----------
+    sample_dir  : this experiment's local acquisition-root ``Path`` (whatever
+                  OS the notebook is currently running on)
+    sample_name : experiment id, e.g. ``"251225_LT027_saving_time"``
+    folder_name : ``experiment_info.yaml``'s ``folder_name`` (e.g.
+                  ``"{sample_name}/merfish/data"``)
+
+    Returns
+    -------
+    str : POSIX absolute path to the acquisition root, for use as the
+          generated script's ``$SAMPLE_DIR``
+    """
+    if sys.platform.startswith("linux"):
+        return sample_dir.as_posix()
+
+    acquisition_subpath = (
+        folder_name[: -len("/data")] if folder_name.endswith("/data") else folder_name
+    )
+    upper_name = sample_name.upper()
+    for token, root in _PROJECT_CLUSTER_ROOTS.items():
+        if token in upper_name:
+            return f"{root}/{acquisition_subpath}"
+    raise ValueError(
+        f"Cannot infer the cluster project root for sample_name={sample_name!r}: "
+        f"expected it to contain one of {list(_PROJECT_CLUSTER_ROOTS)}. "
+        f"Extend _PROJECT_CLUSTER_ROOTS in merlin_config.py for other projects."
+    )
+
+
 def create_slurm_submit_script(
     label:                    str,
+    sample_dir:               str,
     parameters_file:          str,
     analysis_file:            str,
     data_organization_file:   str,
@@ -245,11 +310,10 @@ def create_slurm_submit_script(
     codebook_file:            str,
     microscope_file:          str,
     data_home:                str,
-    merlin_home:              str,
     folder_name:              str,
     output_path:              Path,
-    slurm_out_path:            Optional[Path] = None,
-    slurm_err_path:            Optional[Path] = None,
+    slurm_out_path:            Optional[str] = None,
+    slurm_err_path:            Optional[str] = None,
     mem_mb:                    int    = 5000,
     time_limit:                str    = "2-00:00:00",
     partition:                 str    = "zhuang",
@@ -266,28 +330,45 @@ def create_slurm_submit_script(
     env and no cuda/cudnn modules; the notebook itself had drifted out of
     sync with current cluster practice).
 
+    Every path the script needs is written relative to one ``$SAMPLE_DIR``
+    bash variable (see *sample_dir*) instead of five separately-resolved
+    absolute paths, so the script stays readable and portable between the
+    machine that generated it and the cluster that runs it.
+
     Parameters
     ----------
     label          : job label, used in ``echo`` and default log filenames
                      (e.g. ``"LT048_sample_26_epi_deconv"``)
-    *_file         : filenames merlin resolves relative to its own config
-                     search paths (not full paths) — matches the ``-k -a -o
-                     -p -c -m`` flags below
-    data_home/merlin_home/folder_name : merlin's ``-e -s`` flags + positional arg
+    sample_dir     : this experiment's acquisition-root path as addressed from
+                     the cluster (see :func:`resolve_cluster_sample_dir`) —
+                     written into the script as ``SAMPLE_DIR="..."``, which
+                     every ``*_file`` below is resolved against
+    *_file         : POSIX paths *relative to sample_dir* (e.g.
+                     ``"merlin/analysis/merlin_analysis_X.json"``) — matches
+                     the ``-k -a -o -p -c -m`` flags below, each emitted as
+                     ``"$SAMPLE_DIR/<file>"``
+    data_home      : merlin's ``-e`` flag — the root of ALL experiments on the
+                     cluster; independent of *sample_dir* (a different,
+                     broader root), so passed through as-is
+    folder_name    : merlin's positional arg — the raw-data path, relative to
+                     *data_home*
     output_path    : where to write this script
-    slurm_out_path/slurm_err_path : SBATCH log paths; default to
-                     ``output_path.parent.parent / {"out","err"} / f"{label}.{out,err}"``
-                     (i.e. ``merlin/slurm/{out,err}/`` when *output_path* is
-                     ``merlin/slurm/submit/...``), replacing the old shared
-                     ``~/Software/merfish-parameters/slurm/{out,err}/`` location
+    slurm_out_path/slurm_err_path : POSIX paths *relative to sample_dir* for
+                     the SBATCH log files; default to
+                     ``"merlin/slurm/{out,err}/{label}.{out,err}"``. SBATCH
+                     directives are parsed by the scheduler before the script
+                     runs as shell, so they can't expand ``$SAMPLE_DIR`` —
+                     these are written as a literal ``{sample_dir}/...`` path
     conda_pkgs_dir/conda_envs_path : lab-wide conda storage convention;
                      override if this changes
     """
     output_path = Path(output_path)
     if slurm_out_path is None:
-        slurm_out_path = output_path.parent.parent / "out" / f"{label}.out"
+        slurm_out_path = f"merlin/slurm/out/{label}.out"
     if slurm_err_path is None:
-        slurm_err_path = output_path.parent.parent / "err" / f"{label}.err"
+        slurm_err_path = f"merlin/slurm/err/{label}.err"
+
+    sample_dir = sample_dir.rstrip("/")
 
     script = f"""#!/bin/bash
 #SBATCH -n 1
@@ -296,8 +377,8 @@ def create_slurm_submit_script(
 #SBATCH -t {time_limit}
 #SBATCH --mem {mem_mb}
 #SBATCH --open-mode=append
-#SBATCH -o {slurm_out_path}
-#SBATCH -e {slurm_err_path}
+#SBATCH -o {sample_dir}/{slurm_out_path}
+#SBATCH -e {sample_dir}/{slurm_err_path}
 
 date +'Starting at %R.'
 
@@ -309,15 +390,17 @@ export CONDA_ENVS_PATH={conda_envs_path}
 source activate {conda_env}
 echo {label}
 
-merlin -k {parameters_file} \\
-       -a {analysis_file} \\
-       -o {data_organization_file} \\
-       -p {positions_file} \\
-       -c {codebook_file} \\
-       -m {microscope_file} \\
+SAMPLE_DIR="{sample_dir}"
+
+merlin -k "$SAMPLE_DIR/{parameters_file}" \\
+       -a "$SAMPLE_DIR/{analysis_file}" \\
+       -o "$SAMPLE_DIR/{data_organization_file}" \\
+       -p "$SAMPLE_DIR/{positions_file}" \\
+       -c "$SAMPLE_DIR/{codebook_file}" \\
+       -m "$SAMPLE_DIR/{microscope_file}" \\
        -n 1000 \\
        -e {data_home} \\
-       -s {merlin_home} \\
+       -s "$SAMPLE_DIR/merlin" \\
        {folder_name}
 
 date +'Finished at %R.'
