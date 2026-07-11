@@ -167,17 +167,20 @@ def create_data_drive_skeleton(
     boundaries:  Optional[Sequence] = None,
 ) -> None:
     """
-    Pre-create the ``data/[tissue_{t}/]hybs/H01..H0N`` folder skeleton on
-    EVERY drive in *data_drives* (not just the one drive each round is
-    actually assigned to), so every disk has an identical, predictable
-    structure before acquisition starts.
+    Pre-create the ``data/[tissue_{t}/]hybs/H##`` folder skeleton, creating
+    each hyb's ``H##`` folder ONLY on the drive it is actually round-robin-
+    assigned to (via :func:`_drive_for_bit` — the same assignment
+    ``create_round_info``/``create_round_info_multitissue`` use for
+    ``round_info.csv``), not on every configured drive. This way a drive's
+    folder listing alone tells you which hybs it holds, and can never disagree
+    with what ``round_info.csv`` says.
 
     This is a convenience layered on top of ``create_dave_config``'s
     ``create_data_dirs=True`` (default), which already creates only the one
     directory each round strictly needs for HAL's existence check — calling
     this function is optional; skipping it would not break round-robin
-    writing, it would just leave each drive's non-assigned H-folders absent
-    until their round comes up.
+    writing, it would just leave each drive's H-folders absent until their
+    round comes up.
 
     Parameters
     ----------
@@ -192,12 +195,11 @@ def create_data_drive_skeleton(
     boundaries  : ordered ``BoundarySpec`` list (required when ``mode == "multi"``)
     """
     tissues = sorted({b.tissue for b in boundaries}) if (mode == "multi" and boundaries) else [None]
-    for drive in data_drives:
-        root = _normalize_drive_root(drive)
+    for bit_idx in range(1, n_bits + 1):
+        root = _drive_for_bit(bit_idx, data_drives)
         for tissue in tissues:
             base = (root / "data" / f"tissue_{tissue}") if tissue is not None else (root / "data")
-            for bit_idx in range(1, n_bits + 1):
-                (base / "hybs" / f"H{bit_idx:02d}").mkdir(parents=True, exist_ok=True)
+            (base / "hybs" / f"H{bit_idx:02d}").mkdir(parents=True, exist_ok=True)
 
 
 # ── round_info builder ─────────────────────────────────────────────────────────
