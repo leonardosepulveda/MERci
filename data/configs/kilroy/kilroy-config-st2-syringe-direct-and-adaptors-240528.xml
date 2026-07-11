@@ -238,16 +238,18 @@
 
   <kilroy_protocols>
 
+    <!--
   	<protocol name = "Cleave">
      	<valve duration = "5">Set TCEP</valve>
     	<pump duration  = "900">Flow 2mL</pump>
      	<valve duration = "5">Set SSC</valve>
     	<pump duration  = "180">Flow 2mL</pump>
-		<valve duration ="10">Set Wash</valve>
-        <pump duration  ="120">Flow 1mL</pump>
+		  <valve duration ="10">Set Wash</valve>
+      <pump duration  ="120">Flow 1mL</pump>
     </protocol>
+    -->
 
-  	<protocol name = "Cleave Slow">
+  	<protocol name = "Cleave Direct">
      	<valve duration = "5">Set TCEP</valve>
     	<pump duration = "900">Flow 2mL</pump>
      	<valve duration = "5">Set SSC</valve>
