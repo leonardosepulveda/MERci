@@ -117,10 +117,12 @@ def find_kilroy_config(
     """
     Locate the Kilroy config for *microscope* in *kilroy_dir*.
 
-    Files are matched case-insensitively by microscope name and, when several
-    match, the newest by trailing ``YYMMDD`` date stamp is chosen.  When no file
-    matches *microscope*, the newest config for *fallback_microscope* is returned
-    instead (border case: a microscope without its own Kilroy config).
+    Files are matched case-insensitively by microscope name. When several match, a
+    dated config (filename ending in a ``YYMMDD`` stamp) is always preferred over
+    an undated one (e.g. a "thick"/draft variant with no date suffix), and the
+    newest by that stamp is chosen among dated configs. When no file matches
+    *microscope*, the newest config for *fallback_microscope* is returned instead
+    (border case: a microscope without its own Kilroy config).
 
     Raises
     ------
@@ -129,15 +131,19 @@ def find_kilroy_config(
     """
     kilroy_dir = Path(kilroy_dir)
 
-    def _date(p: Path) -> int:
+    def _date(p: Path) -> Optional[int]:
         m = re.search(r"(\d{6})\.xml$", p.name)
-        return int(m.group(1)) if m else 0
+        return int(m.group(1)) if m else None
 
     def _candidates(mic: str) -> List[Path]:
-        return sorted(
-            (p for p in kilroy_dir.glob("*.xml") if mic.lower() in p.name.lower()),
-            key=_date,
-        )
+        matches = [p for p in kilroy_dir.glob("*.xml") if mic.lower() in p.name.lower()]
+        # Prefer a dated config (filename ending in a YYMMDD stamp) over an undated
+        # one -- e.g. a "thick"/draft variant with no date suffix is never picked
+        # while a real dated config for the same microscope exists. Among dated
+        # configs, prefer the newest by that stamp.
+        dated = [p for p in matches if _date(p) is not None]
+        pool = dated if dated else matches
+        return sorted(pool, key=lambda p: _date(p) or 0)
 
     cands = _candidates(microscope)
     if cands:
