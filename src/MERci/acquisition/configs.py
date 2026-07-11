@@ -165,6 +165,37 @@ def get_fov_geometry(microscope: Optional[str]) -> FOVGeometry:
                        image_size_px=width)
 
 
+# Acquisition type (imaging modality) per microscope. This is independent of the
+# channel-mapping / camera-geometry groupings above — e.g. MF2 shares MF3-MF5's
+# channel map and camera but is physically a spinning-disk confocal scope, not
+# epifluorescence. MFX, ST2 and MF2 are spinning-disk confocal ("disk"); MF3,
+# MF4 and MF5 are epifluorescence ("epi").
+_ACQUISITION_TYPE: Dict[str, str] = {
+    "MF2": "disk", "MFX": "disk", "ST2": "disk",
+    "MF3": "epi",  "MF4": "epi",  "MF5": "epi",
+}
+
+
+def get_acquisition_type(microscope: Optional[str]) -> Optional[str]:
+    """
+    Return the acquisition type — ``"epi"`` (epifluorescence) or ``"disk"``
+    (spinning-disk confocal) — for *microscope*.
+
+    Parameters
+    ----------
+    microscope : microscope id, case-insensitive (e.g. ``"MF3"``, ``"st2"``);
+                 may be ``None``
+
+    Returns
+    -------
+    str or None
+        ``"epi"`` or ``"disk"``, or ``None`` if *microscope* is unrecognised —
+        extend ``_ACQUISITION_TYPE`` for new scopes rather than guessing.
+    """
+    key = str(microscope).strip().upper() if microscope is not None else ""
+    return _ACQUISITION_TYPE.get(key)
+
+
 def _normalise_colour_key(color) -> Optional[int]:
     """Return *color* as an int wavelength for dict lookup, or ``None`` for NaN.
 

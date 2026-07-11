@@ -28,7 +28,7 @@ import yaml
 # Columns handled by ExperimentInfo's named fields; everything else read from
 # a CSV row (or passed to `extra`) is a project-specific straggler.
 _CORE_FIELDS = (
-    "sample_name", "project", "microscope", "lib_name",
+    "sample_name", "project", "microscope", "acquisition_type", "lib_name",
     "data_home", "merlin_home", "folder_name",
 )
 
@@ -41,26 +41,31 @@ class ExperimentInfo:
 
     Attributes
     ----------
-    sample_name : experiment/sample id, e.g. ``"LT048_sample_26"``
-    project     : which master-CSV schema this maps to — ``"bc"``, ``"lt"``,
-                  or ``"mf"``
-    microscope  : microscope id, e.g. ``"MF3"``
-    lib_name    : codebook/probe-library name, e.g. ``"LT2"``
-    data_home   : cluster root directory holding the raw data
-    merlin_home : cluster root directory for MERlin's analysis output
-    folder_name : path (relative to ``data_home``) to this experiment's data
-    extra       : every other master-CSV column (e.g. ``exposure``,
-                  ``hyb_temp``, ``fix_type``, ``positions_path``,
-                  ``positions_name`` / ``positions_file``, ...)
+    sample_name      : experiment/sample id, e.g. ``"LT048_sample_26"``
+    project          : which master-CSV schema this maps to — ``"bc"``, ``"lt"``,
+                       or ``"mf"``
+    microscope       : microscope id, e.g. ``"MF3"``
+    acquisition_type : imaging modality derived from ``microscope`` —
+                       ``"epi"`` (epifluorescence) or ``"disk"`` (spinning-disk
+                       confocal); see
+                       :func:`MERci.acquisition.configs.get_acquisition_type`
+    lib_name         : codebook/probe-library name, e.g. ``"LT2"``
+    data_home        : cluster root directory holding the raw data
+    merlin_home      : cluster root directory for MERlin's analysis output
+    folder_name      : path (relative to ``data_home``) to this experiment's data
+    extra            : every other master-CSV column (e.g. ``exposure``,
+                       ``hyb_temp``, ``fix_type``, ``positions_path``,
+                       ``positions_name`` / ``positions_file``, ...)
     """
 
-    sample_name: str
-    project:     str
-    microscope:  str
-    lib_name:    str
-    data_home:   str
-    merlin_home: str
-    folder_name: str
+    sample_name:      str
+    project:          str
+    microscope:       str
+    acquisition_type: str
+    lib_name:         str
+    data_home:        str
+    merlin_home:      str
+    folder_name:      str
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
