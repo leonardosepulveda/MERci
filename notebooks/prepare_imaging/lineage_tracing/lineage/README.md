@@ -24,7 +24,7 @@ These notebooks live **four** levels under the repo root
   (wrapping the last back to the first). It creates
   `data/tissue_{t}/{cells,hybs,transit}` and `data/mosaic10x`, and writes
   per-segment positions files plus per-tissue FOV-only files.
-- Notebook 03 emits a per-segment Dave recipe (a `<loop>` per boundary/transit
+- Notebook 04 emits a per-segment Dave recipe (a `<loop>` per boundary/transit
   movie) using the transit HAL config from notebook 01.
 - If `positions/` is empty, notebook 02 falls back to the bundled example set
   selected by `EXAMPLE_LAYOUT` (default `"multi"` here) under
@@ -40,20 +40,21 @@ defaults until confirmed):
 - `01`: `MICROSCOPE`, `POWER`, `color_seq`, z-range, `EXPOSURE_TIME`,
   `N_TRANSIT_BLANK`.
 - `02`: `TRANSIT_SPACING`, `SCAN_DIRECTION`.
-- `03`: `N_HYBS`, `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
-- `04`: `COLOR_USAGE_ROWS`/`COLOR_USAGE_ROWS_MF` (manual round-tag mapping —
+- `03`: `round_bit_color` mapping to match the codebook (derives `N_HYBS`).
+- `04`: `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
+- `05`: `COLOR_USAGE_ROWS`/`COLOR_USAGE_ROWS_MF` (manual round-tag mapping —
   which round/color images which target; not derived from `round_info.csv`)
   and `TARGETS` (decoding strategy).
-- `06`: `MERFISH_SAMPLE_DIR` (defaults to the sibling `../merfish/` acquisition),
+- `07`: `MERFISH_SAMPLE_DIR` (defaults to the sibling `../merfish/` acquisition),
   `LINEAGE_LIB_VERSION`, `REF_SERIES`, and `FishtankScriptsSpec`.
 
 ## Analyzed with fishtank, not MERlin
 
 Unlike every other variant/acquisition-type in this repo, `lineage_tracing/
 lineage` experiments are analyzed with **fishtank**, not MERlin — so this
-variant's notebook **04** is `04_create_color_usage.ipynb` (fishtank's
+variant's notebook **05** is `05_create_color_usage.ipynb` (fishtank's
 `color_usage`/`decoding_strategy` config, not MERlin's `data_organization`)
-and notebook **06** is `06_create_fishtank_scripts.ipynb` (writes
+and notebook **07** is `07_create_fishtank_scripts.ipynb` (writes
 `SAMPLE_DIR/fishtank/`, not `SAMPLE_DIR/merlin/`). See
 `MERci/src/MERci/acquisition/fishtank_config.py` and CLAUDE.md's
 "Pre-experiment workflow" section for details. Assumes the sibling-folder
