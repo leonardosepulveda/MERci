@@ -34,5 +34,5 @@ defaults until confirmed):
 
 - `01`: `MICROSCOPE`, `POWER`, `color_seq`, z-range, `EXPOSURE_TIME`,
   `N_TRANSIT_BLANK`.
-- `03`: `N_HYBS`, `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
-- `04`: `round_bit_color` mapping to match the codebook.
+- `03`: `round_bit_color` mapping to match the codebook (derives `N_HYBS`).
+- `04`: `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
