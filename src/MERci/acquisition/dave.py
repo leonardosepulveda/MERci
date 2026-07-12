@@ -72,6 +72,23 @@ def series_to_movie_name(series: str) -> str:
     return re.sub(r"_\{[^}]+\}$", "", series)
 
 
+def dave_config_filename(microscope: str, n_hybs: int, sample_name: str) -> str:
+    """
+    Dave recipe filename: ``dave-{mic}-{n_hybs}hybs-{sample_name}.xml``.
+
+    A single source of truth for this name, shared by the notebook that writes
+    the recipe and the one that later re-opens it to annotate it with bit
+    info -- constructing the exact expected filename rather than globbing
+    ``settings/dave-*.xml`` and guessing which match is "the" recipe. That
+    guess breaks as soon as more than one dave-*.xml exists in the same
+    settings/ folder (e.g. two acquisitions sharing one sample folder before
+    it's split into per-acquisition subfolders): sorting alphabetically picks
+    "dave-{mic}-13hybs-…" before "dave-{mic}-9hybs-…" (string comparison, not
+    numeric), so the wrong file's annotated silently.
+    """
+    return f"dave-{microscope.lower()}-{n_hybs}hybs-{sample_name}.xml"
+
+
 def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
     """
     Best-effort microscope id from the ``series`` names in *round_info*.
@@ -507,9 +524,18 @@ def create_dave_config(
       ``positions_dir`` is given (the multi-boundary layout from
       ``create_round_info_multitissue``). Because a Dave loop iterates exactly one
       positions file, each segment (boundary or transit) becomes its **own**
-      ``<loop>`` — named ``"Imaging Round NN - <segment>"`` — with its own movie,
-      HAL config and positions file, in ``round_info`` row order. Fluidics loops
-      still sit between rounds (after a round's last segment loop).
+      ``<loop>`` — named ``"Imaging Round NN - <segment>"`` — with its own movie
+      and HAL config, in ``round_info`` row order. Fluidics loops still sit
+      between rounds (after a round's last segment loop).
+
+    **One ``<loop_variable>`` per positions file, not per round.** Every round
+    that visits a given segment (a boundary's cells/bits movies, or a transit)
+    iterates the exact same positions file, so its ``<loop_variable>`` is
+    declared once — keyed by segment name (``round_info``'s ``segment`` column
+    in per-segment mode; a single shared name in single-positions mode) — and
+    every round's ``<loop>`` (still one per round, or one per round+segment)
+    references that one shared ``<loop_variable>`` via `<variable_entry>`,
+    instead of each round minting its own identical copy.
 
       When the rows carry ``fov_start``/``fov_pad`` (produced by
       ``create_round_info_multitissue``), each movie ``<name>`` is emitted with
@@ -639,6 +665,8 @@ def create_dave_config(
     fluidics_loop_vars: list[tuple[str, list[str]]] = []
     created_dirs:       set[str]                    = set()
     current_dir:        Optional[str]               = None   # last <change_directory> emitted
+    emitted_position_vars: set[str]                 = set()  # segment names already given a loop_variable
+    SINGLE_POSITIONS_VAR = "Positions"   # shared loop_variable name in single-positions mode
 
     def _add_change_directory(dir_value) -> None:
         """
@@ -781,7 +809,10 @@ def create_dave_config(
         rows    = round_info[round_info["imaging_round"] == round_id]
 
         if segment_mode:
-            # One loop per segment (a Dave loop iterates a single positions file).
+            # One loop per (round, segment) -- a Dave loop iterates a single
+            # positions file -- but the loop_variable itself is keyed by segment
+            # alone, so every round visiting that segment references the SAME
+            # positions file declaration instead of each minting its own copy.
             # Each segment sets its own save directory just before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
@@ -789,18 +820,24 @@ def create_dave_config(
                 _add_change_directory(row.get("data_dir"))
                 loop  = ET.SubElement(seq, "loop")
                 loop.set("name", lname)
-                _add_movie(loop, row, lname)
-                imaging_loop_vars.append((lname, str(positions_dir / str(row["positions_file"]))))
+                _add_movie(loop, row, seg)
+                if seg not in emitted_position_vars:
+                    emitted_position_vars.add(seg)
+                    imaging_loop_vars.append((seg, str(positions_dir / str(row["positions_file"]))))
         else:
             # Single loop for the round; all movies share positions_file and one
-            # save directory (from the round's first row's data_dir).
+            # save directory (from the round's first row's data_dir). Every round
+            # references the SAME shared loop_variable (there is only ever one
+            # positions file in this layout) instead of each declaring its own.
             img_name = f"Imaging Round {round_id:02d}"
             _add_change_directory(rows.iloc[0].get("data_dir") if has_data_dir else None)
             img_loop = ET.SubElement(seq, "loop")
             img_loop.set("name", img_name)
             for _, row in rows.iterrows():
-                _add_movie(img_loop, row, img_name)
-            imaging_loop_vars.append((img_name, str(positions_file)))
+                _add_movie(img_loop, row, SINGLE_POSITIONS_VAR)
+            if SINGLE_POSITIONS_VAR not in emitted_position_vars:
+                emitted_position_vars.add(SINGLE_POSITIONS_VAR)
+                imaging_loop_vars.append((SINGLE_POSITIONS_VAR, str(positions_file)))
 
         _add_fluidics(round_id, is_last)
 
