@@ -102,6 +102,40 @@ def measure_folder(path: Path) -> dict:
     }
 
 
+# Windows-reserved folders present on every drive (e.g. the recycle bin, the
+# volume-shadow-copy store) that even an administrator normally cannot list --
+# not real lab-member data, so skip them by name rather than letting the
+# PermissionError they raise abort the whole scan.
+_IGNORED_DIR_NAMES = {"system volume information", "$recycle.bin", "recycler"}
+
+
+def _safe_subdirs(path: Path) -> List[Path]:
+    """
+    List the subdirectories of `path`, skipping anything inaccessible.
+
+    Every Windows drive carries OS-reserved folders that even the drive's
+    regular users cannot list, and any lab member's own folder could in
+    principle have a restrictive ACL. Skip either case with a printed warning
+    instead of raising, so one locked-down folder doesn't abort the scan for
+    every other drive/lab member.
+    """
+    try:
+        entries = list(path.iterdir())
+    except OSError as e:
+        print(f"WARNING: cannot list {path}: {e}")
+        return []
+    result = []
+    for p in entries:
+        if p.name.lower() in _IGNORED_DIR_NAMES:
+            continue
+        try:
+            if p.is_dir():
+                result.append(p)
+        except OSError as e:
+            print(f"WARNING: cannot stat {p}: {e}")
+    return result
+
+
 def discover_sample_dirs(roots: List[Union[str, Path]]) -> List[dict]:
     """
     Find every {lab_member}/{sample_dir} folder under each root.
@@ -117,7 +151,8 @@ def discover_sample_dirs(roots: List[Union[str, Path]]) -> List[dict]:
     -------
     list of dict, each with keys `root`, `lab_member`, `sample_dir`, `path`.
     A root that doesn't exist (e.g. a disconnected drive) is skipped with a
-    printed warning rather than raising.
+    printed warning rather than raising, as is any subfolder that can't be
+    listed (Windows-reserved folders, or another user's locked-down folder).
     """
     found = []
     for root in roots:
@@ -125,8 +160,8 @@ def discover_sample_dirs(roots: List[Union[str, Path]]) -> List[dict]:
         if not root.is_dir():
             print(f"WARNING: root not found, skipping: {root}")
             continue
-        for lab_member_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-            for sample_dir in sorted(p for p in lab_member_dir.iterdir() if p.is_dir()):
+        for lab_member_dir in sorted(_safe_subdirs(root)):
+            for sample_dir in sorted(_safe_subdirs(lab_member_dir)):
                 found.append({
                     "root": str(root),
                     "lab_member": lab_member_dir.name,
