@@ -24,7 +24,7 @@ These notebooks live **four** levels under the repo root
   (wrapping the last back to the first). It creates
   `data/tissue_{t}/{cells,hybs,transit}` and `data/mosaic10x`, and writes
   per-segment positions files plus per-tissue FOV-only files.
-- Notebook 03 emits a per-segment Dave recipe (a `<loop>` per boundary/transit
+- Notebook 04 emits a per-segment Dave recipe (a `<loop>` per boundary/transit
   movie) using the transit HAL config from notebook 01.
 - If `positions/` is empty, notebook 02 falls back to the bundled example set
   selected by `EXAMPLE_LAYOUT` (default `"multi"` here) under
@@ -40,7 +40,8 @@ defaults until confirmed):
 - `01`: `MICROSCOPE`, `POWER`, `color_seq`, z-range, `EXPOSURE_TIME`,
   `N_TRANSIT_BLANK`.
 - `02`: `TRANSIT_SPACING`, `SCAN_DIRECTION`.
-- `03`: `N_HYBS`, `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
-- `04`: `round_bit_color` mapping to match the codebook. Note: multi-tissue
-  MERlin analysis is per tissue / per boundary — confirm the intended workflow
-  before relying on the generated data-organization.
+- `03`: `round_bit_color` mapping to match the codebook (derives `N_HYBS`).
+- `04`: `USE_ADAPTORS`, `FIRST_HYB_NO_CLEAVE`, `INCLUDE_FINAL_CLEAVE`.
+- `05`: Note: multi-tissue MERlin analysis is per tissue / per boundary —
+  confirm the intended workflow before relying on the generated
+  data-organization.
