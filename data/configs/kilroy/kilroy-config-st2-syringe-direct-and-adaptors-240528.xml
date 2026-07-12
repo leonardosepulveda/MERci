@@ -26,6 +26,18 @@
 		<valve_pos valve_ID = "3" port_ID = "8"></valve_pos>
     <valve_pos valve_ID = "4" port_ID = "1"></valve_pos>
   </valve_cmd>
+
+    <!-- PLACEHOLDER: copied verbatim from "Seal" pending verification of the
+         real valve_ID/port_ID this scope's readout-probe line is plumbed to.
+         Do NOT run adaptor-hybridization fluidics on real hardware until this
+         is corrected. -->
+    <valve_cmd name = "Set Readouts">
+		<valve_pos valve_ID = "1" port_ID = "8"></valve_pos>
+		<valve_pos valve_ID = "2" port_ID = "8"></valve_pos>
+		<valve_pos valve_ID = "3" port_ID = "8"></valve_pos>
+        <valve_pos valve_ID = "4" port_ID = "7"></valve_pos>
+    </valve_cmd>
+
 	<valve_cmd name = "Seal">
 		<valve_pos valve_ID = "1" port_ID = "8"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "8"></valve_pos>
@@ -735,6 +747,23 @@
      </protocol>
 
 	 <!-- ADAPTOR HYBRIDIZATION -->
+
+        <!-- PLACEHOLDER: modeled on "Hybridize Adaptors 1" below (Set Hyb 1
+             swapped for the new "Set Readouts" valve_cmd, itself a placeholder
+             copy of "Seal"). Verify the real valve wiring and wash/SSC timing
+             for this scope's readout probes before running on real hardware. -->
+        <protocol name = "Hybridize Readouts">
+        <valve duration = "5">Set Readouts</valve>
+        <pump duration = "1200">Flow 3mL slow</pump>
+        <valve duration = "5">Set Wash</valve>
+        <pump duration = "600">Flow 2mL</pump>
+        <valve duration = "5">Set SSC</valve>
+        <pump duration = "1200">Flow 3mL slow</pump>
+        <valve duration = "5">Set Wash</valve>
+        <pump duration = "600">Flow 2mL</pump>
+        <valve duration = "5">Set Image</valve>
+        <pump duration = "600">Flow 2mL</pump>
+    </protocol>
 
         <protocol name = "Hybridize Adaptors 1">
         <valve duration = "5">Set Hyb 1</valve>
