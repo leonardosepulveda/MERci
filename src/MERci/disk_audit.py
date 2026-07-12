@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, List, Union
+from typing import Iterator, List, Tuple, Union
 
 import pandas as pd
 
@@ -205,3 +205,39 @@ def audit_disk_usage(roots: List[Union[str, Path]], verbose: bool = True) -> pd.
             (pd.Timestamp.now() - pd.to_datetime(df["created"])).dt.days
         )
     return df
+
+
+def group_by_lab_member(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
+    """
+    Group an audit DataFrame by lab member, case-insensitively.
+
+    The same person's folder can appear under slightly different casing --
+    across drives, or just because Windows Explorer lets people rename a
+    folder without warning it already exists differently-cased (e.g. "Didar"
+    on one drive, "didar" on another) -- which a plain `df.groupby("lab_member")`
+    would wrongly treat as two different people. Folders under the same name
+    on different roots (e.g. `D:/Data/Aaron` and `E:/Aaron`) already merge
+    correctly with a plain groupby, since grouping is on the folder name
+    alone; this only additionally folds together casing variants of that name.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have a `lab_member` column (e.g. from `audit_disk_usage`).
+
+    Returns
+    -------
+    list of (display_name, group_df) tuples, sorted by display_name
+    case-insensitively. `display_name` is the single casing found, or every
+    distinct casing seen joined with " / " (e.g. "Didar / didar") so a casing
+    merge is visible rather than silently picking one spelling.
+    """
+    if df.empty:
+        return []
+    groups = []
+    for _, group in df.groupby(df["lab_member"].str.lower()):
+        names = sorted(group["lab_member"].unique())
+        display_name = names[0] if len(names) == 1 else " / ".join(names)
+        groups.append((display_name, group))
+    groups.sort(key=lambda item: item[0].lower())
+    return groups
