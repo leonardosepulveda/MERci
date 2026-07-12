@@ -250,7 +250,7 @@ _PROJECT_CLUSTER_ROOTS: Dict[str, str] = {
 }
 
 
-def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, folder_name: str) -> str:
+def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: str) -> str:
     """
     Resolve this experiment's acquisition-root path as it will be addressed
     from the Linux cluster -- the directory holding this MERci clone,
@@ -266,17 +266,20 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, folder_name: 
     * On Windows, that path doesn't exist yet, so it is predicted from
       *sample_name*: a name containing ``"BC"`` resolves under the
       breast_cancer project root, ``"LT"`` under lineage_tracing (see
-      ``_PROJECT_CLUSTER_ROOTS``), joined with *folder_name*'s own directory
-      (its trailing ``/data`` stripped) -- e.g. ``{sample_name}/merfish`` from
-      ``folder_name = "{sample_name}/merfish/data"``.
+      ``_PROJECT_CLUSTER_ROOTS``), joined with *imaging_dir* (the acquisition-
+      type subfolder between the sample and its MERci clone -- ``"merfish"``,
+      ``"lineage"``, ``"epi"``, ``"disk"`` -- or nothing when this acquisition
+      doesn't (yet) live under its own subfolder).
 
     Parameters
     ----------
     sample_dir  : this experiment's local acquisition-root ``Path`` (whatever
                   OS the notebook is currently running on)
     sample_name : experiment id, e.g. ``"251225_LT027_saving_time"``
-    folder_name : ``experiment_info.yaml``'s ``folder_name`` (e.g.
-                  ``"{sample_name}/merfish/data"``)
+    imaging_dir : acquisition-type subfolder name (``experiment_info.yaml``'s
+                  ``extra["imaging_dir"]``), e.g. ``"merfish"``; ``""`` when
+                  this acquisition's data/metadata/positions/settings/merlin
+                  sit directly under the sample folder (no subfolder)
 
     Returns
     -------
@@ -286,9 +289,7 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, folder_name: 
     if sys.platform.startswith("linux"):
         return sample_dir.as_posix()
 
-    acquisition_subpath = (
-        folder_name[: -len("/data")] if folder_name.endswith("/data") else folder_name
-    )
+    acquisition_subpath = f"{sample_name}/{imaging_dir}" if imaging_dir else sample_name
     upper_name = sample_name.upper()
     for token, root in _PROJECT_CLUSTER_ROOTS.items():
         if token in upper_name:
