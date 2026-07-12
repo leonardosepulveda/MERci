@@ -1,0 +1,172 @@
+"""
+Disk-usage auditing for shared microscope-computer drives.
+
+Scans a configurable list of drive/folder roots that each hold a
+``{root}/{lab_member}/{sample_dir}`` layout, measures the on-disk size and file
+timestamps of every ``sample_dir``, and returns one row per sample as a
+DataFrame -- the input to ``notebooks/misc/audit_disk_usage.ipynb``, which
+sorts it by age and by size to help decide whose data to ask to be deleted.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Iterator, List, Union
+
+import pandas as pd
+
+
+def _iter_files_recursive(path: Path) -> Iterator[os.DirEntry]:
+    """
+    Yield every regular file under `path`, recursing into subdirectories.
+
+    Symlinks/junctions are not followed, to avoid infinite loops on reparse
+    points (common on Windows network-attached storage). A subdirectory that
+    raises a permission/OS error is skipped rather than aborting the whole
+    walk, since a shared drive commonly has some folders another user has
+    locked down.
+    """
+    try:
+        with os.scandir(path) as it:
+            entries = list(it)
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_symlink():
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                yield from _iter_files_recursive(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                yield entry
+        except OSError:
+            continue
+
+
+def measure_folder(path: Path) -> dict:
+    """
+    Recursively measure a folder's total size and file timestamp range.
+
+    Parameters
+    ----------
+    path : Path
+        Folder to measure.
+
+    Returns
+    -------
+    dict with keys:
+        size_bytes : int
+            Sum of every file's size under `path`, in bytes.
+        n_files : int
+            Number of files counted.
+        created : datetime or None
+            The folder's own creation time (``st_ctime``, which on Windows is
+            genuinely creation time, not the Linux "metadata changed" meaning).
+            None if `path` itself is inaccessible.
+        earliest_file_modified, latest_file_modified : datetime or None
+            Oldest/newest file `mtime` found in the tree -- computed for free
+            in the same walk used for size, and a useful cross-check on
+            `created` (e.g. if the top folder was touched/renamed after the
+            data was copied in).
+    """
+    size_bytes = 0
+    n_files = 0
+    earliest = None
+    latest = None
+    for entry in _iter_files_recursive(path):
+        try:
+            stat = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        size_bytes += stat.st_size
+        n_files += 1
+        mtime = stat.st_mtime
+        if earliest is None or mtime < earliest:
+            earliest = mtime
+        if latest is None or mtime > latest:
+            latest = mtime
+
+    try:
+        created = datetime.fromtimestamp(Path(path).stat().st_ctime)
+    except OSError:
+        created = None
+
+    return {
+        "size_bytes": size_bytes,
+        "n_files": n_files,
+        "created": created,
+        "earliest_file_modified": datetime.fromtimestamp(earliest) if earliest else None,
+        "latest_file_modified": datetime.fromtimestamp(latest) if latest else None,
+    }
+
+
+def discover_sample_dirs(roots: List[Union[str, Path]]) -> List[dict]:
+    """
+    Find every {lab_member}/{sample_dir} folder under each root.
+
+    Parameters
+    ----------
+    roots : list of str or Path
+        Drive letters or folder paths, each expected to directly contain one
+        subfolder per lab member, which in turn contains one subfolder per
+        experiment sample: `{root}/{lab_member}/{sample_dir}`.
+
+    Returns
+    -------
+    list of dict, each with keys `root`, `lab_member`, `sample_dir`, `path`.
+    A root that doesn't exist (e.g. a disconnected drive) is skipped with a
+    printed warning rather than raising.
+    """
+    found = []
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            print(f"WARNING: root not found, skipping: {root}")
+            continue
+        for lab_member_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            for sample_dir in sorted(p for p in lab_member_dir.iterdir() if p.is_dir()):
+                found.append({
+                    "root": str(root),
+                    "lab_member": lab_member_dir.name,
+                    "sample_dir": sample_dir.name,
+                    "path": sample_dir,
+                })
+    return found
+
+
+def audit_disk_usage(roots: List[Union[str, Path]], verbose: bool = True) -> pd.DataFrame:
+    """
+    Measure size and age for every {lab_member}/{sample_dir} folder under `roots`.
+
+    Parameters
+    ----------
+    roots : list of str or Path
+        See `discover_sample_dirs`.
+    verbose : bool
+        Print progress (one line per sample folder) as each is measured -- a
+        full recursive size scan of a multi-terabyte experiment folder on a
+        network drive can take minutes, so silent operation would look hung.
+
+    Returns
+    -------
+    pd.DataFrame with one row per sample folder: `root`, `lab_member`,
+    `sample_dir`, `path`, `size_bytes`, `size_gb`, `n_files`, `created`,
+    `earliest_file_modified`, `latest_file_modified`, `days_since_created`.
+    """
+    samples = discover_sample_dirs(roots)
+    rows = []
+    for i, s in enumerate(samples, 1):
+        if verbose:
+            print(f"[{i}/{len(samples)}] measuring {s['root']}/{s['lab_member']}/{s['sample_dir']} ...")
+        stats = measure_folder(s["path"])
+        rows.append({**s, **stats})
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["size_gb"] = df["size_bytes"] / 1e9
+        df["days_since_created"] = (
+            (pd.Timestamp.now() - pd.to_datetime(df["created"])).dt.days
+        )
+    return df

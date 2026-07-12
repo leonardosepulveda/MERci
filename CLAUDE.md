@@ -161,6 +161,9 @@ src/MERci/
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, ExperimentScheduler — main analysis loops
   transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
+  disk_audit.py     # discover_sample_dirs, measure_folder (recursive size + file mtime range +
+                    #   folder creation time), audit_disk_usage — scans {root}/{lab_member}/{sample_dir}
+                    #   layouts on shared microscope-computer drives to find old/large data to clean up
 notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
     reference/       # canonical, fully-featured templates (keep up to date)
@@ -223,6 +226,11 @@ notebooks/
     verify_kilroy_protocol_consistency.ipynb       # verify a Kilroy config's protocols only reference defined
                                                    #   valve/pump commands; fuzzy-suggest + (after confirm) rewrite
                                                    #   mismatches in place (backup to *.bak), via kilroy.py helpers
+    audit_disk_usage.ipynb                         # scan a list of shared-drive roots laid out as
+                                                   #   {root}/{lab_member}/{sample_dir}, measure each sample
+                                                   #   folder's size + creation date (disk_audit.py), and display
+                                                   #   it sorted oldest-first and largest-first — to find whose
+                                                   #   data to ask to be cleared off a shared microscope computer
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
