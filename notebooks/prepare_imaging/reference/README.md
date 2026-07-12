@@ -1,6 +1,6 @@
 # prepare_imaging / reference
 
-Canonical, fully-featured copies of the four pre-experiment notebooks. The
+Canonical, fully-featured copies of the seven pre-experiment notebooks. The
 `tumor/` and `lineage_tracing/` folders are copies of these with their parameters
 tuned for a specific experiment type — edit those for real experiments and keep
 this `reference/` set as the up-to-date template.
@@ -12,9 +12,17 @@ Run order (same for every variant):
 2. `02_create_positions_from_tissue_boundary` — FOV grid per boundary + transit
    segments; writes per-segment / per-tissue positions files and the `data/`
    subfolders. Auto-detects the layout from the boundary filenames.
-3. `03_create_dave_config` — `round_info.csv` + Dave recipe (per-segment movies
-   when >1 boundary, else single-positions).
-4. `04_create_data_organization` — MERlin data organization + Dave bit annotation.
+3. `03_create_round_info` — round–bit–color map (+ derives `N_HYBS`) and
+   `round_info.csv`.
+4. `04_create_dave_config` — Dave recipe XML from `round_info.csv` (per-segment
+   movies when >1 boundary, else single-positions; each segment's positions
+   `loop_variable` is declared once and shared across that segment's rounds).
+5. `05_create_data_organization` — MERlin data organization + Dave bit
+   annotation (locates the notebook-04 dave file by its deterministic name,
+   not by globbing `settings/dave-*.xml`).
+6. `06_create_experiment_info` — writes `metadata/experiment_info.yaml`.
+7. `07_create_merlin_scripts` — writes `SAMPLE_DIR/merlin/` (analysis
+   parameters, snakemake config, slurm submit script).
 
 Boundary-file layouts recognised by notebook 02 (in `positions/`):
 
@@ -31,6 +39,7 @@ because it lives three levels under the repo root
 If `SAMPLE_DIR/positions/` has no boundary files, notebook 02 falls back to a
 bundled example dataset under `MERci/data/positions/examples/`, selected by the
 `EXAMPLE_LAYOUT` variable (`"legacy"`, `"single"`, or `"multi"`), and copies that
-example's boundary + hole inputs into `positions/` so notebooks 03/04 find them.
+example's boundary + hole inputs into `positions/` so notebooks 03/04 find them
+(round_info.csv/dave config resolution both read `positions/` directly).
 This lets you run the whole pipeline end-to-end before drawing real tissue
 boundaries.
