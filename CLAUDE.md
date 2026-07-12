@@ -50,14 +50,14 @@ SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
                         positions_{SAMPLE_NAME}.txt (from prepare_imaging/02)
   metadata/          ← frame_table_*.csv, shutter_sequence_*.png (prepare_imaging/01),
                         round_info.csv, round_bit_color_map.csv (prepare_imaging/03),
-                        data_organization_*.csv (prepare_imaging/04),
-                        experiment_info.yaml (prepare_imaging/05)
-  settings/          ← hal-config-*.xml, shutter-*.xml (prepare_imaging/01), dave-*.xml (prepare_imaging/03)
+                        data_organization_*.csv (prepare_imaging/05),
+                        experiment_info.yaml (prepare_imaging/06)
+  settings/          ← hal-config-*.xml, shutter-*.xml (prepare_imaging/01), dave-*.xml (prepare_imaging/04)
   data/              ← raw image files; exact subfolder structure defined by the `dir`
                         column in round_info.csv (written by HAL during acquisition)
   analysis/          ← thumbnails/, stats/, histograms/, mosaics/, done/
                         (produced by the analysis/01 and analysis/02 schedulers)
-  merlin/            ← per-experiment MERlin config/run files (prepare_imaging/06):
+  merlin/            ← per-experiment MERlin config/run files (prepare_imaging/07):
                         analysis/merlin_analysis_{SAMPLE_NAME}.json,
                         snakemake/{parameters,cluster_resource_allocation}_{SAMPLE_NAME}.json,
                         slurm/submit/merlin_slurm_{SAMPLE_NAME}.sh
@@ -106,7 +106,12 @@ src/MERci/
                     #   positions_file/tissue/segment cols; both take data_drives= to round-robin hyb
                     #   rounds across physical drives), create_data_drive_skeleton (pre-creates each
                     #   hyb's H## folder only on the drive it's actually assigned to), create_dave_config
-                    #   (positions_dir= enables per-segment loops), annotate_dave_with_round_info,
+                    #   (positions_dir= enables per-segment loops; each segment's positions loop_variable
+                    #   is emitted once and shared across that segment's rounds, not duplicated per round),
+                    #   dave_config_filename (single source of truth for the dave-{mic}-{N}hybs-{name}.xml
+                    #   name, shared by the notebook that writes it and the one that later annotates it --
+                    #   avoids globbing settings/dave-*.xml and picking the wrong file when two acquisitions
+                    #   with different hyb counts share one settings/ folder), annotate_dave_with_round_info,
                     #   series_to_movie_name, get_hal_frame_count
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
                     # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names.
@@ -160,13 +165,13 @@ notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
     reference/       # canonical, fully-featured templates (keep up to date)
     tumor/           # single tissue section per coverslip; split by acquisition type:
-      epi/           #   epifluorescence acquisition — full copy of the 6 notebooks
-      disk/          #   spinning-disk confocal acquisition — full copy of the 6 notebooks
+      epi/           #   epifluorescence acquisition — full copy of the 7 notebooks
+      disk/          #   spinning-disk confocal acquisition — full copy of the 7 notebooks
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
     lineage_tracing/ # multiple tissue sections per coverslip; split by acquisition type:
-      merfish/       #   MERFISH (codebook) acquisition — full copy of the 6 notebooks
-      lineage/       #   lineage-barcode acquisition — full copy of the 6 notebooks, but with
-                     #     DIFFERENT 04/06 notebooks (see below) — analyzed with fishtank, not
+      merfish/       #   MERFISH (codebook) acquisition — full copy of the 7 notebooks
+      lineage/       #   lineage-barcode acquisition — full copy of the 7 notebooks, but with
+                     #     DIFFERENT 05/07 notebooks (see below) — analyzed with fishtank, not
                      #     MERlin
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
@@ -174,19 +179,23 @@ notebooks/
       #                                                #   bits+cells, and a transit HAL config (blank frames)
       #   02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
       #                                                #   per-tissue positions files; creates data/ subfolders
-      #   03_create_dave_config.ipynb                 # round-bit-color map (+ derives N_HYBS), round_info.csv + Dave recipe
-      #   05_create_experiment_info.ipynb             # writes metadata/experiment_info.yaml (auto-fills what MERci
+      #   03_create_round_info.ipynb                  # round-bit-color map (+ derives N_HYBS) + round_info.csv
+      #   04_create_dave_config.ipynb                 # builds the Dave recipe XML from round_info.csv; each
+      #                                                #   segment's positions loop_variable is declared once and
+      #                                                #   shared across that segment's rounds
+      #   06_create_experiment_info.ipynb             # writes metadata/experiment_info.yaml (auto-fills what MERci
       #                                                #   already knows; biology/cluster-path fields left for the user)
       # tumor/{epi,disk}/ and lineage_tracing/merfish/ (MERlin-based) additionally have:
-      #   04_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick)
-      #   06_create_merlin_scripts.ipynb              # writes SAMPLE_DIR/merlin/ (analysis-parameters JSON via
+      #   05_create_data_organization.ipynb           # MERlin data-organization setup (transit-safe series pick);
+      #                                                #   also annotates the notebook-04 Dave XML with bit info
+      #   07_create_merlin_scripts.ipynb              # writes SAMPLE_DIR/merlin/ (analysis-parameters JSON via
       #                                                #   MerlinAnalysisSpec, snakemake/cluster-allocation JSON, slurm
       #                                                #   submit script); references the shared codebook/microscope
       #                                                #   files shipped in MERci/data/configs/merlin/ by path
       # lineage_tracing/lineage/ (fishtank-based) instead has:
-      #   04_create_color_usage.ipynb                 # fishtank's color_usage (manual round-tag mapping,
+      #   05_create_color_usage.ipynb                 # fishtank's color_usage (manual round-tag mapping,
       #                                                #   not derived from round_info.csv) + decoding_strategy
-      #   06_create_fishtank_scripts.ipynb            # writes SAMPLE_DIR/fishtank/ (folder skeleton, shared
+      #   07_create_fishtank_scripts.ipynb            # writes SAMPLE_DIR/fishtank/ (folder skeleton, shared
       #                                                #   reference files, every run script) via a
       #                                                #   FishtankScriptsSpec; reads the sibling merfish
       #                                                #   acquisition's data/positions (../merfish/, confirmed
@@ -219,7 +228,7 @@ data/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
     merlin/         # shared MERlin reference files, copied from R:\Software\merfish-parameters\
-                    #   (2026-active files only; see prepare_imaging/06 + merlin_config.py):
+                    #   (2026-active files only; see prepare_imaging/07 + merlin_config.py):
       microscope/    #   MERFISH{3,4,5}.json, STORM2FUSION_2304_60xSil.json (ST2)
       codebooks/     #   C3v1_codebook.csv, LT1v0_codebook.csv, LT2v0_codebook.csv
       snakemake/     #   cluster_resource_allocation_basic.json (template create_cluster_
@@ -235,15 +244,15 @@ data/
                     #   fallback when SAMPLE_DIR/positions is empty:
                     #   legacy/ (one boundary), single/ (1 tissue, 2 boundaries),
                     #   multi/ (2 tissues x 2 boundaries)
-  readouts.csv      # default codebook readout table (bit number -> readout name), read by prepare_imaging/04
+  readouts.csv      # default codebook readout table (bit number -> readout name), read by prepare_imaging/05
 ```
 
 ## Architecture
 
 ### Pre-experiment workflow
 
-Run the six `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
-order before starting the microscope. For `tumor` and `lineage_tracing` the six
+Run the seven `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
+order before starting the microscope. For `tumor` and `lineage_tracing` the seven
 notebooks live one level deeper under an acquisition-type subfolder
 (`prepare_imaging/tumor/{epi,disk}/`, `prepare_imaging/lineage_tracing/{merfish,lineage}/`);
 run the set for the acquisition being prepared.
@@ -264,23 +273,25 @@ Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**03** (`prepare_imaging/<variant>/03_create_dave_config.ipynb`): generates `round_info.csv` and the Dave experiment recipe XML. With a single boundary it uses the classic single-positions recipe (`create_round_info` + one `<loop>` per imaging round). With **multiple boundaries** it builds a **segment-aware** `round_info` (`create_round_info_multitissue`: one row per (round, segment) — boundary movies with the cells/bits config + transit movies with the transit config, plus `positions_file`, `tissue`, `segment` columns) and a **per-segment** Dave recipe (`create_dave_config(positions_dir=…)`: each boundary/transit segment is its own `<loop>` — "Imaging Round NN - <segment>" — with its own movie, HAL config and positions file, in order; fluidics loops stay between rounds). HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells); the transit HAL config from notebook 01 is auto-detected too. The Kilroy config for the microscope is resolved (via `find_kilroy_config`, falling back to MF2 when the microscope has no config) and passed to `create_dave_config` as the source of fluidic protocol names: every protocol written into the Dave recipe is resolved to — and required to exist as — a `<protocol>` in that Kilroy config, raising `ValueError` otherwise. This notebook also **defines the round–bit–colour mapping** (`round_bit_color`, one `(round, bit, color_nm)` per bit) and **derives `N_HYBS` from it** (`N_HYBS = max(round)`) rather than hard-coding it, so the hyb count always matches the codebook; it saves the mapping to `SAMPLE_DIR/metadata/round_bit_color_map.csv` for notebook 04 to reuse. Writes `SAMPLE_DIR/metadata/round_info.csv`, `SAMPLE_DIR/metadata/round_bit_color_map.csv`, and `SAMPLE_DIR/settings/dave-{mic}-{N}bits-{SAMPLE_NAME}.xml`.
+**03** (`prepare_imaging/<variant>/03_create_round_info.ipynb`): generates `round_info.csv`. With a single boundary it uses the classic single-positions recipe (`create_round_info`). With **multiple boundaries** it builds a **segment-aware** `round_info` (`create_round_info_multitissue`: one row per (round, segment) — boundary movies with the cells/bits config + transit movies with the transit config, plus `positions_file`, `tissue`, `segment` columns). HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells); the transit HAL config from notebook 01 is auto-detected too. This notebook also **defines the round–bit–colour mapping** (`round_bit_color`, one `(round, bit, color_nm)` per bit) and **derives `N_HYBS` from it** (`N_HYBS = max(round)`) rather than hard-coding it, so the hyb count always matches the codebook; it saves the mapping to `SAMPLE_DIR/metadata/round_bit_color_map.csv` for notebooks 04-07 to reuse. Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/metadata/round_bit_color_map.csv`.
 
 **Multi-drive round-robin (optional).** Setting `DATA_DRIVES = ["D:", "E:", "F:"]` (default `[]` = disabled) makes `create_round_info`/`create_round_info_multitissue` spread successive **hyb** rounds round-robin across those drives — round *i*'s `data_dir` becomes `<drive>/data/hybs/H{NN}` instead of always `SAMPLE_DIR/data/hybs/H{NN}` (cells/transit are unaffected, always under `SAMPLE_DIR/data/...`). `create_data_drive_skeleton` pre-creates each hyb's `H##` folder only on the one drive it is actually assigned to (via the same round-robin assignment as `round_info.csv`, not on every configured drive) — so which hybs live on which disk is visible directly from each drive's folder listing, and can never disagree with `round_info.csv`. This pairs with `analysis_mode="round_robin_drives"` (see Online-analysis architecture below) so analysis can read already-completed rounds on idle drives while HAL is still writing the current round to a different one.
 
-**04** (`prepare_imaging/<variant>/04_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML with per-round bit information. Picks the bits/cells series by `imaging_type` (so a multi-boundary `round_info`'s transit movies are never selected). Note: multi-tissue MERlin analysis is per tissue / per boundary — confirm the intended workflow before relying on the generated data-organization. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The `round_bit_color` mapping is **defined in notebook 03**; notebook 04 reads it back from `SAMPLE_DIR/metadata/round_bit_color_map.csv` (raising `FileNotFoundError` if notebook 03 has not run). Writes:
+**04** (`prepare_imaging/<variant>/04_create_dave_config.ipynb`): builds the Dave experiment recipe XML from `round_info.csv` (notebook 03). With a single boundary it uses the classic single-positions recipe (one `<loop>` per imaging round). With **multiple boundaries** it builds a **per-segment** Dave recipe (`create_dave_config(positions_dir=…)`: each boundary/transit segment is its own `<loop>` — "Imaging Round NN - <segment>" — with its own movie, HAL config and positions file, in order; fluidics loops stay between rounds). Each segment's positions `<loop_variable>` is declared **once** (keyed by segment name, e.g. `"B1"`/`"transit_1"`, or the single `"Positions"` variable for a non-multi-boundary layout) and every round referencing that segment points at the same shared `<variable_entry>`, instead of each round emitting its own duplicate copy. The Kilroy config for the microscope is resolved (via `find_kilroy_config`, falling back to MF2 when the microscope has no config) and passed to `create_dave_config` as the source of fluidic protocol names: every protocol written into the Dave recipe is resolved to — and required to exist as — a `<protocol>` in that Kilroy config, raising `ValueError` otherwise. Writes `SAMPLE_DIR/settings/dave-{mic}-{N}hybs-{SAMPLE_NAME}.xml`, named via `dave.dave_config_filename(microscope, n_hybs, sample_name)` — a single source of truth for this filename shared with notebook 05's annotation step below.
+
+**05** (`prepare_imaging/<variant>/05_create_data_organization.ipynb`): generates the MERlin data-organization CSV and annotates the Dave XML (notebook 04) with per-round bit information. Picks the bits/cells series by `imaging_type` (so a multi-boundary `round_info`'s transit movies are never selected). Note: multi-tissue MERlin analysis is per tissue / per boundary — confirm the intended workflow before relying on the generated data-organization. Requires `MERci/data/readouts.csv` (codebook mapping bit numbers to readout names; shipped in the repo). Frame tables and series patterns are auto-detected from `metadata/`. The `round_bit_color` mapping is **defined in notebook 03**; this notebook reads it back from `SAMPLE_DIR/metadata/round_bit_color_map.csv` (raising `FileNotFoundError` if notebook 03 has not run). The Dave file to annotate is located via the same `dave.dave_config_filename(microscope, n_hybs, sample_name)` notebook 04 used to write it — not by globbing `settings/dave-*.xml` and taking the alphabetically-last match, which silently annotated the wrong file whenever two acquisitions with different hyb counts shared one `settings/` folder (e.g. a 13-hyb and a 9-hyb experiment: `"...-13hybs-..."` sorts *before* `"...-9hybs-..."` as a string, so `sorted(...)[-1]` picked the 9-hyb file). Writes:
 - `SAMPLE_DIR/metadata/data_organization_{MICROSCOPE}_{SAMPLE_NAME}.csv`
-- Annotates `SAMPLE_DIR/settings/dave-*.xml` with per-round bit comments
+- Annotates `SAMPLE_DIR/settings/dave-{mic}-{N}hybs-{SAMPLE_NAME}.xml` with per-round bit comments
 
-**05** (`prepare_imaging/<variant>/05_create_experiment_info.ipynb`): writes `SAMPLE_DIR/metadata/experiment_info.yaml` — a small, human-readable per-experiment record mirroring the master per-project experiment-info CSVs kept outside the repo (e.g. `experiment_info/lt_experiment_info.csv`), so many experiments' files can later be batch-collected back into one of those tables via `experiment_info.collect_experiment_info`. Auto-fills what MERci already knows (bit count from `round_bit_color_map.csv`, exposure time read from a bits HAL config via `configs.read_hal_exposure_time`, positions file(s) present in `positions/`, and `acquisition_type` — `"epi"` or `"disk"` — derived from `MICROSCOPE` via `configs.get_acquisition_type`); leaves cluster destination paths (`data_home`/`merlin_home`/`folder_name`) and biology/sample metadata (fix type, hyb temperature, tissue type, …) as a parameters cell for the user, since MERci has no way to know them.
+**06** (`prepare_imaging/<variant>/06_create_experiment_info.ipynb`): writes `SAMPLE_DIR/metadata/experiment_info.yaml` — a small, human-readable per-experiment record mirroring the master per-project experiment-info CSVs kept outside the repo (e.g. `experiment_info/lt_experiment_info.csv`), so many experiments' files can later be batch-collected back into one of those tables via `experiment_info.collect_experiment_info`. Auto-fills what MERci already knows (bit count from `round_bit_color_map.csv`, exposure time read from a bits HAL config via `configs.read_hal_exposure_time`, positions file(s) present in `positions/`, and `acquisition_type` — `"epi"` or `"disk"` — derived from `MICROSCOPE` via `configs.get_acquisition_type`); leaves cluster destination paths (`data_home`/`merlin_home`/`folder_name`) and biology/sample metadata (fix type, hyb temperature, tissue type, …) as a parameters cell for the user, since MERci has no way to know them.
 
-**06** (`prepare_imaging/<variant>/06_create_merlin_scripts.ipynb`): generates the remaining MERlin input/run files into `SAMPLE_DIR/merlin/`, reading `experiment_info.yaml` (notebook 05). Resolves the codebook/microscope-parameters files shipped in `MERci/data/configs/merlin/{codebooks,microscope}/` by `lib_name`/`microscope` (`merlin_config.resolve_codebook_filename`/`resolve_microscope_parameters_filename`) and sanity-checks the codebook's own bit count against `round_bit_color_map.csv` before proceeding. Builds the analysis-parameters JSON from a `MerlinAnalysisSpec` (`create_merlin_analysis_parameters` — which steps to include: `n_optimize_iterations`, `include_reporting`, `include_segmentation` + method) rather than copying and hand-editing a prior experiment's file, then the cluster-resource-allocation JSON, snakemake parameters JSON, and the slurm submit script (`merlin_config.create_*`). The submit script references the data-organization CSV (`metadata/`, notebook 04) and positions file (`positions/`, notebook 02) by their existing paths, and the shared codebook/microscope files by their path inside this `MERci/` clone — since the clone already lives inside `SAMPLE_DIR/`, no file needs to be copied to a separate shared cluster location.
+**07** (`prepare_imaging/<variant>/07_create_merlin_scripts.ipynb`): generates the remaining MERlin input/run files into `SAMPLE_DIR/merlin/`, reading `experiment_info.yaml` (notebook 06). Resolves the codebook/microscope-parameters files shipped in `MERci/data/configs/merlin/{codebooks,microscope}/` by `lib_name`/`microscope` (`merlin_config.resolve_codebook_filename`/`resolve_microscope_parameters_filename`) and sanity-checks the codebook's own bit count against `round_bit_color_map.csv` before proceeding. Builds the analysis-parameters JSON from a `MerlinAnalysisSpec` (`create_merlin_analysis_parameters` — which steps to include: `n_optimize_iterations`, `include_reporting`, `include_segmentation` + method) rather than copying and hand-editing a prior experiment's file, then the cluster-resource-allocation JSON, snakemake parameters JSON, and the slurm submit script (`merlin_config.create_*`). The submit script references the data-organization CSV (`metadata/`, notebook 05) and positions file (`positions/`, notebook 02) by their existing paths, and the shared codebook/microscope files by their path inside this `MERci/` clone — since the clone already lives inside `SAMPLE_DIR/`, no file needs to be copied to a separate shared cluster location.
 
-**`lineage_tracing/lineage` only — 04/06 are fishtank-based, not MERlin.** This
-acquisition type is analyzed with **fishtank**, so its notebooks 04 and 06
+**`lineage_tracing/lineage` only — 05/07 are fishtank-based, not MERlin.** This
+acquisition type is analyzed with **fishtank**, so its notebooks 05 and 07
 differ from every other variant:
 
-**04** (`lineage_tracing/lineage/04_create_color_usage.ipynb`): writes
+**05** (`lineage_tracing/lineage/05_create_color_usage.ipynb`): writes
 fishtank's `color_usage` CSV (`fishtank_config.create_color_usage_csv`) — a
 per-round/color target table whose round-tag mapping (`"r1"`, `"beads"`,
 `"DAPI"`, `"empty"`, …) is entered **manually**, since it's a per-protocol
@@ -292,7 +303,7 @@ registration) and a `decoding_strategy` CSV
 Writes `SAMPLE_DIR/metadata/color_usage_{SAMPLE_NAME}{,_mf}.csv` and
 `SAMPLE_DIR/metadata/decoding_strategy_{SAMPLE_NAME}.csv`.
 
-**06** (`lineage_tracing/lineage/06_create_fishtank_scripts.ipynb`): builds
+**07** (`lineage_tracing/lineage/07_create_fishtank_scripts.ipynb`): builds
 `SAMPLE_DIR/fishtank/` — the folder skeleton (`create_fishtank_folder_skeleton`:
 `params/`, `reference/`, `scripts/`, `output/`, `log/`, plus the shared
 static utility scripts), the shared reference files for the configured
@@ -375,7 +386,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 - `positions_{SAMPLE_NAME}.txt` — comma-separated `x,y` per line, one FOV per line; `#`-prefixed lines ignored
 - Image files — HAL writes `.zarr` (directory store, default), `.dax` (raw uint16 binary + `.inf` sidecar), or `.tiff` (multi-page). Use `read_image(path)` to load any format. `discover_image_files` handles both flat files and zarr directory stores.
 - HAL config templates — `data/configs/hal/hal-config-{mic}.xml`; auto-detected in `prepare_imaging/01` by microscope name; patched by `create_hal_config` (sets frames, shutters, z_offsets, filetype, exposure_time)
-- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; resolved in `prepare_imaging/03` by `find_kilroy_config` (newest by YYMMDD; falls back to MF2 when the microscope has no config), copied to `SAMPLE_DIR/settings/`, and used as the source of fluidic protocol names for the Dave recipe. Protocol names are **not** standardised across microscopes (e.g. `Cleave Adaptors` vs `Cleave Adaptor`), so `KilroyProtocolResolver` token-matches each logical dave step (cleave / hybridize k / readouts / image buffer) to the real `<protocol>` name in the chosen config.
+- Kilroy config files — `data/configs/kilroy/kilroy-config-*-{mic}-*-{YYMMDD}.xml`; resolved in `prepare_imaging/04` by `find_kilroy_config` (newest by YYMMDD; falls back to MF2 when the microscope has no config), copied to `SAMPLE_DIR/settings/`, and used as the source of fluidic protocol names for the Dave recipe. Protocol names are **not** standardised across microscopes (e.g. `Cleave Adaptors` vs `Cleave Adaptor`), so `KilroyProtocolResolver` token-matches each logical dave step (cleave / hybridize k / readouts / image buffer) to the real `<protocol>` name in the chosen config.
 
 ### Microscope channel mapping
 
