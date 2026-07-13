@@ -109,6 +109,20 @@ def load_protocol_durations(path: Path) -> Dict[str, float]:
     return durations
 
 
+def protocol_valve_commands(path: Path, protocol_name: str) -> List[str]:
+    """
+    Return the ordered list of ``<valve>`` command names used within one protocol.
+
+    Used to detect when one protocol's own trailing steps already perform the
+    same action as another (standalone) protocol -- e.g. a ``"Hybridize N"``
+    protocol that ends by setting/flowing the imaging buffer itself, making a
+    separately-appended ``"Flow Image Buffer"`` step in the Dave recipe
+    redundant (see ``dave.py``'s ``_add_fluidics``).
+    """
+    return [r.name.strip() for r in iter_protocol_references(path)
+            if r.protocol == protocol_name and r.kind == "valve"]
+
+
 def find_kilroy_config(
     microscope:          str,
     kilroy_dir:          Path,

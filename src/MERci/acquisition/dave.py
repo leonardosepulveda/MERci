@@ -54,6 +54,7 @@ from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
     load_protocol_durations,
+    protocol_valve_commands,
 )
 
 
@@ -792,16 +793,24 @@ def create_dave_config(
                 # Names taken from the Kilroy config (see kilroy_config).
                 cleave = [] if skip_cleave else [resolver.cleave(adaptors=use_adaptors)]
                 if use_adaptors:
-                    fl_protocols = cleave + [
-                        resolver.hybridize(hyb_idx, adaptors=True),
-                        resolver.readouts(),
-                        resolver.image_buffer(),
-                    ]
+                    steps = [resolver.hybridize(hyb_idx, adaptors=True), resolver.readouts()]
                 else:
-                    fl_protocols = cleave + [
-                        resolver.hybridize(hyb_idx, adaptors=False),
-                        resolver.image_buffer(),
-                    ]
+                    steps = [resolver.hybridize(hyb_idx, adaptors=False)]
+                # Some Kilroy protocols (e.g. "Hybridize N") already end by
+                # setting/flowing the imaging buffer themselves -- appending the
+                # standalone image-buffer protocol on top would flow it twice.
+                # Detected by comparing the step immediately preceding it
+                # (readouts, or the hybridize step itself) against the
+                # standalone protocol's own first valve command, rather than
+                # hard-coding which Dave step this can happen after.
+                image_buffer = resolver.image_buffer()
+                preceding_valves = protocol_valve_commands(kilroy_config, steps[-1])
+                buffer_valves    = protocol_valve_commands(kilroy_config, image_buffer)
+                already_flowed = bool(preceding_valves and buffer_valves
+                                      and preceding_valves[-1].lower() == buffer_valves[0].lower())
+                if not already_flowed:
+                    steps.append(image_buffer)
+                fl_protocols = cleave + steps
             elif use_adaptors:
                 # Legacy hard-coded names (no Kilroy cross-check).
                 fl_protocols = ([] if skip_cleave else ["Cleave adaptors"]) + [
@@ -1140,8 +1149,17 @@ def estimate_dave_experiment(
                   "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
-            path = lv_value.get(lname, "")
-            n_fovs = _n_fovs(path) if lv_kind.get(lname) == "file" else 0
+            # The loop_variable a movie references is its OWN <variable_entry
+            # name="...">, not necessarily the parent <loop>'s own name: since
+            # positions loop_variables are shared across every round visiting
+            # the same segment (see create_dave_config), a loop named e.g.
+            # "Imaging Round 02" can reference a loop_variable named "B1" or
+            # "Positions". Every movie within one loop references the same
+            # variable, so the first movie's is enough.
+            ve_el    = movies[0].find("variable_entry")
+            var_name = ve_el.get("name", "") if ve_el is not None else lname
+            path = lv_value.get(var_name, "")
+            n_fovs = _n_fovs(path) if lv_kind.get(var_name) == "file" else 0
             loop_time = 0.0
             loop_bytes = 0
             for mv in movies:
