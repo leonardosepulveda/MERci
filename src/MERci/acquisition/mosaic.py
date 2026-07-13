@@ -421,34 +421,69 @@ def segment_mosaic_tissue(
     )
 
 
-def plot_tile_intensity_histograms(
-    tiles:  List[SteveTile],
-    bins:   int = 100,
-    ax=None,
-    color:  str = "steelblue",
-    alpha:  float = 0.5,
-):
+def _estimate_bimodal_threshold(bin_centers_log: np.ndarray, counts: np.ndarray) -> Optional[float]:
     """
-    Overlay one log-space pixel-intensity histogram per tile, all drawn in
-    the same color/alpha so they visually stack -- lets an outlier tile (a
-    different objective, a debris/bubble FOV, ...) stand out, and helps pick
-    a fixed segmentation threshold by eye instead of trusting Otsu blindly.
+    Estimate a separating threshold between two modes of a (log-space)
+    density histogram, as the valley between its two most prominent peaks.
 
-    Every tile is histogrammed over the same ``log10`` bin edges (spanning
-    the full range across all tiles) so the overlaid shapes are directly
-    comparable; each is density-normalized so tiles don't need to be the
-    same pixel count to compare shapes.
+    Returns the threshold in **linear** intensity units (``10 **
+    valley_log10``), or ``None`` if fewer than two prominent peaks are found
+    (e.g. a genuinely unimodal sample) -- callers should fall back to Otsu
+    in that case rather than plot a misleading line.
+    """
+    from scipy.signal import find_peaks
+
+    peaks, props = find_peaks(counts, prominence=counts.max() * 0.05)
+    if len(peaks) < 2:
+        return None
+
+    top2 = sorted(peaks[np.argsort(props["prominences"])[::-1][:2]])
+    lo_idx, hi_idx = top2
+    valley_idx = lo_idx + int(np.argmin(counts[lo_idx:hi_idx + 1]))
+    return float(10 ** bin_centers_log[valley_idx])
+
+
+def plot_tile_intensity_histograms(
+    tiles:           List[SteveTile],
+    bins:            int = 200,
+    ax=None,
+    color:           tuple = (0.7, 0.7, 0.7),
+    alpha:           float = 0.25,
+    show_threshold:  bool = True,
+) -> Tuple[object, Optional[float]]:
+    """
+    Overlay one log-space pixel-intensity histogram per tile (thin gray
+    lines), plus a solid combined histogram pooling every tile's pixels
+    together -- lets an outlier tile (a different objective, a debris/bubble
+    FOV, ...) stand out, and helps pick a fixed segmentation threshold by eye
+    instead of trusting Otsu blindly.
+
+    Every histogram (per-tile and combined) is computed over the same
+    ``log10`` bin edges (spanning the full range across all tiles) so the
+    overlaid shapes are directly comparable, and all are density-normalized
+    so tiles don't need to be the same pixel count to compare shapes.
+
+    When the combined histogram is clearly bimodal, the valley between its
+    two most prominent peaks is estimated (:func:`_estimate_bimodal_threshold`),
+    drawn as a vertical line labelled with the threshold in linear intensity
+    units, and returned -- so it can be used directly as ``THRESHOLD`` in the
+    segmentation cell instead of Otsu's often-biased pick (see
+    :func:`segment_mosaic_tissue`'s docstring for why Otsu can be biased when
+    one class vastly outnumbers the other in pixel count).
 
     Parameters
     ----------
     tiles : from :func:`load_steve_mosaic` (or a filtered subset).
     bins : number of bins across the full log10(intensity) range.
     ax : optional existing matplotlib Axes to draw into.
-    color, alpha : shared line style for every tile's histogram.
+    color, alpha : shared line style for every tile's (thin) histogram.
+    show_threshold : draw the estimated valley threshold as a vertical line
+        with a text label, if a clearly bimodal shape is found.
 
     Returns
     -------
-    The matplotlib Axes drawn into.
+    (ax, threshold) : the matplotlib Axes drawn into, and the estimated
+        linear-space threshold (``None`` if no clearly bimodal shape found).
     """
     import matplotlib.pyplot as plt
 
@@ -466,10 +501,25 @@ def plot_tile_intensity_histograms(
         counts, _ = np.histogram(li, bins=bin_edges, density=True)
         ax.plot(bin_centers, counts, "-", color=color, alpha=alpha, lw=1.0)
 
+    all_pixels = np.concatenate([li.ravel() for li in log_images])
+    combined_counts, _ = np.histogram(all_pixels, bins=bin_edges, density=True)
+    ax.plot(bin_centers, combined_counts, "-", color="black", lw=1.8,
+            label="all tiles combined")
+
+    threshold = _estimate_bimodal_threshold(bin_centers, combined_counts)
+    if show_threshold and threshold is not None:
+        log_threshold = np.log10(threshold)
+        ax.axvline(log_threshold, color="crimson", linestyle="--", lw=1.5,
+                   label=f"estimated threshold = {threshold:.0f}")
+        ymax = ax.get_ylim()[1]
+        ax.text(log_threshold, ymax * 0.97, f"  {threshold:.0f}",
+                color="crimson", va="top", ha="left")
+
     ax.set_xlabel("log10(pixel intensity)")
     ax.set_ylabel("density")
     ax.set_title(f"Per-tile intensity histograms ({len(tiles)} tile(s))")
-    return ax
+    ax.legend(loc="upper right", fontsize=8)
+    return ax, threshold
 
 
 def plot_mosaic_segmentation(canvas: MosaicCanvas, segmentation: MosaicSegmentation, ax=None):

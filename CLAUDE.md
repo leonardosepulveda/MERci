@@ -114,9 +114,14 @@ src/MERci/
                     #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron
                     #   coords, downsampled to a working resolution; raises if the tiles don't all share one
                     #   pixel size, rather than silently mis-scaling/misplacing whichever tiles don't match),
-                    #   plot_tile_intensity_histograms (every tile's log-space intensity histogram overlaid,
-                    #   same color/alpha, to pick a fixed segmentation threshold by eye when Otsu doesn't
-                    #   separate tissue from background well), segment_mosaic_tissue (smooth -> threshold
+                    #   plot_tile_intensity_histograms (every tile's log-space intensity histogram overlaid
+                    #   as thin gray lines, plus a solid combined histogram pooling every tile's pixels --
+                    #   when that combined histogram is clearly bimodal, _estimate_bimodal_threshold finds
+                    #   the valley between its two most prominent peaks (scipy.signal.find_peaks) and returns
+                    #   it in linear intensity units, drawn as a labelled vertical line and returned alongside
+                    #   the Axes, so the notebook can seed THRESHOLD with it directly instead of starting
+                    #   from Otsu, which can be biased toward the dominant class when one vastly outnumbers
+                    #   the other in pixel count), segment_mosaic_tissue (smooth -> threshold
                     #   (Otsu default, or a fixed value read off the histogram) -> morphological
                     #   close/open/dilate-margin -> fill_holes -> per-component marching-squares contours ->
                     #   simplify; the smoothing+morphology is needed because a single global threshold on the
