@@ -555,14 +555,20 @@ def create_dave_config(
       and HAL config, in ``round_info`` row order. Fluidics loops still sit
       between rounds (after a round's last segment loop).
 
-    **One ``<loop_variable>`` per positions file, not per round.** Every round
-    that visits a given segment (a boundary's cells/bits movies, or a transit)
-    iterates the exact same positions file, so its ``<loop_variable>`` is
-    declared once — keyed by segment name (``round_info``'s ``segment`` column
-    in per-segment mode; a single shared name in single-positions mode) — and
-    every round's ``<loop>`` (still one per round, or one per round+segment)
-    references that one shared ``<loop_variable>`` via `<variable_entry>`,
-    instead of each round minting its own identical copy.
+    **One ``<loop_variable>`` per loop, always — even when several rounds
+    point at the same positions file.** Dave's real ``v2Generator``
+    (``handleLoop``) resolves a ``<loop>`` by looking up
+    ``self.loop_variable_names.index(loop.attrib["name"])`` — every loop MUST
+    have a ``<loop_variable>`` of the exact same name; there is no mechanism
+    for a ``<movie>``'s ``<variable_entry>`` to reference a *different*,
+    shared loop_variable declared under another name (verified directly
+    against the storm_control source; an earlier attempt to declare one
+    shared loop_variable per segment/positions-file, referenced by name from
+    each round's movie, loaded fine in MERci's own reader but made real Dave
+    raise ``ValueError: 'Imaging Round NN' is not in list``). So every round
+    (and, in per-segment mode, every round×segment) still gets its own
+    identically-named ``<loop_variable>``, duplicating the same ``file_path``
+    across as many declarations as there are rounds/segments that use it.
 
       When the rows carry ``fov_start``/``fov_pad`` (produced by
       ``create_round_info_multitissue``), each movie ``<name>`` is emitted with
@@ -692,8 +698,6 @@ def create_dave_config(
     fluidics_loop_vars: list[tuple[str, list[str]]] = []
     created_dirs:       set[str]                    = set()
     current_dir:        Optional[str]               = None   # last <change_directory> emitted
-    emitted_position_vars: set[str]                 = set()  # segment names already given a loop_variable
-    SINGLE_POSITIONS_VAR = "Positions"   # shared loop_variable name in single-positions mode
 
     def _add_change_directory(dir_value) -> None:
         """
@@ -845,34 +849,44 @@ def create_dave_config(
 
         if segment_mode:
             # One loop per (round, segment) -- a Dave loop iterates a single
-            # positions file -- but the loop_variable itself is keyed by segment
-            # alone, so every round visiting that segment references the SAME
-            # positions file declaration instead of each minting its own copy.
-            # Each segment sets its own save directory just before its loop.
+            # positions file. Each loop gets its OWN loop_variable, named
+            # identically to the loop itself: Dave's real v2Generator
+            # (handleLoop) looks up `self.loop_variable_names.index(loop.attrib["name"])`
+            # -- every <loop> MUST have a <loop_variable> of the exact same
+            # name, full stop. A <movie>'s <variable_entry> cannot "alias" a
+            # differently-named loop_variable declared elsewhere: it does its
+            # own independent index() lookup and reads the CURRENT iterator
+            # state for THAT loop_variable, which is only ever advanced by the
+            # one <loop> whose name matches it. So when several rounds visit
+            # the same segment, each round still declares its own
+            # loop_variable pointing at the same positions file -- Dave has no
+            # mechanism to share one across differently-named loops (verified
+            # directly against storm_control's real v2Generator.py source; a
+            # shared name here previously caused ValueError: '<loop name>' is
+            # not in list). Each segment sets its own save directory just
+            # before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
                 lname = f"Imaging Round {round_id:02d} - {seg}"
                 _add_change_directory(row.get("data_dir"))
                 loop  = ET.SubElement(seq, "loop")
                 loop.set("name", lname)
-                _add_movie(loop, row, seg)
-                if seg not in emitted_position_vars:
-                    emitted_position_vars.add(seg)
-                    imaging_loop_vars.append((seg, str(positions_dir / str(row["positions_file"]))))
+                _add_movie(loop, row, lname)
+                imaging_loop_vars.append((lname, str(positions_dir / str(row["positions_file"]))))
         else:
             # Single loop for the round; all movies share positions_file and one
-            # save directory (from the round's first row's data_dir). Every round
-            # references the SAME shared loop_variable (there is only ever one
-            # positions file in this layout) instead of each declaring its own.
+            # save directory (from the round's first row's data_dir). This loop
+            # gets its own loop_variable (named identically to it) even though
+            # every round points at the same positions file -- see the
+            # segment_mode branch above for why Dave requires this per-loop
+            # declaration rather than one shared across rounds.
             img_name = f"Imaging Round {round_id:02d}"
             _add_change_directory(rows.iloc[0].get("data_dir") if has_data_dir else None)
             img_loop = ET.SubElement(seq, "loop")
             img_loop.set("name", img_name)
             for _, row in rows.iterrows():
-                _add_movie(img_loop, row, SINGLE_POSITIONS_VAR)
-            if SINGLE_POSITIONS_VAR not in emitted_position_vars:
-                emitted_position_vars.add(SINGLE_POSITIONS_VAR)
-                imaging_loop_vars.append((SINGLE_POSITIONS_VAR, str(positions_file)))
+                _add_movie(img_loop, row, img_name)
+            imaging_loop_vars.append((img_name, str(positions_file)))
 
         _add_fluidics(round_id, is_last)
 
