@@ -19,6 +19,10 @@ output/
 
 # Prompt/task history (local only)
 prompt_history/
+verbatim_history/
+
+# Local, machine-specific Claude Code settings (e.g. additionalDirectories)
+.claude/settings.local.json
 
 # Scratch / throwaway test artifacts
 _scratch_*

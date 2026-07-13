@@ -12,6 +12,7 @@ dependencies:
     - shapely
     - pillow
     - scikit-image
+    - scipy
     - jupyterlab
     - ipykernel
     - zarr

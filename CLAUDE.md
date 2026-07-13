@@ -103,6 +103,22 @@ src/MERci/
                     # + multi-tissue: discover_boundary_files (auto multi/single/legacy), load_boundary_polygon,
                     #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec,
                     #   has_boundary_files / resolve_boundary_dir (fall back to data/positions/examples when empty)
+    mosaic.py       # derive boundary_positions*.txt/hole*.txt automatically from a Steve low-mag mosaic
+                    #   instead of drawing them by hand -- load_steve_mosaic (reads a Steve .msc manifest +
+                    #   its .stv tile pickles; each tile already carries its own stage position + pixel size,
+                    #   recovered from the tile's own x_um/x_pix ratio and magnification, not a hard-coded
+                    #   coord.Point.pixels_to_um or the .msc file's own rounded objective line),
+                    #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron
+                    #   coords, downsampled to a working resolution), segment_mosaic_tissue (smooth ->
+                    #   threshold (Otsu default) -> morphological close/open/dilate-margin -> fill_holes ->
+                    #   per-component marching-squares contours -> simplify; the smoothing+morphology is
+                    #   needed because a single global threshold on the raw canvas fragments one tissue mass
+                    #   into hundreds of tiny disjoint specks from illumination vignetting/tile seams),
+                    #   plot_mosaic_segmentation (tissue/hole overlay for the notebook's interactive
+                    #   threshold-tuning review step), save_boundary_from_mosaic (writes in the exact
+                    #   convention positions.discover_boundary_files/load_hole_polygons already expect --
+                    #   legacy boundary_positions.txt for one detected piece, boundary_positions_{b}.txt
+                    #   for several disjoint pieces; holes are global, same as the rest of the pipeline)
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
@@ -180,19 +196,22 @@ notebooks/
   prepare_imaging/  # Pre-experiment notebooks (run in order), split into per-experiment variants:
     reference/       # canonical, fully-featured templates (keep up to date)
     tumor/           # single tissue section per coverslip; split by acquisition type:
-      epi/           #   epifluorescence acquisition — full copy of the 7 notebooks
-      disk/          #   spinning-disk confocal acquisition — full copy of the 7 notebooks
+      epi/           #   epifluorescence acquisition — full copy of the 8 notebooks
+      disk/          #   spinning-disk confocal acquisition — full copy of the 8 notebooks
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
     lineage_tracing/ # multiple tissue sections per coverslip; split by acquisition type:
-      merfish/       #   MERFISH (codebook) acquisition — full copy of the 7 notebooks
-      lineage/       #   lineage-barcode acquisition — full copy of the 7 notebooks, but with
+      merfish/       #   MERFISH (codebook) acquisition — full copy of the 8 notebooks
+      lineage/       #   lineage-barcode acquisition — full copy of the 8 notebooks, but with
                      #     DIFFERENT 05/07 notebooks (see below) — analyzed with fishtank, not
                      #     MERlin
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
       #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
       #                                                #   bits+cells, and a transit HAL config (blank frames)
-      #   02_create_positions_from_tissue_boundary.ipynb # multi-boundary FOV grids + transit segments; per-segment /
+      #   02_create_positions_from_mosaic.ipynb       # OPTIONAL: derive boundary_positions*.txt/hole*.txt
+      #                                                #   automatically from a Steve low-mag mosaic instead of
+      #                                                #   drawing them by hand -- feeds the next notebook
+      #   02_create_positions_from_boundaries.ipynb   # multi-boundary FOV grids + transit segments; per-segment /
       #                                                #   per-tissue positions files; creates data/ subfolders
       #   03_create_round_info.ipynb                  # round-bit-color map (+ derives N_HYBS) + round_info.csv
       #   04_create_dave_config.ipynb                 # builds the Dave recipe XML from round_info.csv; every
@@ -272,8 +291,8 @@ data/
 
 ### Pre-experiment workflow
 
-Run the seven `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
-order before starting the microscope. For `tumor` and `lineage_tracing` the seven
+Run the eight `prepare_imaging/<variant>/` notebooks (variant = `reference`) in
+order before starting the microscope. For `tumor` and `lineage_tracing` the eight
 notebooks live one level deeper under an acquisition-type subfolder
 (`prepare_imaging/tumor/{epi,disk}/`, `prepare_imaging/lineage_tracing/{merfish,lineage}/`);
 run the set for the acquisition being prepared.
@@ -290,7 +309,11 @@ run the set for the acquisition being prepared.
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**02** (`prepare_imaging/<variant>/02_create_positions_from_tissue_boundary.ipynb`): builds the FOV scanning positions for one or more tissue sections. If `SAMPLE_DIR/positions/` has no boundary files yet, it falls back to a bundled example dataset under `MERci/data/positions/examples/{legacy,single,multi}` (chosen by the notebook's `EXAMPLE_LAYOUT`; per-variant default: tumor→`legacy`, lineage_tracing/reference→`multi`) via `resolve_boundary_dir`, and **copies that example's boundary + hole inputs into `positions/`** so the experiment folder is self-contained and notebooks 03/04 (which read `positions/` directly) find them. This lets the whole pipeline be run and tested before any real boundaries are drawn; the copy is idempotent (skipped once `positions/` has inputs). It **auto-detects the layout** from the boundary filenames in the resolved directory (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
+**02 -- two notebooks, same input contract.** `02_create_positions_from_boundaries.ipynb` (the FOV-grid generator) reads `boundary_positions*.txt`/`hole*.txt` from `SAMPLE_DIR/positions/`; those files can come from either drawing them by hand, or running `02_create_positions_from_mosaic.ipynb` first to derive them automatically from a Steve low-mag mosaic. Both are described below.
+
+**02a** (`prepare_imaging/<variant>/02_create_positions_from_mosaic.ipynb`, optional): derives `boundary_positions*.txt`/`hole*.txt` automatically from a Steve low-mag mosaic (`MERci.acquisition.mosaic`), instead of drawing them by hand. `load_steve_mosaic` reads a Steve `.msc` manifest + its `.stv` tile pickles from `SAMPLE_DIR/data/mosaic10x/` (each tile already carries its own stage position + pixel size); `assemble_mosaic_canvas` pastes them into one flattened image in stage-micron coordinates; `segment_mosaic_tissue` smooths, thresholds (Otsu default), and morphologically cleans up the canvas (closing bridges small real gaps, opening drops noise specks, an outward dilation adds a hand-drawing-like safety margin) before tracing tissue/hole polygons — a single global threshold on the raw canvas is not enough on its own: illumination vignetting and tile seams otherwise fragment one tissue mass into hundreds of tiny disjoint specks. This is a visual, iterative notebook: `plot_mosaic_segmentation` overlays the detected tissue (green) / hole (red) polygons on the canvas so threshold/morphology parameters can be re-tuned and re-run before committing; only then does `save_boundary_from_mosaic` write the files, in the exact convention `discover_boundary_files`/`load_hole_polygons` already expect (legacy `boundary_positions.txt` for one detected piece, `boundary_positions_{b}.txt` for several disjoint pieces — holes stay global, same as everywhere else in the pipeline). Validated against a real Steve mosaic + a manually-drawn ground truth: precise IoU against the hand-drawn polygon is not the goal (a hand-drawn boundary is a coarser, more generous envelope than a signal-following threshold trace), but the detected outline visibly follows the real tissue shape and finds the same internal holes.
+
+**02** (`prepare_imaging/<variant>/02_create_positions_from_boundaries.ipynb`): builds the FOV scanning positions for one or more tissue sections. If `SAMPLE_DIR/positions/` has no boundary files yet, it falls back to a bundled example dataset under `MERci/data/positions/examples/{legacy,single,multi}` (chosen by the notebook's `EXAMPLE_LAYOUT`; per-variant default: tumor→`legacy`, lineage_tracing/reference→`multi`) via `resolve_boundary_dir`, and **copies that example's boundary + hole inputs into `positions/`** so the experiment folder is self-contained and notebooks 03/04 (which read `positions/` directly) find them. This lets the whole pipeline be run and tested before any real boundaries are drawn; the copy is idempotent (skipped once `positions/` has inputs). It **auto-detects the layout** from the boundary filenames in the resolved directory (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
