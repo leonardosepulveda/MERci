@@ -1003,7 +1003,12 @@ class ExperimentEstimate:
                       FOV-movie)
     n_fov_movies    : number of per-FOV movies acquired across the whole experiment
     per_round       : list of ``{"round", "label", "imaging_s", "fluidics_s",
-                      "bytes", "movies"}`` dicts, in recipe order
+                      "bytes", "movies", "series"}`` dicts, numbered rounds in
+                      order followed by any non-numbered row (e.g. the closing
+                      "Fluidics Final" step, labeled by its own loop name
+                      rather than a fabricated round number). ``series`` is
+                      the list of distinct movie names (e.g. ``"hal-st2_01"``)
+                      imaged in that round.
     assumptions     : human-readable list of the numbers assumed (frame size, frame
                       time source, …)
     warnings        : anything that made the estimate approximate (missing positions
@@ -1135,18 +1140,24 @@ def estimate_dave_experiment(
     imaging_time = fluidics_time = 0.0
     total_bytes  = 0
     n_movies     = 0
-    per_round: Dict[int, dict] = {}
+    per_round: Dict[object, dict] = {}
 
-    def _round_no(lname: str) -> int:
+    def _round_no(lname: str) -> Optional[int]:
         m = re.search(r"Round (\d+)", lname)
-        return int(m.group(1)) if m else 0
+        return int(m.group(1)) if m else None
 
     for loop in seq.findall("loop"):
         lname  = loop.get("name", "")
         rno    = _round_no(lname)
+        # Loops without a numbered round in their name (e.g. the closing
+        # "Fluidics Final" cleave-only step) get their own row keyed and
+        # labeled by their real name, instead of being silently folded into a
+        # fabricated "Round 00" -- which not only mislabeled the step but
+        # sorted it to the front of the report even though it runs LAST.
+        key    = rno if rno is not None else lname
         rec    = per_round.setdefault(
-            rno, {"round": rno, "label": f"Round {rno:02d}",
-                  "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0})
+            key, {"round": rno, "label": (f"Round {rno:02d}" if rno is not None else lname),
+                  "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0, "series": []})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
             # The loop_variable a movie references is its OWN <variable_entry
@@ -1169,6 +1180,10 @@ def estimate_dave_experiment(
                 hal_stem  = (par_el.text or "").strip() if par_el is not None else ""
                 loop_time  += frames * _frame_time(hal_stem) + per_movie_overhead_s
                 loop_bytes += frames * frame_bytes
+                name_el     = mv.find("name")
+                series_name = (name_el.text or "").strip() if name_el is not None else ""
+                if series_name and series_name not in rec["series"]:
+                    rec["series"].append(series_name)
             imaging_time += n_fovs * loop_time
             total_bytes  += n_fovs * loop_bytes
             n_movies     += n_fovs * len(movies)
@@ -1203,17 +1218,24 @@ def estimate_dave_experiment(
         fluidics_time_s = fluidics_time,
         total_bytes     = total_bytes,
         n_fov_movies    = n_movies,
-        per_round       = [per_round[k] for k in sorted(per_round)],
+        # Numbered rounds sorted numerically first; any non-numbered row (e.g.
+        # "Fluidics Final") sorted after, in the order it was first seen --
+        # `sorted` is stable, so ties among non-int keys keep dict insertion order.
+        per_round       = [per_round[k] for k in
+                           sorted(per_round, key=lambda k: (0, k) if isinstance(k, int) else (1, 0))],
         assumptions     = assumptions,
         warnings        = warnings_list,
     )
 
 
 def _fmt_duration(seconds: float) -> str:
-    """Format seconds as ``Hh MMm SSs`` (dropping leading zero units)."""
+    """Format seconds as ``Dd HHh MMm SSs`` (dropping leading zero units)."""
     total = int(round(seconds))
-    h, rem = divmod(total, 3600)
+    d, rem = divmod(total, 86400)
+    h, rem = divmod(rem, 3600)
     m, s   = divmod(rem, 60)
+    if d:
+        return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
     if h:
         return f"{h}h {m:02d}m {s:02d}s"
     if m:
@@ -1244,8 +1266,9 @@ def format_experiment_estimate(est: ExperimentEstimate, per_round: bool = False)
     if per_round and est.per_round:
         lines.append("  Per round:")
         for r in est.per_round:
+            series_str = ", ".join(r.get("series", [])) or "-"
             lines.append(
-                f"    {r['label']}: {r['movies']} movies, "
+                f"    {r['label']} [{series_str}]: {r['movies']} movies, "
                 f"img {_fmt_duration(r['imaging_s'])}, "
                 f"flu {_fmt_duration(r['fluidics_s'])}, "
                 f"{_fmt_bytes(r['bytes'])}")
