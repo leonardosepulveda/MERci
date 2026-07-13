@@ -8,15 +8,23 @@ Typical workflow (see ``02_create_positions_from_mosaic.ipynb``)
 1. ``load_steve_mosaic`` – read a Steve ``.msc`` manifest + its ``.stv`` tile
    pickles (each tile already carries its own stage position and pixel size,
    so no separate calibration step is needed).
-2. ``assemble_mosaic_canvas`` – paste all tiles into one flattened image in
-   real stage-micron coordinates.
-3. ``segment_mosaic_tissue`` – threshold + clean up the canvas into tissue
+2. ``filter_tiles_by_objective`` – drop tiles shot with a different
+   objective than the main scan (e.g. high-mag alignment/reference FOVs
+   mixed into a low-mag mosaic) -- required if the mosaic mixes objectives,
+   since ``assemble_mosaic_canvas`` refuses to paste mismatched pixel sizes
+   into one canvas.
+3. ``assemble_mosaic_canvas`` – paste all (same-objective) tiles into one
+   flattened image in real stage-micron coordinates.
+4. ``plot_tile_intensity_histograms`` – overlay every tile's log-space
+   intensity histogram, to pick a fixed segmentation threshold by eye when
+   Otsu doesn't separate tissue from background well on a given sample.
+5. ``segment_mosaic_tissue`` – threshold + clean up the canvas into tissue
    and hole polygons, in the same ``x_um, y_um`` coordinate space that
    ``boundary_positions.txt``/``hole*.txt`` already use.
-4. ``plot_mosaic_segmentation`` – overlay the detected polygons on the
+6. ``plot_mosaic_segmentation`` – overlay the detected polygons on the
    canvas for a visual sanity check before committing to them (thresholding
    parameters are re-run interactively until the overlay looks right).
-5. ``save_boundary_from_mosaic`` – write the polygons out in the exact
+7. ``save_boundary_from_mosaic`` – write the polygons out in the exact
    filename convention ``positions.discover_boundary_files``/
    ``load_hole_polygons`` already expect, so
    ``02_create_positions_from_boundaries.ipynb`` picks them up unchanged.
@@ -71,11 +79,17 @@ class SteveTile:
         Real-world size of one ``image`` pixel, derived from the tile's own
         ``magnification``/``x_pix`` fields (not assumed from the objective
         name).
+    objective_name : str
+        The objective this tile was acquired with (e.g. ``"10x"``). A mosaic
+        can contain tiles shot with more than one objective -- e.g. a few
+        alignment/reference FOVs taken at high magnification alongside the
+        low-mag scan -- see :func:`filter_tiles_by_objective`.
     """
-    image:         np.ndarray
-    x_um:          float
-    y_um:          float
-    pixel_size_um: float
+    image:          np.ndarray
+    x_um:           float
+    y_um:           float
+    pixel_size_um:  float
+    objective_name: str
 
 
 @dataclass
@@ -156,9 +170,48 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
             x_um=d["x_um"],
             y_um=d["y_um"],
             pixel_size_um=pixel_size_um,
+            objective_name=d["objective_name"],
         ))
 
     return tiles
+
+
+def filter_tiles_by_objective(
+    tiles:      List[SteveTile],
+    objective:  Optional[str] = None,
+) -> List[SteveTile]:
+    """
+    Keep only the tiles shot with one objective, dropping the rest.
+
+    A Steve mosaic can mix in a handful of tiles shot at a different
+    objective than the main low-mag scan -- e.g. alignment/reference FOVs
+    used to register a 60x objective against the 10x mosaic. Those tiles
+    have a different real pixel size and must not be pasted into the same
+    flattened canvas as the rest (see :func:`assemble_mosaic_canvas`, which
+    raises rather than silently mixing scales).
+
+    Parameters
+    ----------
+    tiles : from :func:`load_steve_mosaic`.
+    objective : which objective's tiles to keep; ``None`` = auto-pick
+        whichever objective the most tiles share (prints nothing itself --
+        the caller should log the counts/decision; see the notebook for the
+        printed breakdown this is paired with).
+
+    Returns
+    -------
+    The filtered tile list (all sharing one ``objective_name``).
+    """
+    if not tiles:
+        raise ValueError("No tiles to filter.")
+
+    if objective is None:
+        counts: dict = {}
+        for t in tiles:
+            counts[t.objective_name] = counts.get(t.objective_name, 0) + 1
+        objective = max(counts, key=counts.get)
+
+    return [t for t in tiles if t.objective_name == objective]
 
 
 def assemble_mosaic_canvas(
@@ -174,7 +227,9 @@ def assemble_mosaic_canvas(
 
     Parameters
     ----------
-    tiles : tiles from :func:`load_steve_mosaic`.
+    tiles : tiles from :func:`load_steve_mosaic`, all sharing one objective
+        (hence one real pixel size) -- see :func:`filter_tiles_by_objective`
+        if the mosaic mixes objectives.
     working_pixel_um : target canvas pixel size, in microns. Tiles are
         downsampled (by the nearest integer factor to this target) before
         pasting, since full camera resolution (e.g. 2304x2304 per tile) is
@@ -182,12 +237,37 @@ def assemble_mosaic_canvas(
         mosaic canvas very large. 5 um/pixel keeps sub-mm tissue features
         while keeping a multi-mm mosaic's canvas a few thousand pixels across.
 
+    Raises
+    ------
+    ValueError
+        If the tiles don't all share the same pixel size (within 1%) --
+        e.g. a mosaic that mixes a low-mag scan with a few high-mag
+        alignment FOVs. Pasting mismatched-scale tiles into one canvas using
+        a single pixel size would silently misplace/mis-scale whichever
+        tiles don't match; filter to one objective first instead of
+        overriding this check.
+
     Returns
     -------
     MosaicCanvas
     """
     if not tiles:
         raise ValueError("No tiles to assemble.")
+
+    pixel_sizes = {round(t.pixel_size_um, 4) for t in tiles}
+    if len(pixel_sizes) > 1:
+        by_objective: dict = {}
+        for t in tiles:
+            by_objective.setdefault(t.objective_name, []).append(t.pixel_size_um)
+        breakdown = ", ".join(
+            f"{obj!r}: {len(sizes)} tile(s) @ {sizes[0]:.4f} um/px"
+            for obj, sizes in by_objective.items()
+        )
+        raise ValueError(
+            f"Tiles have {len(pixel_sizes)} different pixel sizes -- this mosaic "
+            f"mixes objectives ({breakdown}). Filter to one objective first, e.g. "
+            f"`tiles = filter_tiles_by_objective(tiles, objective='10x')`."
+        )
 
     tile_pixel_um = tiles[0].pixel_size_um
     downsample = max(1, round(working_pixel_um / tile_pixel_um))
@@ -339,6 +419,57 @@ def segment_mosaic_tissue(
         tissue_polygons=tissue_polygons, hole_polygons=hole_polygons,
         mask=mask_final, threshold=threshold,
     )
+
+
+def plot_tile_intensity_histograms(
+    tiles:  List[SteveTile],
+    bins:   int = 100,
+    ax=None,
+    color:  str = "steelblue",
+    alpha:  float = 0.5,
+):
+    """
+    Overlay one log-space pixel-intensity histogram per tile, all drawn in
+    the same color/alpha so they visually stack -- lets an outlier tile (a
+    different objective, a debris/bubble FOV, ...) stand out, and helps pick
+    a fixed segmentation threshold by eye instead of trusting Otsu blindly.
+
+    Every tile is histogrammed over the same ``log10`` bin edges (spanning
+    the full range across all tiles) so the overlaid shapes are directly
+    comparable; each is density-normalized so tiles don't need to be the
+    same pixel count to compare shapes.
+
+    Parameters
+    ----------
+    tiles : from :func:`load_steve_mosaic` (or a filtered subset).
+    bins : number of bins across the full log10(intensity) range.
+    ax : optional existing matplotlib Axes to draw into.
+    color, alpha : shared line style for every tile's histogram.
+
+    Returns
+    -------
+    The matplotlib Axes drawn into.
+    """
+    import matplotlib.pyplot as plt
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 5))
+
+    # Clip at 1 (not 0) so log10 stays finite for zero/saturated-low pixels.
+    log_images = [np.log10(np.clip(t.image, 1, None).astype(np.float64)) for t in tiles]
+    lo = min(float(li.min()) for li in log_images)
+    hi = max(float(li.max()) for li in log_images)
+    bin_edges = np.linspace(lo, hi, bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    for li in log_images:
+        counts, _ = np.histogram(li, bins=bin_edges, density=True)
+        ax.plot(bin_centers, counts, "-", color=color, alpha=alpha, lw=1.0)
+
+    ax.set_xlabel("log10(pixel intensity)")
+    ax.set_ylabel("density")
+    ax.set_title(f"Per-tile intensity histograms ({len(tiles)} tile(s))")
+    return ax
 
 
 def plot_mosaic_segmentation(canvas: MosaicCanvas, segmentation: MosaicSegmentation, ax=None):

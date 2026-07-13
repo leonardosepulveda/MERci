@@ -107,18 +107,26 @@ src/MERci/
                     #   instead of drawing them by hand -- load_steve_mosaic (reads a Steve .msc manifest +
                     #   its .stv tile pickles; each tile already carries its own stage position + pixel size,
                     #   recovered from the tile's own x_um/x_pix ratio and magnification, not a hard-coded
-                    #   coord.Point.pixels_to_um or the .msc file's own rounded objective line),
+                    #   coord.Point.pixels_to_um or the .msc file's own rounded objective line) +
+                    #   filter_tiles_by_objective (a mosaic can mix in tiles shot at a different objective,
+                    #   e.g. high-mag alignment/reference FOVs alongside the low-mag scan -- those have a
+                    #   different real pixel size and must be filtered out before assembly),
                     #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron
-                    #   coords, downsampled to a working resolution), segment_mosaic_tissue (smooth ->
-                    #   threshold (Otsu default) -> morphological close/open/dilate-margin -> fill_holes ->
-                    #   per-component marching-squares contours -> simplify; the smoothing+morphology is
-                    #   needed because a single global threshold on the raw canvas fragments one tissue mass
-                    #   into hundreds of tiny disjoint specks from illumination vignetting/tile seams),
-                    #   plot_mosaic_segmentation (tissue/hole overlay for the notebook's interactive
-                    #   threshold-tuning review step), save_boundary_from_mosaic (writes in the exact
-                    #   convention positions.discover_boundary_files/load_hole_polygons already expect --
-                    #   legacy boundary_positions.txt for one detected piece, boundary_positions_{b}.txt
-                    #   for several disjoint pieces; holes are global, same as the rest of the pipeline)
+                    #   coords, downsampled to a working resolution; raises if the tiles don't all share one
+                    #   pixel size, rather than silently mis-scaling/misplacing whichever tiles don't match),
+                    #   plot_tile_intensity_histograms (every tile's log-space intensity histogram overlaid,
+                    #   same color/alpha, to pick a fixed segmentation threshold by eye when Otsu doesn't
+                    #   separate tissue from background well), segment_mosaic_tissue (smooth -> threshold
+                    #   (Otsu default, or a fixed value read off the histogram) -> morphological
+                    #   close/open/dilate-margin -> fill_holes -> per-component marching-squares contours ->
+                    #   simplify; the smoothing+morphology is needed because a single global threshold on the
+                    #   raw canvas fragments one tissue mass into hundreds of tiny disjoint specks from
+                    #   illumination vignetting/tile seams), plot_mosaic_segmentation (tissue/hole overlay for
+                    #   the notebook's interactive threshold-tuning review step), save_boundary_from_mosaic
+                    #   (writes in the exact convention positions.discover_boundary_files/load_hole_polygons
+                    #   already expect -- legacy boundary_positions.txt for one detected piece,
+                    #   boundary_positions_{b}.txt for several disjoint pieces; holes are global, same as the
+                    #   rest of the pipeline)
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
