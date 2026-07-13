@@ -270,12 +270,27 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: 
       type subfolder between the sample and its MERci clone -- ``"merfish"``,
       ``"lineage"``, ``"epi"``, ``"disk"`` -- or nothing when this acquisition
       doesn't (yet) live under its own subfolder).
+    * **Fallback** when *sample_name* itself has no project token: this
+      happens once an acquisition actually lives under its own subfolder
+      (``sample_dir`` = e.g. ``.../LT058_sample_07/merfish``) and
+      *sample_name* is really that subfolder's own local file-naming
+      convention (``"merfish"``) rather than the true top-level experiment
+      id -- notebook 06 derives ``sample_name`` from ``SAMPLE_DIR.name``,
+      which is only the parent experiment folder in the flat, unsplit
+      layout. In that case the true experiment id is one level up
+      (``sample_dir.parent.name``); if *that* contains a project token, it
+      is used instead, together with ``sample_dir.name`` as the acquisition
+      subfolder -- regardless of what *imaging_dir* was set to, since the
+      real folder structure is more reliable than possibly-stale metadata.
 
     Parameters
     ----------
     sample_dir  : this experiment's local acquisition-root ``Path`` (whatever
                   OS the notebook is currently running on)
-    sample_name : experiment id, e.g. ``"251225_LT027_saving_time"``
+    sample_name : experiment id, e.g. ``"251225_LT027_saving_time"`` -- or,
+                  in the split-subfolder layout, this acquisition's own local
+                  file-naming convention (e.g. ``"merfish"``); see the
+                  fallback above
     imaging_dir : acquisition-type subfolder name (``experiment_info.yaml``'s
                   ``extra["imaging_dir"]``), e.g. ``"merfish"``; ``""`` when
                   this acquisition's data/metadata/positions/settings/merlin
@@ -289,14 +304,38 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: 
     if sys.platform.startswith("linux"):
         return sample_dir.as_posix()
 
-    acquisition_subpath = f"{sample_name}/{imaging_dir}" if imaging_dir else sample_name
-    upper_name = sample_name.upper()
-    for token, root in _PROJECT_CLUSTER_ROOTS.items():
-        if token in upper_name:
-            return f"{root}/{acquisition_subpath}"
+    sample_dir = Path(sample_dir)
+
+    def _cluster_root(experiment_id: str) -> Optional[str]:
+        upper = experiment_id.upper()
+        for token, root in _PROJECT_CLUSTER_ROOTS.items():
+            if token in upper:
+                return root
+        return None
+
+    # Usual case: sample_name IS the top-level experiment id (unsplit layout,
+    # or imaging_dir was set so sample_name was derived from the parent
+    # folder already).
+    root = _cluster_root(sample_name)
+    if root is not None:
+        acquisition_subpath = f"{sample_name}/{imaging_dir}" if imaging_dir else sample_name
+        return f"{root}/{acquisition_subpath}"
+
+    # Fallback: this acquisition already lives under its own acquisition-type
+    # subfolder (sample_dir.name, e.g. "merfish"/"lineage"/"epi"/"disk") but
+    # sample_name is that subfolder's own local file-naming convention, not
+    # the true top-level experiment id -- which is one level up
+    # (sample_dir.parent.name). Trust the actual folder structure over
+    # possibly-unset/stale imaging_dir metadata, rather than requiring the
+    # caller to have set imaging_dir correctly for this to work.
+    parent_root = _cluster_root(sample_dir.parent.name)
+    if parent_root is not None:
+        return f"{parent_root}/{sample_dir.parent.name}/{sample_dir.name}"
+
     raise ValueError(
-        f"Cannot infer the cluster project root for sample_name={sample_name!r}: "
-        f"expected it to contain one of {list(_PROJECT_CLUSTER_ROOTS)}. "
+        f"Cannot infer the cluster project root for sample_name={sample_name!r} "
+        f"or its parent folder {sample_dir.parent.name!r}: expected one of them "
+        f"to contain one of {list(_PROJECT_CLUSTER_ROOTS)}. "
         f"Extend _PROJECT_CLUSTER_ROOTS in merlin_config.py for other projects."
     )
 
