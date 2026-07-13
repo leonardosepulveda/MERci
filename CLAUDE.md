@@ -46,8 +46,11 @@ levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.par
 ```
 SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
   MERci/             ← clone of this repo
-  positions/         ← boundary_positions.txt, hole*.txt (from operator),
-                        positions_{SAMPLE_NAME}.txt (from prepare_imaging/02)
+  positions/         ← boundaries/manual/ (hand-drawn boundary_positions*.txt, hole*.txt),
+                        boundaries/from_mosaic/ (same files, auto-derived by prepare_imaging/02's
+                        02_create_boundary_from_mosaic.ipynb) -- resolve_boundaries_source_dir picks
+                        whichever has files (preferring from_mosaic); positions_{SAMPLE_NAME}.txt
+                        (from prepare_imaging/02's 02_create_positions_from_boundaries.ipynb)
   metadata/          ← frame_table_*.csv, shutter_sequence_*.png (prepare_imaging/01),
                         round_info.csv, round_bit_color_map.csv (prepare_imaging/03),
                         data_organization_*.csv (prepare_imaging/05),
@@ -99,39 +102,55 @@ src/MERci/
                     # + reconstruct_frame_table (inverse: hal+shutter XML -> frame table) and its parsers
                     #   read_shutter_reference, parse_z_offsets, parse_shutter_events
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
-                    # load_hole_polygons, get_path_stats
+                    # load_hole_polygons (also reassembles hole{n}_island{m}.txt companions -- see mosaic.py --
+                    #   into interior rings of that hole's Polygon, via Polygon(coords, holes=[...])), get_path_stats
                     # + multi-tissue: discover_boundary_files (auto multi/single/legacy), load_boundary_polygon,
                     #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec,
                     #   has_boundary_files / resolve_boundary_dir (fall back to data/positions/examples when empty)
+                    # + resolve_boundaries_source_dir(positions_dir, source=None) -- resolves
+                    #   positions/boundaries/{manual,from_mosaic}/: with source=None, auto-picks whichever has
+                    #   files (preferring from_mosaic), so notebooks 02 (FOV-grid generator) and 03
+                    #   (round_info) always agree on which boundary set to use without passing state between them
     mosaic.py       # derive boundary_positions*.txt/hole*.txt automatically from a Steve low-mag mosaic
-                    #   instead of drawing them by hand -- load_steve_mosaic (reads a Steve .msc manifest +
-                    #   its .stv tile pickles; each tile already carries its own stage position + pixel size,
-                    #   recovered from the tile's own x_um/x_pix ratio and magnification, not a hard-coded
-                    #   coord.Point.pixels_to_um or the .msc file's own rounded objective line) +
-                    #   filter_tiles_by_objective (a mosaic can mix in tiles shot at a different objective,
-                    #   e.g. high-mag alignment/reference FOVs alongside the low-mag scan -- those have a
-                    #   different real pixel size and must be filtered out before assembly),
-                    #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron
-                    #   coords, downsampled to a working resolution; raises if the tiles don't all share one
-                    #   pixel size, rather than silently mis-scaling/misplacing whichever tiles don't match),
-                    #   plot_tile_intensity_histograms (every tile's log-space intensity histogram overlaid
-                    #   as thin gray lines, plus a solid combined histogram pooling every tile's pixels --
-                    #   when that combined histogram is clearly bimodal, _estimate_bimodal_threshold finds
-                    #   the valley between its two most prominent peaks (scipy.signal.find_peaks) and returns
-                    #   it in linear intensity units, drawn as a labelled vertical line and returned alongside
-                    #   the Axes, so the notebook can seed THRESHOLD with it directly instead of starting
-                    #   from Otsu, which can be biased toward the dominant class when one vastly outnumbers
-                    #   the other in pixel count), segment_mosaic_tissue (smooth -> threshold
-                    #   (Otsu default, or a fixed value read off the histogram) -> morphological
+                    #   instead of drawing them by hand, writing to positions/boundaries/from_mosaic/ --
+                    #   load_steve_mosaic (reads a Steve .msc manifest + its .stv tile pickles; each tile already
+                    #   carries its own stage position + pixel size + zvalue (Steve's own display stacking order,
+                    #   confirmed to increase monotonically with acquisition order), recovered from the tile's
+                    #   own x_um/x_pix ratio and magnification, not a hard-coded coord.Point.pixels_to_um or the
+                    #   .msc file's own rounded objective line) + filter_tiles_by_objective (kept for explicit
+                    #   manual exclusion, e.g. rejecting bad tiles -- NOT applied by default any more, since
+                    #   assemble_mosaic_canvas now handles mixed objectives/overlapping tiles directly),
+                    #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron coords at
+                    #   a single working_pixel_um resolution -- each tile is independently downsampled from its
+                    #   own real pixel size, so tiles shot at different objectives/exposures composite together
+                    #   without error; tiles are painted in ascending zvalue order with plain overwrite (not
+                    #   averaging), so where N tiles overlap a pixel, the pixel comes from whichever tile is
+                    #   physically on top -- e.g. a handful of 60x alignment FOVs shot over part of a 10x scan),
+                    #   plot_tile_intensity_histograms (every tile's log-space intensity histogram overlaid as
+                    #   thin gray lines, plus a solid combined histogram pooling every tile's pixels -- when that
+                    #   combined histogram is clearly bimodal, _estimate_bimodal_threshold finds the valley
+                    #   between its two most prominent peaks (scipy.signal.find_peaks) and returns it in linear
+                    #   intensity units, drawn as a labelled vertical line and returned alongside the Axes, so
+                    #   the notebook can seed THRESHOLD with it directly instead of starting from Otsu, which can
+                    #   be biased toward the dominant class when one vastly outnumbers the other in pixel count
+                    #   -- run this on tiles from one objective only (the majority one) when the mosaic mixes
+                    #   objectives/exposures, since pooling differently-exposed tiles adds spurious extra modes
+                    #   to the histogram and corrupts the valley estimate), segment_mosaic_tissue (smooth ->
+                    #   threshold (Otsu default, or a fixed value read off the histogram) -> morphological
                     #   close/open/dilate-margin -> fill_holes -> per-component marching-squares contours ->
                     #   simplify; the smoothing+morphology is needed because a single global threshold on the
                     #   raw canvas fragments one tissue mass into hundreds of tiny disjoint specks from
-                    #   illumination vignetting/tile seams), plot_mosaic_segmentation (tissue/hole overlay for
-                    #   the notebook's interactive threshold-tuning review step), save_boundary_from_mosaic
-                    #   (writes in the exact convention positions.discover_boundary_files/load_hole_polygons
-                    #   already expect -- legacy boundary_positions.txt for one detected piece,
-                    #   boundary_positions_{b}.txt for several disjoint pieces; holes are global, same as the
-                    #   rest of the pipeline)
+                    #   illumination vignetting/tile seams. A labeled component can itself be a donut/annulus --
+                    #   a hole with a real island of tissue inside it -- so per component every marching-squares
+                    #   ring is inspected: the largest-area ring is the exterior, and any other ring above
+                    #   min_island_area_um2 becomes an interior ring of a Polygon(exterior, holes=[...]) instead
+                    #   of being discarded), plot_mosaic_segmentation (tissue/hole overlay, now also drawing each
+                    #   hole's interior/island rings dashed, for the notebook's interactive threshold-tuning
+                    #   review step), save_boundary_from_mosaic (writes in the exact convention
+                    #   positions.discover_boundary_files/load_hole_polygons already expect -- legacy
+                    #   boundary_positions.txt for one detected piece, boundary_positions_{b}.txt for several
+                    #   disjoint pieces; holes are global, same as the rest of the pipeline; a hole with an
+                    #   island also writes hole{n}_island{m}.txt companion files, one per interior ring)
     alignment.py    # cross-microscope FOV transfer: load_boundary_polygon, fit_isotropic_alignment
                     # (centroid/area init + IoU refinement, optional x/y axis flips), polygon_iou,
                     # AlignmentResult (scale + translation + flip_x/flip_y);
@@ -221,11 +240,16 @@ notebooks/
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
       #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
       #                                                #   bits+cells, and a transit HAL config (blank frames)
-      #   02_create_positions_from_mosaic.ipynb       # OPTIONAL: derive boundary_positions*.txt/hole*.txt
-      #                                                #   automatically from a Steve low-mag mosaic instead of
-      #                                                #   drawing them by hand -- feeds the next notebook
+      #   02_create_boundary_from_mosaic.ipynb        # OPTIONAL, independent of the notebook below: derive
+      #                                                #   boundary_positions*.txt/hole*.txt automatically from
+      #                                                #   a Steve low-mag mosaic instead of drawing them by
+      #                                                #   hand; writes to positions/boundaries/from_mosaic/
       #   02_create_positions_from_boundaries.ipynb   # multi-boundary FOV grids + transit segments; per-segment /
-      #                                                #   per-tissue positions files; creates data/ subfolders
+      #                                                #   per-tissue positions files; creates data/ subfolders.
+      #                                                #   Reads boundary files from positions/boundaries/manual/
+      #                                                #   or positions/boundaries/from_mosaic/ (auto-picks
+      #                                                #   whichever has files, preferring from_mosaic --
+      #                                                #   resolve_boundaries_source_dir)
       #   03_create_round_info.ipynb                  # round-bit-color map (+ derives N_HYBS) + round_info.csv
       #   04_create_dave_config.ipynb                 # builds the Dave recipe XML from round_info.csv; every
       #                                                #   loop gets its own identically-named loop_variable
@@ -322,15 +346,15 @@ run the set for the acquisition being prepared.
 
 Both XML files use Windows CRLF line endings and ISO-8859-1 encoding as required by HAL.
 
-**02 -- two notebooks, same input contract.** `02_create_positions_from_boundaries.ipynb` (the FOV-grid generator) reads `boundary_positions*.txt`/`hole*.txt` from `SAMPLE_DIR/positions/`; those files can come from either drawing them by hand, or running `02_create_positions_from_mosaic.ipynb` first to derive them automatically from a Steve low-mag mosaic. Both are described below.
+**02 -- two independent notebooks, same input contract.** Deriving boundaries from a mosaic (`02_create_boundary_from_mosaic.ipynb`) is a self-contained analysis of `SAMPLE_DIR/data/mosaic10x/`, independent of the FOV-grid generator (`02_create_positions_from_boundaries.ipynb`) — the two used to be a single "notebook 02a feeds notebook 02" pipeline, but since a mosaic can be re-run/re-thresholded any number of times without touching FOV-grid generation (or skipped entirely for a hand-drawn boundary), they write to two separate subfolders that both feed the same downstream contract: `SAMPLE_DIR/positions/boundaries/manual/` (hand-drawn) and `SAMPLE_DIR/positions/boundaries/from_mosaic/` (notebook output). `resolve_boundaries_source_dir(positions_dir, source=None)` resolves which one to read: with `source=None` (the default in both notebooks 02 and 03) it auto-picks whichever has files, preferring `from_mosaic` — so drawing a mosaic-derived boundary automatically takes over from a manual one without any notebook edits, and notebooks 02/03 always agree without passing state between them. Both notebooks are described below.
 
-**02a** (`prepare_imaging/<variant>/02_create_positions_from_mosaic.ipynb`, optional): derives `boundary_positions*.txt`/`hole*.txt` automatically from a Steve low-mag mosaic (`MERci.acquisition.mosaic`), instead of drawing them by hand. `load_steve_mosaic` reads a Steve `.msc` manifest + its `.stv` tile pickles from `SAMPLE_DIR/data/mosaic10x/` (each tile already carries its own stage position + pixel size); `assemble_mosaic_canvas` pastes them into one flattened image in stage-micron coordinates; `segment_mosaic_tissue` smooths, thresholds (Otsu default), and morphologically cleans up the canvas (closing bridges small real gaps, opening drops noise specks, an outward dilation adds a hand-drawing-like safety margin) before tracing tissue/hole polygons — a single global threshold on the raw canvas is not enough on its own: illumination vignetting and tile seams otherwise fragment one tissue mass into hundreds of tiny disjoint specks. This is a visual, iterative notebook: `plot_mosaic_segmentation` overlays the detected tissue (green) / hole (red) polygons on the canvas so threshold/morphology parameters can be re-tuned and re-run before committing; only then does `save_boundary_from_mosaic` write the files, in the exact convention `discover_boundary_files`/`load_hole_polygons` already expect (legacy `boundary_positions.txt` for one detected piece, `boundary_positions_{b}.txt` for several disjoint pieces — holes stay global, same as everywhere else in the pipeline). Validated against a real Steve mosaic + a manually-drawn ground truth: precise IoU against the hand-drawn polygon is not the goal (a hand-drawn boundary is a coarser, more generous envelope than a signal-following threshold trace), but the detected outline visibly follows the real tissue shape and finds the same internal holes.
+**02 — mosaic** (`prepare_imaging/<variant>/02_create_boundary_from_mosaic.ipynb`, optional): derives `boundary_positions*.txt`/`hole*.txt` automatically from a Steve low-mag mosaic (`MERci.acquisition.mosaic`), instead of drawing them by hand. `load_steve_mosaic` reads a Steve `.msc` manifest + its `.stv` tile pickles from `SAMPLE_DIR/data/mosaic10x/` (each tile already carries its own stage position, pixel size, and `zvalue`); `assemble_mosaic_canvas` pastes **all** tiles into one flattened image in stage-micron coordinates at a single working resolution — mixed objectives/exposures and overlapping tiles (e.g. a handful of high-mag alignment FOVs shot over part of the low-mag scan) are handled directly: each tile is independently downsampled from its own real pixel size, and tiles are painted in ascending `zvalue` order so an overlapping pixel always takes the value from whichever tile is physically on top, rather than being averaged or rejected. The intensity-histogram threshold estimate (`plot_tile_intensity_histograms`) is computed from the majority-objective tiles only, so a handful of differently-exposed tiles don't add a spurious third mode and bias the estimate; `segment_mosaic_tissue` smooths, thresholds (seeded from that estimate, or Otsu), and morphologically cleans up the full composited canvas (closing bridges small real gaps, opening drops noise specks, an outward dilation adds a hand-drawing-like safety margin) before tracing tissue/hole polygons — a single global threshold on the raw canvas is not enough on its own: illumination vignetting and tile seams otherwise fragment one tissue mass into hundreds of tiny disjoint specks. A detected hole can itself contain a real island of tissue (a donut/annulus shape) rather than being a simple region to exclude entirely; `segment_mosaic_tissue` detects this per labeled component and represents it as an interior ring of the hole's polygon (`min_island_area_um2` controls the minimum size to keep as a real island vs. noise), and `save_boundary_from_mosaic` writes each island as a `hole{n}_island{m}.txt` companion file alongside the hole's own `hole{n}.txt`. This is a visual, iterative notebook: `plot_mosaic_segmentation` overlays the detected tissue (green) / hole (red, with island interiors dashed) polygons on the canvas so threshold/morphology parameters can be re-tuned and re-run before committing; only then does `save_boundary_from_mosaic` write the files into `SAMPLE_DIR/positions/boundaries/from_mosaic/`, in the exact convention `discover_boundary_files`/`load_hole_polygons` already expect (legacy `boundary_positions.txt` for one detected piece, `boundary_positions_{b}.txt` for several disjoint pieces — holes stay global, same as everywhere else in the pipeline). Validated against a real Steve mosaic + a manually-drawn ground truth: precise IoU against the hand-drawn polygon is not the goal (a hand-drawn boundary is a coarser, more generous envelope than a signal-following threshold trace), but the detected outline visibly follows the real tissue shape and finds the same internal holes, including the one real island present in the test mosaic.
 
-**02** (`prepare_imaging/<variant>/02_create_positions_from_boundaries.ipynb`): builds the FOV scanning positions for one or more tissue sections. If `SAMPLE_DIR/positions/` has no boundary files yet, it falls back to a bundled example dataset under `MERci/data/positions/examples/{legacy,single,multi}` (chosen by the notebook's `EXAMPLE_LAYOUT`; per-variant default: tumor→`legacy`, lineage_tracing/reference→`multi`) via `resolve_boundary_dir`, and **copies that example's boundary + hole inputs into `positions/`** so the experiment folder is self-contained and notebooks 03/04 (which read `positions/` directly) find them. This lets the whole pipeline be run and tested before any real boundaries are drawn; the copy is idempotent (skipped once `positions/` has inputs). It **auto-detects the layout** from the boundary filenames in the resolved directory (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
+**02 — FOV grid** (`prepare_imaging/<variant>/02_create_positions_from_boundaries.ipynb`): builds the FOV scanning positions for one or more tissue sections. Reads boundary files via `resolve_boundaries_source_dir` (see above). If neither `positions/boundaries/manual/` nor `positions/boundaries/from_mosaic/` has files yet, it falls back to a bundled example dataset under `MERci/data/positions/examples/{legacy,single,multi}` (chosen by the notebook's `EXAMPLE_LAYOUT`; per-variant default: tumor→`legacy`, lineage_tracing/reference→`multi`) via `resolve_boundary_dir`, and **copies that example's boundary + hole inputs into the resolved boundaries source folder** so the experiment folder is self-contained and notebook 03 (which reads the same resolved folder) finds them. This lets the whole pipeline be run and tested before any real boundaries are drawn; the copy is idempotent (skipped once the folder has inputs). It **auto-detects the layout** from the boundary filenames in the resolved directory (`discover_boundary_files`): `tissue_{t}_boundary_positions_{b}.txt` → **multi** (several sections), `boundary_positions_{b}.txt` → **single** (one section, several boundaries), or a lone `boundary_positions.txt` → **legacy** (one boundary). For each boundary it builds a boustrophedon FOV path (`build_boundary_path` = `create_grid_positions` → `generate_scanning_path` → `filter_scanning_path`); between consecutive boundaries (wrapping the last back to the first) it inserts a **transit** segment (`create_transit_path`: FOVs on the A→B line spaced ~`TRANSIT_SPACING`×step). `hole*.txt` polygons are global (applied to every boundary). Writes per-segment files referenced by Dave (`positions_{SAMPLE_NAME}_{T#B#|B#}.txt`, `positions_{SAMPLE_NAME}_transit_{k}.txt`), per-tissue FOV-only files (`positions_{SAMPLE_NAME}_T{t}.txt`, or `positions_{SAMPLE_NAME}.txt` for single/legacy), and creates the `data/` subfolders for the layout (`mosaic10x`, and `tissue_{t}/{cells,hybs,transit}` or top-level `{cells,hybs,transit}`).
 
 FOV grid rules: odd row and column count; centre FOV at bounding-box midpoint. A FOV is kept if its camera square overlaps the boundary polygon at all; excluded only if a hole polygon fully contains the FOV square.
 
-**03** (`prepare_imaging/<variant>/03_create_round_info.ipynb`): generates `round_info.csv`. With a single boundary it uses the classic single-positions recipe (`create_round_info`). With **multiple boundaries** it builds a **segment-aware** `round_info` (`create_round_info_multitissue`: one row per (round, segment) — boundary movies with the cells/bits config + transit movies with the transit config, plus `positions_file`, `tissue`, `segment` columns). HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells); the transit HAL config from notebook 01 is auto-detected too. This notebook also **defines the round–bit–colour mapping** (`round_bit_color`, one `(round, bit, color_nm)` per bit) and **derives `N_HYBS` from it** (`N_HYBS = max(round)`) rather than hard-coding it, so the hyb count always matches the codebook; it saves the mapping to `SAMPLE_DIR/metadata/round_bit_color_map.csv` for notebooks 04-07 to reuse. Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/metadata/round_bit_color_map.csv`.
+**03** (`prepare_imaging/<variant>/03_create_round_info.ipynb`): generates `round_info.csv`. Resolves the same boundary source folder as notebook 02 (`resolve_boundaries_source_dir(POSITIONS_DIR)`, `BOUNDARY_SOURCE = None` auto-picks whichever has files) before calling `discover_boundary_files`, so the two notebooks can never disagree about which boundary set (manual vs. from_mosaic) is in use. With a single boundary it uses the classic single-positions recipe (`create_round_info`). With **multiple boundaries** it builds a **segment-aware** `round_info` (`create_round_info_multitissue`: one row per (round, segment) — boundary movies with the cells/bits config + transit movies with the transit config, plus `positions_file`, `tissue`, `segment` columns). HAL configs for bits vs. cells rounds are auto-detected by glob patterns (`blkf3*` for bits, `blkf1*` for cells); the transit HAL config from notebook 01 is auto-detected too. This notebook also **defines the round–bit–colour mapping** (`round_bit_color`, one `(round, bit, color_nm)` per bit) and **derives `N_HYBS` from it** (`N_HYBS = max(round)`) rather than hard-coding it, so the hyb count always matches the codebook; it saves the mapping to `SAMPLE_DIR/metadata/round_bit_color_map.csv` for notebooks 04-07 to reuse. Writes `SAMPLE_DIR/metadata/round_info.csv` and `SAMPLE_DIR/metadata/round_bit_color_map.csv`.
 
 **Multi-drive round-robin (optional).** Setting `DATA_DRIVES = ["D:", "E:", "F:"]` (default `[]` = disabled) makes `create_round_info`/`create_round_info_multitissue` spread successive **hyb** rounds round-robin across those drives — round *i*'s `data_dir` becomes `<drive>/data/hybs/H{NN}` instead of always `SAMPLE_DIR/data/hybs/H{NN}` (cells/transit are unaffected, always under `SAMPLE_DIR/data/...`). `create_data_drive_skeleton` pre-creates each hyb's `H##` folder only on the one drive it is actually assigned to (via the same round-robin assignment as `round_info.csv`, not on every configured drive) — so which hybs live on which disk is visible directly from each drive's folder listing, and can never disagree with `round_info.csv`. This pairs with `analysis_mode="round_robin_drives"` (see Online-analysis architecture below) so analysis can read already-completed rounds on idle drives while HAL is still writing the current round to a different one.
 

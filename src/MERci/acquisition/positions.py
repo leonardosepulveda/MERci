@@ -125,6 +125,20 @@ def generate_scanning_path(
 
 # ── Hole polygons ──────────────────────────────────────────────────────────────
 
+def _read_xy_file(path: Path) -> List[Tuple[float, float]]:
+    """Read a comma-separated ``x,y`` file (one vertex per line) into a list."""
+    coords = []
+    with path.open() as fh:
+        reader = csv.reader(fh)
+        for row in reader:
+            if len(row) >= 2:
+                try:
+                    coords.append((float(row[0]), float(row[1])))
+                except ValueError:
+                    pass   # skip header-like lines
+    return coords
+
+
 def load_hole_polygons(
     hole_dir: Path,
     pattern:  str = "hole*.txt",
@@ -132,34 +146,51 @@ def load_hole_polygons(
     """
     Load exclusion-region polygons from a directory.
 
-    Each file matching *pattern* must be a comma-separated ``x,y`` file
-    (one vertex per line).  Files with fewer than three vertices are skipped.
+    Each ``hole{n}.txt`` file matching *pattern* must be a comma-separated
+    ``x,y`` file (one vertex per line); files with fewer than three vertices
+    are skipped. A hole can optionally have one or more companion
+    ``hole{n}_island{m}.txt`` files (same format) -- these become interior
+    rings of the hole polygon, for a hole that is really a donut/annulus
+    around genuine tissue (e.g. auto-derived by
+    ``MERci.acquisition.mosaic.segment_mosaic_tissue``/``save_boundary_from
+    _mosaic``): the island area is then correctly excluded *from* the hole
+    (i.e. still imaged), rather than swallowed whole into a solid disk.
+    Island companion files are never treated as holes in their own right.
 
     Returns
     -------
-    List of valid Shapely :class:`~shapely.geometry.Polygon` objects.
+    List of valid Shapely :class:`~shapely.geometry.Polygon` objects (with
+    interior rings where island companion files were found).
     """
-    hole_dir  = Path(hole_dir)
+    hole_dir = Path(hole_dir)
+    hole_re  = re.compile(r"^hole(\d+)\.txt$", re.IGNORECASE)
     polygons: List[Polygon] = []
 
     for path in sorted(hole_dir.glob(pattern)):
-        with path.open() as fh:
-            reader = csv.reader(fh)
-            coords = []
-            for row in reader:
-                if len(row) >= 2:
-                    try:
-                        coords.append((float(row[0]), float(row[1])))
-                    except ValueError:
-                        pass   # skip header-like lines
+        m = hole_re.match(path.name)
+        if not m:
+            continue   # e.g. a hole{n}_island{m}.txt companion file -- not its own hole
+        hole_id = m.group(1)
 
+        coords = _read_xy_file(path)
         if len(coords) < 3:
             log.warning(
                 "%s has fewer than 3 valid points – skipping.", path.name
             )
             continue
 
-        poly = Polygon(coords)
+        islands = []
+        for island_path in sorted(hole_dir.glob(f"hole{hole_id}_island*.txt")):
+            island_coords = _read_xy_file(island_path)
+            if len(island_coords) < 3:
+                log.warning(
+                    "%s has fewer than 3 valid points – skipping this island.",
+                    island_path.name,
+                )
+                continue
+            islands.append(island_coords)
+
+        poly = Polygon(coords, islands) if islands else Polygon(coords)
         if poly.is_empty or not poly.is_valid:
             log.warning(
                 "%s produced an invalid Shapely polygon – skipping.", path.name
@@ -437,6 +468,51 @@ def has_boundary_files(positions_dir: Path) -> bool:
         if multi_re.match(p.name) or single_re.match(p.name):
             return True
     return (positions_dir / "boundary_positions.txt").exists()
+
+
+def resolve_boundaries_source_dir(
+    positions_dir: Path,
+    source:        Optional[str] = None,
+) -> Tuple[Path, str]:
+    """
+    Resolve which ``positions/boundaries/<source>/`` subfolder to read tissue
+    boundaries from.
+
+    Boundary inputs live under two possible sources: ``manual`` (hand-drawn)
+    or ``from_mosaic`` (auto-derived by ``02_create_boundary_from_mosaic
+    .ipynb``) — both write/read the same ``boundary_positions*.txt``/
+    ``hole*.txt`` file convention, just from different subfolders, so this
+    is the single place that decides which one a downstream notebook
+    (``02_create_positions_from_boundaries.ipynb``, ``03_create_round_info
+    .ipynb``) actually uses, keeping both in agreement without needing to
+    pass state between separate notebook runs.
+
+    Parameters
+    ----------
+    positions_dir : ``SAMPLE_DIR/positions``.
+    source : ``"from_mosaic"``, ``"manual"``, or ``None`` to auto-detect --
+        prefers ``from_mosaic`` if it has boundary files, else ``manual``,
+        else ``manual`` again (as the target for :func:`resolve_boundary_dir`'s
+        example-data fallback, since a hand-drawn-style example set belongs
+        with the manual source).
+
+    Returns
+    -------
+    (source_dir, source) : the resolved ``positions/boundaries/<source>``
+        directory and which source string was used.
+    """
+    positions_dir = Path(positions_dir)
+    boundaries_root = positions_dir / "boundaries"
+
+    if source is not None:
+        return boundaries_root / source, source
+
+    for candidate in ("from_mosaic", "manual"):
+        candidate_dir = boundaries_root / candidate
+        if has_boundary_files(candidate_dir):
+            return candidate_dir, candidate
+
+    return boundaries_root / "manual", "manual"
 
 
 def resolve_boundary_dir(

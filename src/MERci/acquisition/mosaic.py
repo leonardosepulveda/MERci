@@ -3,28 +3,29 @@
 Derive tissue-boundary / hole polygons automatically from a Steve low-mag
 mosaic, instead of drawing ``boundary_positions*.txt``/``hole*.txt`` by hand.
 
-Typical workflow (see ``02_create_positions_from_mosaic.ipynb``)
+Typical workflow (see ``02_create_boundary_from_mosaic.ipynb``)
 ------------------------------------------------------------------
 1. ``load_steve_mosaic`` – read a Steve ``.msc`` manifest + its ``.stv`` tile
-   pickles (each tile already carries its own stage position and pixel size,
-   so no separate calibration step is needed).
-2. ``filter_tiles_by_objective`` – drop tiles shot with a different
-   objective than the main scan (e.g. high-mag alignment/reference FOVs
-   mixed into a low-mag mosaic) -- required if the mosaic mixes objectives,
-   since ``assemble_mosaic_canvas`` refuses to paste mismatched pixel sizes
-   into one canvas.
-3. ``assemble_mosaic_canvas`` – paste all (same-objective) tiles into one
-   flattened image in real stage-micron coordinates.
-4. ``plot_tile_intensity_histograms`` – overlay every tile's log-space
+   pickles (each tile already carries its own stage position, pixel size,
+   and display stacking order, so no separate calibration step is needed).
+2. ``assemble_mosaic_canvas`` – paste every tile into one flattened image in
+   real stage-micron coordinates. Tiles can mix objectives/pixel sizes and
+   deliberately overlap (e.g. a few high-mag alignment FOVs over a low-mag
+   scan); each is resampled using its own native pixel size, and overlaps
+   are resolved by Steve's own stacking order (topmost tile wins), not
+   averaged. Use ``filter_tiles_by_objective`` first only if some tiles
+   should be dropped entirely rather than composited (e.g. genuinely
+   unwanted debris/bubble frames).
+3. ``plot_tile_intensity_histograms`` – overlay every tile's log-space
    intensity histogram, to pick a fixed segmentation threshold by eye when
    Otsu doesn't separate tissue from background well on a given sample.
-5. ``segment_mosaic_tissue`` – threshold + clean up the canvas into tissue
+4. ``segment_mosaic_tissue`` – threshold + clean up the canvas into tissue
    and hole polygons, in the same ``x_um, y_um`` coordinate space that
    ``boundary_positions.txt``/``hole*.txt`` already use.
-6. ``plot_mosaic_segmentation`` – overlay the detected polygons on the
+5. ``plot_mosaic_segmentation`` – overlay the detected polygons on the
    canvas for a visual sanity check before committing to them (thresholding
    parameters are re-run interactively until the overlay looks right).
-7. ``save_boundary_from_mosaic`` – write the polygons out in the exact
+6. ``save_boundary_from_mosaic`` – write the polygons out in the exact
    filename convention ``positions.discover_boundary_files``/
    ``load_hole_polygons`` already expect, so
    ``02_create_positions_from_boundaries.ipynb`` picks them up unchanged.
@@ -82,14 +83,24 @@ class SteveTile:
     objective_name : str
         The objective this tile was acquired with (e.g. ``"10x"``). A mosaic
         can contain tiles shot with more than one objective -- e.g. a few
-        alignment/reference FOVs taken at high magnification alongside the
-        low-mag scan -- see :func:`filter_tiles_by_objective`.
+        alignment/reference FOVs taken at high magnification, deliberately
+        overlapping the low-mag scan -- see :func:`assemble_mosaic_canvas`
+        (composites mixed-scale/overlapping tiles directly) and
+        :func:`filter_tiles_by_objective` (drops one objective entirely,
+        for when some tiles are genuinely unwanted rather than a different
+        magnification of real tissue).
+    zvalue : float
+        Steve's own display stacking order for this tile (higher = drawn on
+        top in Steve itself). Increases monotonically with acquisition
+        order in practice. Used by :func:`assemble_mosaic_canvas` to decide,
+        pixel-by-pixel, which tile "wins" where tiles overlap.
     """
     image:          np.ndarray
     x_um:           float
     y_um:           float
     pixel_size_um:  float
     objective_name: str
+    zvalue:         float
 
 
 @dataclass
@@ -99,7 +110,10 @@ class MosaicCanvas:
     Attributes
     ----------
     image : np.ndarray
-        Mean-pooled intensity per canvas pixel (0 where no tile covers it).
+        Per-canvas-pixel intensity (0 where no tile covers it). Where more
+        than one tile covers a pixel, the value comes from whichever tile
+        has the highest ``zvalue`` there (topmost wins -- not averaged; see
+        ``assemble_mosaic_canvas``).
     covered : np.ndarray
         Boolean mask, ``True`` where at least one tile contributed.
     origin_um : (float, float)
@@ -171,6 +185,7 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
             y_um=d["y_um"],
             pixel_size_um=pixel_size_um,
             objective_name=d["objective_name"],
+            zvalue=d["zvalue"],
         ))
 
     return tiles
@@ -215,37 +230,38 @@ def filter_tiles_by_objective(
 
 
 def assemble_mosaic_canvas(
-    tiles:           List[SteveTile],
+    tiles:            List[SteveTile],
     working_pixel_um: float = 5.0,
 ) -> MosaicCanvas:
     """
     Paste every tile into one flattened image in stage-micron coordinates.
 
-    Tiles are assumed non-overlapping (a raster-scanned Steve mosaic); where
-    tiles do overlap slightly, overlapping pixels are averaged rather than
-    the last tile winning, so a seam is never fully opaque either way.
+    Tiles can mix objectives/pixel sizes and can deliberately overlap (e.g. a
+    handful of high-mag alignment/reference FOVs overlaid on a low-mag scan):
+    each tile is independently resampled to ``working_pixel_um`` using its
+    *own* native pixel size (rather than assuming every tile shares one), and
+    tiles are painted in ascending ``zvalue`` order -- Steve's own display
+    stacking order -- so wherever tiles overlap, the pixel comes from
+    whichever tile is topmost there (painted last, so it overwrites), never
+    an average of the overlapping tiles. This matches how Steve itself
+    displays the mosaic. If some tiles should be excluded entirely rather
+    than composited (e.g. genuinely bad/debris frames), drop them from
+    *tiles* first -- see :func:`filter_tiles_by_objective`.
 
     Parameters
     ----------
-    tiles : tiles from :func:`load_steve_mosaic`, all sharing one objective
-        (hence one real pixel size) -- see :func:`filter_tiles_by_objective`
-        if the mosaic mixes objectives.
-    working_pixel_um : target canvas pixel size, in microns. Tiles are
-        downsampled (by the nearest integer factor to this target) before
-        pasting, since full camera resolution (e.g. 2304x2304 per tile) is
-        unnecessary for tissue-scale thresholding and would make the full
-        mosaic canvas very large. 5 um/pixel keeps sub-mm tissue features
-        while keeping a multi-mm mosaic's canvas a few thousand pixels across.
-
-    Raises
-    ------
-    ValueError
-        If the tiles don't all share the same pixel size (within 1%) --
-        e.g. a mosaic that mixes a low-mag scan with a few high-mag
-        alignment FOVs. Pasting mismatched-scale tiles into one canvas using
-        a single pixel size would silently misplace/mis-scale whichever
-        tiles don't match; filter to one objective first instead of
-        overriding this check.
+    tiles : tiles from :func:`load_steve_mosaic` (or a filtered subset).
+    working_pixel_um : target canvas pixel size, in microns. Each tile is
+        downsampled (by the nearest integer factor to this target, computed
+        from that tile's own pixel size) before pasting, since full camera
+        resolution (e.g. 2304x2304 per tile) is unnecessary for tissue-scale
+        thresholding and would make the full mosaic canvas very large. Note
+        this means each tile's *actual* resampled pixel size is only
+        approximately ``working_pixel_um`` (whichever exact multiple of its
+        own native pixel size is closest) -- a small (sub-pixel-scale)
+        misalignment between differently-scaled tiles is possible as a
+        result, which is acceptable for tissue-scale boundary detection but
+        not for precision registration.
 
     Returns
     -------
@@ -254,45 +270,28 @@ def assemble_mosaic_canvas(
     if not tiles:
         raise ValueError("No tiles to assemble.")
 
-    pixel_sizes = {round(t.pixel_size_um, 4) for t in tiles}
-    if len(pixel_sizes) > 1:
-        by_objective: dict = {}
-        for t in tiles:
-            by_objective.setdefault(t.objective_name, []).append(t.pixel_size_um)
-        breakdown = ", ".join(
-            f"{obj!r}: {len(sizes)} tile(s) @ {sizes[0]:.4f} um/px"
-            for obj, sizes in by_objective.items()
-        )
-        raise ValueError(
-            f"Tiles have {len(pixel_sizes)} different pixel sizes -- this mosaic "
-            f"mixes objectives ({breakdown}). Filter to one objective first, e.g. "
-            f"`tiles = filter_tiles_by_objective(tiles, objective='10x')`."
-        )
+    canvas_pixel_um = working_pixel_um
 
-    tile_pixel_um = tiles[0].pixel_size_um
-    downsample = max(1, round(working_pixel_um / tile_pixel_um))
-    canvas_pixel_um = tile_pixel_um * downsample
-
-    tile_h, tile_w = tiles[0].image.shape
-    half_w_um = tile_w * tile_pixel_um / 2
-    half_h_um = tile_h * tile_pixel_um / 2
-
-    x_min = min(t.x_um for t in tiles) - half_w_um
-    x_max = max(t.x_um for t in tiles) + half_w_um
-    y_min = min(t.y_um for t in tiles) - half_h_um
-    y_max = max(t.y_um for t in tiles) + half_h_um
+    x_min = min(t.x_um - (t.image.shape[1] * t.pixel_size_um) / 2 for t in tiles)
+    x_max = max(t.x_um + (t.image.shape[1] * t.pixel_size_um) / 2 for t in tiles)
+    y_min = min(t.y_um - (t.image.shape[0] * t.pixel_size_um) / 2 for t in tiles)
+    y_max = max(t.y_um + (t.image.shape[0] * t.pixel_size_um) / 2 for t in tiles)
 
     canvas_w = int(np.ceil((x_max - x_min) / canvas_pixel_um)) + 2
     canvas_h = int(np.ceil((y_max - y_min) / canvas_pixel_um)) + 2
 
     canvas = np.zeros((canvas_h, canvas_w), dtype=np.float32)
-    weight = np.zeros((canvas_h, canvas_w), dtype=np.float32)
+    covered = np.zeros((canvas_h, canvas_w), dtype=bool)
 
-    for t in tiles:
+    # Ascending zvalue: paint lowest first, highest (topmost) last, so ties
+    # in coverage are resolved by simple overwrite -- topmost wins.
+    for t in sorted(tiles, key=lambda t: t.zvalue):
+        downsample = max(1, round(working_pixel_um / t.pixel_size_um))
         img = t.image[::downsample, ::downsample].astype(np.float32)
+        tile_h, tile_w = t.image.shape
         h, w = img.shape
-        x0_um = t.x_um - (tile_w * tile_pixel_um) / 2
-        y0_um = t.y_um - (tile_h * tile_pixel_um) / 2
+        x0_um = t.x_um - (tile_w * t.pixel_size_um) / 2
+        y0_um = t.y_um - (tile_h * t.pixel_size_um) / 2
         col0 = int(round((x0_um - x_min) / canvas_pixel_um))
         row0 = int(round((y0_um - y_min) / canvas_pixel_um))
         row1, col1 = row0 + h, col0 + w
@@ -301,11 +300,8 @@ def assemble_mosaic_canvas(
         row1c, col1c = min(row1, canvas_h), min(col1, canvas_w)
         img = img[row0c - row0: row0c - row0 + (row1c - row0c),
                   col0c - col0: col0c - col0 + (col1c - col0c)]
-        canvas[row0c:row1c, col0c:col1c] += img
-        weight[row0c:row1c, col0c:col1c] += 1
-
-    covered = weight > 0
-    canvas[covered] /= weight[covered]
+        canvas[row0c:row1c, col0c:col1c] = img
+        covered[row0c:row1c, col0c:col1c] = True
 
     return MosaicCanvas(
         image=canvas, covered=covered,
@@ -314,15 +310,16 @@ def assemble_mosaic_canvas(
 
 
 def segment_mosaic_tissue(
-    canvas:              MosaicCanvas,
-    threshold:           Optional[float] = None,
-    smooth_sigma_um:     float = 10.0,
-    close_radius_um:     float = 50.0,
-    open_radius_um:      float = 15.0,
-    margin_um:           float = 75.0,
-    min_tissue_area_um2: float = 1000.0,
-    min_hole_area_um2:   float = 500.0,
-    simplify_tol_um:     float = 15.0,
+    canvas:               MosaicCanvas,
+    threshold:            Optional[float] = None,
+    smooth_sigma_um:      float = 10.0,
+    close_radius_um:      float = 50.0,
+    open_radius_um:       float = 15.0,
+    margin_um:            float = 75.0,
+    min_tissue_area_um2:  float = 1000.0,
+    min_hole_area_um2:    float = 500.0,
+    min_island_area_um2:  float = 1000.0,
+    simplify_tol_um:      float = 15.0,
 ) -> MosaicSegmentation:
     """
     Threshold a mosaic canvas into tissue and hole polygons.
@@ -344,12 +341,21 @@ def segment_mosaic_tissue(
        doesn't just barely clip the true tissue edge.
     6. Fill enclosed background regions to find the tissue's own holes,
        label connected components of both the tissue and the holes, and
-       trace each labelled region's contour with marching squares
+       trace each labelled region's contour(s) with marching squares
        (``skimage.measure.find_contours``), converting canvas-pixel
-       coordinates to stage microns via ``canvas.to_um``.
-    7. Drop components below ``min_tissue_area_um2``/``min_hole_area_um2``
-       and simplify each polygon by ``simplify_tol_um`` (marching squares
-       otherwise produces one vertex per canvas pixel of perimeter).
+       coordinates to stage microns via ``canvas.to_um``. A hole component
+       can itself enclose a real tissue **island** (a true donut/annulus
+       shape, e.g. a ring of tissue around an empty center that itself has
+       a tissue clump in the middle) -- marching squares then returns more
+       than one contour for that one hole component: the outer boundary,
+       plus one per island. Each island becomes an **interior ring** of the
+       hole polygon (``shapely.geometry.Polygon(exterior, holes=[...])``),
+       so the island area is correctly excluded *from* the hole (i.e. still
+       imaged) instead of being silently swallowed into a solid disk.
+    7. Drop components below ``min_tissue_area_um2``/``min_hole_area_um2``,
+       drop islands below ``min_island_area_um2``, and simplify each
+       polygon by ``simplify_tol_um`` (marching squares otherwise produces
+       one vertex per canvas pixel of perimeter).
 
     Parameters
     ----------
@@ -360,6 +366,10 @@ def segment_mosaic_tissue(
         internally via ``canvas.pixel_size_um``).
     min_tissue_area_um2, min_hole_area_um2 : drop components smaller than
         this (um^2) -- filters residual noise specks after morphology.
+    min_island_area_um2 : drop a hole's interior island (see step 6 above)
+        smaller than this (um^2) -- filters noise specks inside a hole from
+        becoming spurious interior rings; a genuine tissue island is
+        typically well above this.
     simplify_tol_um : Shapely ``simplify`` tolerance, in microns.
 
     Returns
@@ -387,7 +397,12 @@ def segment_mosaic_tissue(
     tissue_labels, n_tissue = ndimage.label(filled)
     hole_labels, n_holes = ndimage.label(holes_mask)
 
-    def _contour_polygon(label_img: np.ndarray, label_id: int, min_area_px: float) -> Optional[Polygon]:
+    def _contour_polygon(
+        label_img:              np.ndarray,
+        label_id:                int,
+        min_area_px:             float,
+        min_interior_area_um2:   Optional[float] = None,
+    ) -> Optional[Polygon]:
         component = (label_img == label_id)
         if component.sum() < min_area_px:
             return None
@@ -396,9 +411,31 @@ def segment_mosaic_tissue(
         contours = measure.find_contours(padded.astype(float), 0.5)
         if not contours:
             return None
-        contour = max(contours, key=len) - 1  # undo the padding offset
-        xy = np.array([canvas.to_um(r, c) for r, c in contour])
-        poly = Polygon(xy)
+
+        rings = []
+        for contour in contours:
+            xy = np.array([canvas.to_um(r, c) for r, c in (contour - 1)])
+            if len(xy) < 4:
+                continue
+            ring = Polygon(xy)
+            rings.append(ring if ring.is_valid else ring.buffer(0))
+        if not rings:
+            return None
+
+        # The largest ring is the exterior. When min_interior_area_um2 is
+        # given (hole components only), any other sufficiently large ring is
+        # a real interior island -- see step 6 of this function's docstring.
+        ext_idx = max(range(len(rings)), key=lambda i: rings[i].area)
+        exterior = rings[ext_idx]
+        interiors = []
+        if min_interior_area_um2 is not None:
+            interiors = [
+                list(rings[i].exterior.coords)
+                for i in range(len(rings))
+                if i != ext_idx and rings[i].area >= min_interior_area_um2
+            ]
+
+        poly = Polygon(exterior.exterior.coords, interiors) if interiors else exterior
         if not poly.is_valid:
             poly = poly.buffer(0)
         return poly if (not poly.is_empty and poly.area > 0) else None
@@ -412,7 +449,8 @@ def segment_mosaic_tissue(
     ]
     hole_polygons = [
         p.simplify(simplify_tol_um) for lid in range(1, n_holes + 1)
-        if (p := _contour_polygon(hole_labels, lid, min_hole_area_px)) is not None
+        if (p := _contour_polygon(hole_labels, lid, min_hole_area_px,
+                                  min_interior_area_um2=min_island_area_um2)) is not None
     ]
 
     return MosaicSegmentation(
@@ -448,7 +486,7 @@ def plot_tile_intensity_histograms(
     bins:            int = 200,
     ax=None,
     color:           tuple = (0.7, 0.7, 0.7),
-    alpha:           float = 0.25,
+    alpha:           float = 0.5,
     show_threshold:  bool = True,
 ) -> Tuple[object, Optional[float]]:
     """
@@ -548,13 +586,21 @@ def plot_mosaic_segmentation(canvas: MosaicCanvas, segmentation: MosaicSegmentat
         vmin=np.percentile(covered_vals, 1), vmax=np.percentile(covered_vals, 99),
     )
 
+    def _plot_ring(ring, color: str, lw: float, linestyle: str = "-"):
+        xs, ys = ring.xy
+        cols = [(x - canvas.origin_um[0]) / canvas.pixel_size_um for x in xs]
+        rows = [(y - canvas.origin_um[1]) / canvas.pixel_size_um for y in ys]
+        ax.plot(cols, rows, linestyle, color=color, lw=lw)
+
     def _plot_poly(poly: Polygon, color: str):
         if poly.geom_type != "Polygon":
             return
-        xs, ys = poly.exterior.xy
-        cols = [(x - canvas.origin_um[0]) / canvas.pixel_size_um for x in xs]
-        rows = [(y - canvas.origin_um[1]) / canvas.pixel_size_um for y in ys]
-        ax.plot(cols, rows, "-", color=color, lw=1.2)
+        _plot_ring(poly.exterior, color, lw=1.2)
+        # Interior rings = islands inside a hole (a true donut/annulus) --
+        # drawn dashed in the same color so they read as "carved out of the
+        # hole, still imaged" rather than another hole of their own.
+        for interior in poly.interiors:
+            _plot_ring(interior, color, lw=1.0, linestyle="--")
 
     for poly in segmentation.tissue_polygons:
         _plot_poly(poly, "lime")
@@ -584,12 +630,18 @@ def save_boundary_from_mosaic(segmentation: MosaicSegmentation, positions_dir: P
 
     Holes are global in the existing pipeline (applied to every boundary
     alike), so every detected hole is written out regardless of which tissue
-    polygon it sits inside.
+    polygon it sits inside. A hole that has interior rings (a real tissue
+    island inside it -- a true donut/annulus, see :func:`segment_mosaic_tissue`)
+    is written as ``hole{n}.txt`` (the outer boundary) plus one
+    ``hole{n}_island{m}.txt`` companion file per island, the convention
+    :func:`MERci.acquisition.positions.load_hole_polygons` reassembles back
+    into one polygon with interior rings.
 
     Parameters
     ----------
     segmentation : from :func:`segment_mosaic_tissue`.
-    positions_dir : directory to write into (typically ``SAMPLE_DIR/positions``).
+    positions_dir : directory to write into (typically
+        ``SAMPLE_DIR/positions/boundaries/from_mosaic``).
 
     Returns
     -------
@@ -621,5 +673,9 @@ def save_boundary_from_mosaic(segmentation: MosaicSegmentation, positions_dir: P
         fname = f"hole{n}.txt"
         save_positions_array(np.array(poly.exterior.coords), positions_dir / fname)
         written.append(fname)
+        for m, interior in enumerate(poly.interiors, start=1):
+            island_fname = f"hole{n}_island{m}.txt"
+            save_positions_array(np.array(interior.coords), positions_dir / island_fname)
+            written.append(island_fname)
 
     return written
