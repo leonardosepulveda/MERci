@@ -69,6 +69,75 @@ class ExperimentInfo:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+# Acquisition-type subfolder names already used throughout the codebase (see
+# CLAUDE.md's tumor/{epi,disk} and lineage_tracing/{merfish,lineage} variants)
+# -- the fixed vocabulary resolve_sample_identity checks MERCI_DIR's parent
+# folder name against to detect the split-subfolder layout.
+_ACQUISITION_SUBFOLDER_TOKENS = {"merfish", "lineage", "epi", "disk"}
+
+
+def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
+    """
+    Determine the true experiment id and acquisition-subfolder name from
+    where this MERci clone lives on disk.
+
+    Two layouts are possible for ``SAMPLE_DIR = merci_dir.parent``:
+
+    * **Flat** (default): ``SAMPLE_DIR`` itself is the experiment folder, e.g.
+      ``.../251225_LT027_saving_time/MERci``. ``SAMPLE_DIR.name`` IS the
+      experiment id; there is no acquisition subfolder.
+    * **Split**: this acquisition lives under its own acquisition-type
+      subfolder, sibling to another acquisition of the same sample, e.g.
+      ``.../LT058_sample_07/merfish/MERci`` (with ``.../LT058_sample_07/lineage/``
+      alongside it). ``SAMPLE_DIR.name`` (``"merfish"``) is just this
+      acquisition's own local file-naming tag, NOT the experiment id -- the
+      true id is one level further up.
+
+    Distinguishing the two from folder structure alone, without depending on
+    the experiment id following any particular naming convention (older
+    experiments are date-prefixed, e.g. ``"251225_LT027_saving_time"``, which
+    doesn't match a newer ``"LT058_sample_07"``-style pattern at all): a
+    split layout's acquisition subfolder name is always one of a small, fixed
+    vocabulary already hard-coded throughout the codebase for exactly this
+    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``) -- the notebook variant
+    itself is duplicated per acquisition type, so no other subfolder name is
+    ever a real possibility here. If ``SAMPLE_DIR.name`` is one of those
+    tokens, treat it as the split layout; otherwise, flat.
+
+    This does NOT change what ``SAMPLE_DIR.name`` is used for elsewhere (the
+    per-notebook local file-naming convention -- ``positions_{name}.txt``,
+    ``dave-{mic}-{N}hybs-{name}.xml``, etc. -- stays exactly as each
+    notebook's ``SAMPLE_NAME = SAMPLE_DIR.name`` already computes it, so
+    already-generated real filenames are unaffected). Use this function only
+    where the TRUE top-level experiment id is actually needed: constructing
+    cluster-facing paths (``DATA_HOME``/``MERLIN_HOME``/``FOLDER_NAME`` in
+    notebook 06, ``resolve_cluster_sample_dir`` in notebook 07).
+
+    Parameters
+    ----------
+    merci_dir : path to this MERci clone (``MERCI_DIR`` in every notebook)
+
+    Returns
+    -------
+    (sample_name, imaging_dir) : the true experiment id, and the acquisition-
+    type subfolder name (``""`` in the flat layout).
+    """
+    sample_dir = Path(merci_dir).parent
+    if sample_dir.name.lower() in _ACQUISITION_SUBFOLDER_TOKENS:
+        sample_name, imaging_dir = sample_dir.parent.name, sample_dir.name
+    else:
+        sample_name, imaging_dir = sample_dir.name, ""
+    if not sample_name:
+        # Only possible if the split layout's acquisition subfolder sits at
+        # a drive root (no real experiment folder above it) -- degenerate,
+        # but fail loudly rather than silently writing an empty experiment id.
+        raise ValueError(
+            f"Could not determine a non-empty sample_name from {merci_dir!r} "
+            f"(resolved imaging_dir={imaging_dir!r}). Check MERCI_DIR's location."
+        )
+    return sample_name, imaging_dir
+
+
 def save_experiment_info(info: ExperimentInfo, path: Path) -> None:
     """
     Write *info* to *path* as a flat YAML mapping (core fields and ``extra``
