@@ -5,8 +5,10 @@ Generate FOV grids and optimised scanning paths for stage-based MERFISH imaging.
 Typical workflow
 ----------------
 1. Define the tissue boundary and any excluded regions (holes).
-2. ``create_grid_positions`` – build a regular ``(H, W, 2)`` grid with an odd
-   number of rows and columns, centred on the midpoint of the boundary bounding box.
+2. ``create_grid_positions`` – build a regular ``(H, W, 2)`` grid centred on the
+   midpoint of the boundary bounding box; the traversal axis (columns for
+   direction="vertical", rows for "horizontal") is forced even for a short
+   scan-path return leg, the other axis odd for a centred cell (see its docstring).
 3. ``generate_scanning_path`` – order grid points in a boustrophedon pattern.
 4. ``load_hole_polygons`` – load polygon masks for excluded areas.
 5. ``filter_scanning_path`` – keep FOVs whose camera frame overlaps the boundary;
@@ -22,7 +24,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from shapely.geometry import Polygon, box as shapely_box
@@ -32,50 +34,95 @@ log = logging.getLogger(__name__)
 
 # ── Grid construction ─────────────────────────────────────────────────────────
 
-def _odd_1d_coords(center: float, d_min: float, d_max: float, step: float) -> np.ndarray:
+def _spaced_coords(
+    center: float,
+    d_min:  float,
+    d_max:  float,
+    step:   float,
+    even:   bool,
+) -> np.ndarray:
     """
     Return evenly-spaced 1-D coordinates centred exactly on *center*.
 
-    The count is the smallest odd number such that the coordinates span at
-    least [d_min, d_max].
+    The count is the smallest number of the requested parity such that the
+    coordinates span at least [d_min, d_max]: odd when *even* is ``False``
+    (the traditional behaviour -- guarantees one coordinate exactly at
+    *center*), or even when *even* is ``True`` (no coordinate falls exactly
+    on *center*; the two innermost coordinates straddle it symmetrically).
+
+    ``center + (arange(n) - (n - 1) / 2) * step`` is used for both parities:
+    for odd n, ``(n - 1) / 2`` is an integer index offset (a true centre
+    point); for even n it's a half-integer, placing points symmetrically
+    on either side of *center* with none exactly on it.
     """
-    span   = d_max - d_min
-    n      = int(np.ceil(span / step))
-    if n % 2 == 0:
-        n += 1                          # ensure odd
-    n_half = (n - 1) // 2
-    return center + np.arange(-n_half, n_half + 1) * step
+    span = d_max - d_min
+    n    = int(np.ceil(span / step))
+    if even:
+        if n % 2 != 0:
+            n += 1                       # ensure even
+    else:
+        if n % 2 == 0:
+            n += 1                       # ensure odd
+    return center + (np.arange(n) - (n - 1) / 2.0) * step
 
 
 def create_grid_positions(
     boundary_polygon: Polygon,
     step_size:        float,
+    direction:        str = "vertical",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build a regular 2-D grid centred on the midpoint of *boundary_polygon*'s
-    bounding box.
+    bounding box, large enough to cover its full bounding box.
 
-    The grid has an odd number of rows (H) and columns (W), so there is always
-    one cell exactly at the centre.  The grid is large enough to cover the full
-    bounding box of the boundary.
+    One axis is forced ODD (guarantees a cell exactly at the boundary's
+    bounding-box midpoint) and the other EVEN, chosen from *direction* so
+    that :func:`generate_scanning_path` (called with the SAME *direction*)
+    starts and ends its boustrophedon snake in the same row/column, instead
+    of the opposite corner:
+
+    * ``"vertical"``   (snake column-by-column): columns (W) EVEN, rows (H)
+      ODD -- the snake starts and ends in the same row.
+    * ``"horizontal"`` (snake row-by-row): rows (H) EVEN, columns (W) ODD --
+      the snake starts and ends in the same column.
+
+    Why: with direction="vertical", the snake alternates traversal
+    direction column-by-column (see `generate_scanning_path`); if W is odd,
+    the first and last column share the same parity and therefore the same
+    sub-direction, so the path starts at one grid corner and ends at the
+    *opposite* corner -- a long "return" leg back to the start of the next
+    round. Forcing W even makes the first and last column have opposite
+    parity/sub-direction instead, so both ends of the snake land in the
+    same row -- a short return leg. (Symmetric reasoning applies to rows
+    when direction="horizontal".) Only the axis kept odd is guaranteed a
+    centred cell; the even axis trades that off for the short return.
 
     Parameters
     ----------
     boundary_polygon : Shapely Polygon of the tissue boundary
     step_size        : distance between adjacent grid points (µm)
+    direction        : ``"vertical"`` or ``"horizontal"`` -- must match the
+                       *direction* passed to :func:`generate_scanning_path`
+                       for the short-return property above to hold.
 
     Returns
     -------
     grid : ``(H, W, 2)`` array of ``(x, y)`` coordinates
-    xs   : 1-D x-coordinates (length W, odd)
-    ys   : 1-D y-coordinates (length H, odd)
+    xs   : 1-D x-coordinates (length W)
+    ys   : 1-D y-coordinates (length H)
     """
     xmin, ymin, xmax, ymax = boundary_polygon.bounds
     cx = (xmin + xmax) / 2.0
     cy = (ymin + ymax) / 2.0
 
-    xs = _odd_1d_coords(cx, xmin, xmax, step_size)
-    ys = _odd_1d_coords(cy, ymin, ymax, step_size)
+    if direction == "vertical":
+        xs = _spaced_coords(cx, xmin, xmax, step_size, even=True)
+        ys = _spaced_coords(cy, ymin, ymax, step_size, even=False)
+    elif direction == "horizontal":
+        xs = _spaced_coords(cx, xmin, xmax, step_size, even=False)
+        ys = _spaced_coords(cy, ymin, ymax, step_size, even=True)
+    else:
+        raise ValueError("direction must be 'vertical' or 'horizontal'")
 
     Xg, Yg = np.meshgrid(xs, ys)
     grid   = np.stack([Xg, Yg], axis=-1)   # (H, W, 2)
@@ -90,6 +137,12 @@ def generate_scanning_path(
 ) -> np.ndarray:
     """
     Order grid points in a boustrophedon (snake) pattern.
+
+    Pass the SAME *direction* used to build *grid* via
+    :func:`create_grid_positions` -- that function forces the traversal axis
+    (columns for "vertical", rows for "horizontal") to an even count
+    precisely so this snake's start and end land in the same row/column
+    (short return leg) rather than opposite corners (see its docstring).
 
     Parameters
     ----------
@@ -452,6 +505,93 @@ def discover_boundary_files(positions_dir: Path) -> Tuple[List[BoundarySpec], st
     )
 
 
+@dataclass
+class BoundaryGroup:
+    """One acquisition-order "boundary" segment, possibly merging more than
+    one physical boundary file of the same tissue.
+
+    Attributes
+    ----------
+    tissue : int
+        Which tissue this segment belongs to.
+    label : str
+        Segment label used in output filenames -- ``"T{t}"``/``""`` for a
+        merged "legacy" segment (see below), or the source boundary's own
+        label (``"T{t}B{b}"``/``"B{b}"``/``""``) when not merged.
+    boundary_indices : Tuple[int, ...]
+        Indices into the ``boundaries`` list (as returned by
+        :func:`discover_boundary_files`) that this segment covers, in order.
+        Length 1 unless merged under ``"legacy"`` mode (see
+        :func:`group_boundaries_by_path_mode`).
+    """
+    tissue:           int
+    label:            str
+    boundary_indices: Tuple[int, ...]
+
+
+def group_boundaries_by_path_mode(
+    boundaries:       Sequence[BoundarySpec],
+    mode:             str,
+    tissue_path_mode: Callable[[int], str],
+) -> List[BoundaryGroup]:
+    """
+    Group consecutive same-tissue boundaries into acquisition-order
+    "boundary" segments, honouring each tissue's own path mode.
+
+    A tissue's own boundaries (a contiguous run in *boundaries*, since it is
+    sorted by tissue then boundary -- see :func:`discover_boundary_files`)
+    are merged into ONE segment when ``tissue_path_mode(tissue) == "legacy"``
+    and it has more than one boundary; otherwise (``"transit"``, or a tissue
+    with only one boundary) each boundary keeps its own segment.
+
+    This is the single source of truth for that grouping decision, shared by
+    ``02_create_positions_from_boundaries.ipynb`` (which attaches the actual
+    FOV coordinates per segment) and
+    :func:`MERci.acquisition.dave.create_round_info_multitissue` (which only
+    needs the resulting segment/label structure to build ``round_info.csv``
+    rows matching whatever notebook 02 actually wrote to ``positions/``) --
+    so the two can never disagree about which positions files exist.
+
+    This function does NOT add transit segments between the groups it
+    returns -- callers insert those uniformly (bridging every consecutive
+    pair of the returned groups, wrapping the last back to the first,
+    whenever more than one group is returned), since that part doesn't
+    depend on the per-tissue path mode.
+
+    Parameters
+    ----------
+    boundaries       : from :func:`discover_boundary_files`
+    mode             : ``"multi"``, ``"single"`` or ``"legacy"`` (from the
+                       same discovery call) -- selects the merged-segment
+                       label (``"T{t}"`` for multi, ``""`` otherwise)
+    tissue_path_mode : tissue index -> ``"legacy"`` or ``"transit"``
+
+    Returns
+    -------
+    List of :class:`BoundaryGroup`, in acquisition order.
+    """
+    n = len(boundaries)
+    groups: List[BoundaryGroup] = []
+    i = 0
+    while i < n:
+        spec, t = boundaries[i], boundaries[i].tissue
+        j = i
+        while j < n and boundaries[j].tissue == t:
+            j += 1
+        run_len = j - i
+
+        if tissue_path_mode(t) == "legacy" and run_len > 1:
+            label = f"T{t}" if mode == "multi" else ""
+            groups.append(BoundaryGroup(t, label, tuple(range(i, j))))
+        elif run_len > 1:   # tissue_path_mode(t) == "transit"
+            for k in range(i, j):
+                groups.append(BoundaryGroup(t, boundaries[k].label, (k,)))
+        else:                # run_len == 1: nothing of this tissue's own to merge
+            groups.append(BoundaryGroup(t, spec.label, (i,)))
+        i = j
+    return groups
+
+
 def has_boundary_files(positions_dir: Path) -> bool:
     """Return ``True`` if *positions_dir* holds boundary files of any layout.
 
@@ -678,7 +818,7 @@ def build_boundary_path(
     -------
     ``(M, 2)`` ordered stage coordinates for this boundary.
     """
-    grid, _, _ = create_grid_positions(boundary_polygon, step_size)
+    grid, _, _ = create_grid_positions(boundary_polygon, step_size, direction=direction)
     path       = generate_scanning_path(grid, direction=direction)
     filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
     if return_side is not None and len(filtered) > 1:

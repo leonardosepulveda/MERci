@@ -44,7 +44,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union
 from xml.dom import minidom
 
 import pandas as pd
@@ -56,6 +56,7 @@ from .kilroy import (
     load_protocol_durations,
     protocol_valve_commands,
 )
+from .positions import group_boundaries_by_path_mode
 
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
@@ -329,16 +330,22 @@ def create_round_info_multitissue(
     mode:               str,
     sample_name:        str,
     data_drives:        Optional[Sequence[Union[str, Path]]] = None,
+    tissue_path_mode:   Callable[[int], str] = lambda tissue: "legacy",
 ) -> pd.DataFrame:
     """
     Build a **segment-aware** ``round_info`` for a multi-boundary experiment.
 
-    Each imaging round visits the boundaries in order with a transit segment
-    between consecutive boundaries (wrapping the last back to the first), exactly
-    as laid out by ``notebooks/prepare_imaging/02``. This produces **one row per
-    (round, segment)** — so each round has several movies: a boundary movie
-    (cells/bits HAL config) per boundary and a transit movie (transit HAL config,
-    blank frames) per transit.
+    Each imaging round visits the acquisition-order segments built by
+    :func:`MERci.acquisition.positions.group_boundaries_by_path_mode` (the
+    same function ``notebooks/prepare_imaging/02`` uses to decide what it
+    actually writes to ``positions/``): a tissue's own consecutive boundaries
+    are merged into ONE segment when ``tissue_path_mode(tissue) == "legacy"``
+    (no transit within that tissue), otherwise each boundary keeps its own
+    segment; a transit segment always bridges consecutive top-level segments
+    (wrapping the last back to the first) whenever there is more than one.
+    This produces **one row per (round, segment)** — so each round has
+    several movies: a boundary movie (cells/bits HAL config) per segment and
+    a transit movie (transit HAL config, blank frames) per transit bridge.
 
     Round 1 is the cells acquisition; rounds 2…N+1 are bits #1…#N. Every row also
     carries the ``positions_file`` (basename in ``positions/``) and the per-tissue
@@ -378,6 +385,14 @@ def create_round_info_multitissue(
                          assigned drive instead of ``sample_dir``); cells and
                          transit segments are unaffected. ``None`` (default)
                          preserves today's single-drive layout.
+    tissue_path_mode   : tissue index -> ``"legacy"`` or ``"transit"`` (see
+                         :func:`MERci.acquisition.positions.group_boundaries_by_path_mode`).
+                         MUST match whatever notebook 02 actually used to write
+                         ``positions/`` (same convention as this notebook already
+                         has to agree with notebook 02 on ``BOUNDARY_SOURCE``),
+                         or this will reference positions files that don't
+                         exist. Defaults to ``"legacy"`` for every tissue, notebook
+                         02's own default.
 
     Returns
     -------
@@ -385,13 +400,18 @@ def create_round_info_multitissue(
     ``bits`` / ``transit``), ``series``, ``hal_config``, ``data_dir``,
     ``positions_file``, ``tissue``, ``segment``, ``fov_start``, ``fov_pad``.
     """
-    mic          = microscope.lower()
-    n_boundaries = len(boundaries)
-    # As many transits as boundaries (each wraps to the next), unless there is
-    # only one boundary — then there is nothing to transit between.
-    n_transits   = n_boundaries if n_boundaries > 1 else 0
-    data         = Path(sample_dir) / "data"
-    pos_dir      = Path(sample_dir) / "positions"
+    mic     = microscope.lower()
+    data    = Path(sample_dir) / "data"
+    pos_dir = Path(sample_dir) / "positions"
+
+    # Same grouping notebook 02 used to decide what it wrote to positions/ --
+    # a tissue's own consecutive boundaries collapse into one segment under
+    # "legacy" mode, otherwise each stays its own segment. A transit bridges
+    # every consecutive pair of the resulting top-level segments (wrapping
+    # the last back to the first) whenever there is more than one.
+    groups     = group_boundaries_by_path_mode(boundaries, mode, tissue_path_mode)
+    n_groups   = len(groups)
+    n_transits = n_groups if n_groups > 1 else 0
 
     def _seg_dir(tissue: int, kind: str, is_cells: bool, hyb_idx: Optional[int] = None) -> str:
         # bits: round-robin the drive (if configured) BEFORE appending the
@@ -412,17 +432,19 @@ def create_round_info_multitissue(
         # (NN = bit/hyb index) so rounds are spread across folders.
         return str(base / "hybs" / f"H{hyb_idx:02d}")
 
+    def _posfile(label: str) -> str:
+        # Matches notebook 02's own convention: a merged/legacy segment with
+        # an empty label is the plain aggregate positions_{sample}.txt.
+        return f"positions_{sample_name}_{label}.txt" if label else f"positions_{sample_name}.txt"
+
     # Ordered segment templates for one round's traversal (round-independent):
     # (kind, tissue, label, positions_file).
     seg_templates: List[tuple] = []
-    for k, spec in enumerate(boundaries):
-        seg_templates.append(
-            ("boundary", spec.tissue, spec.label,
-             f"positions_{sample_name}_{spec.label}.txt")
-        )
+    for k, g in enumerate(groups):
+        seg_templates.append(("boundary", g.tissue, g.label, _posfile(g.label)))
         if n_transits:
             seg_templates.append(
-                ("transit", spec.tissue, f"transit_{k + 1}",
+                ("transit", g.tissue, f"transit_{k + 1}",
                  f"positions_{sample_name}_transit_{k + 1}.txt")
             )
 
