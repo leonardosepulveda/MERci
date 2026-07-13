@@ -525,3 +525,18 @@ multi-turn request). Omit `elapsed` if no submit epoch is available — never gu
 Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
 and lets all entries be scanned/grepped by metadata without reading every body.
 
+### Optional: rationale docs for investigation-heavy tasks
+
+`prompt_history/`'s Summary is compressed prose with no code — good for a
+quick record, not for actually learning *how* a conclusion was reached. For
+tasks with genuine investigation (reverse-engineering an undocumented
+format, debugging by reading unfamiliar source, iterating on an approach
+that failed at first), also write `prompt_rationales/{same-basename}.html`
+(gitignored, personal-only, like `prompt_history/`/`verbatim_history/`) — a
+narrative walkthrough with real code snippets, dead ends, and the moment a
+hypothesis got confirmed or falsified. Not needed for mechanical tasks. See
+`~/.claude/commands/rationale.md` (the `/rationale` command) for the exact
+template/style, and offer one proactively at the end of an investigation-
+heavy task rather than waiting to be asked — the reasoning is easiest to
+capture while still fresh in context.
+

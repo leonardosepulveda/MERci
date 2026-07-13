@@ -20,6 +20,7 @@ output/
 # Prompt/task history (local only)
 prompt_history/
 verbatim_history/
+prompt_rationales/
 
 # Local, machine-specific Claude Code settings (e.g. additionalDirectories)
 .claude/settings.local.json
