@@ -15,6 +15,17 @@ FOV-level done:
 
 Round-level done:
     <analysis_dir>/done/round_<r:03d>.round_done
+
+Round-level transferred:
+    <analysis_dir>/done/round_<r:03d>.round_transferred
+
+SLURM submission bookkeeping (cluster-side, see cli_analyze_fov.py /
+cli_build_round_mosaic.py / 07_cluster_submit_analysis.ipynb):
+    <analysis_dir>/done/round_<r:03d>.fov_submitted            (FOV array job)
+    <analysis_dir>/done/round_<r:03d>.round_mosaic_submitted    (mosaic job)
+These hold the submitted SLURM job id as their (small) text content, not just
+an empty touch -- so a later run can check ``sacct`` to see whether that job
+is still PENDING/RUNNING before deciding whether to resubmit.
 """
 from __future__ import annotations
 
@@ -24,9 +35,23 @@ from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-_FOV_DONE_SUFFIX          = ".fov_done"
-_ROUND_DONE_SUFFIX        = ".round_done"
-_ROUND_TRANSFERRED_SUFFIX = ".round_transferred"
+_FOV_DONE_SUFFIX               = ".fov_done"
+_ROUND_DONE_SUFFIX             = ".round_done"
+_ROUND_TRANSFERRED_SUFFIX      = ".round_transferred"
+_FOV_SUBMITTED_SUFFIX          = ".fov_submitted"
+_ROUND_MOSAIC_SUBMITTED_SUFFIX = ".round_mosaic_submitted"
+
+
+def _read_job_id(sentinel: Path) -> Optional[int]:
+    """Read a submitted-job-id sentinel's content as an int, or ``None`` if
+    the sentinel doesn't exist or holds something unparseable (e.g. an older,
+    empty ``.touch()``-only sentinel from before job ids were recorded)."""
+    if not sentinel.exists():
+        return None
+    try:
+        return int(sentinel.read_text().strip())
+    except ValueError:
+        return None
 
 
 class ProgressTracker:
@@ -69,6 +94,12 @@ class ProgressTracker:
     def transfer_sentinel(self, round_id: int) -> Path:
         return self.done_dir / f"round_{round_id:03d}{_ROUND_TRANSFERRED_SUFFIX}"
 
+    def fov_submitted_sentinel(self, round_id: int) -> Path:
+        return self.done_dir / f"round_{round_id:03d}{_FOV_SUBMITTED_SUFFIX}"
+
+    def round_mosaic_submitted_sentinel(self, round_id: int) -> Path:
+        return self.done_dir / f"round_{round_id:03d}{_ROUND_MOSAIC_SUBMITTED_SUFFIX}"
+
     # ── Status queries ────────────────────────────────────────────────────────
 
     def is_fov_done(self, dax_path: Path) -> bool:
@@ -82,6 +113,22 @@ class ProgressTracker:
     def is_round_transferred(self, round_id: int) -> bool:
         """True if the round's data transfer has completed."""
         return self.transfer_sentinel(round_id).exists()
+
+    def is_fov_analysis_submitted(self, round_id: int) -> bool:
+        """True if a SLURM array job was submitted for this round's pending FOVs."""
+        return self.fov_submitted_sentinel(round_id).exists()
+
+    def fov_analysis_submitted_job_id(self, round_id: int) -> Optional[int]:
+        """The SLURM job id last submitted for this round's FOV analysis, if any."""
+        return _read_job_id(self.fov_submitted_sentinel(round_id))
+
+    def is_round_mosaic_submitted(self, round_id: int) -> bool:
+        """True if a SLURM job was submitted to build this round's mosaic(s)."""
+        return self.round_mosaic_submitted_sentinel(round_id).exists()
+
+    def round_mosaic_submitted_job_id(self, round_id: int) -> Optional[int]:
+        """The SLURM job id last submitted for this round's mosaic build, if any."""
+        return _read_job_id(self.round_mosaic_submitted_sentinel(round_id))
 
     def is_thumbnail_done(self, dax_path: Path, frame_idx: int) -> bool:
         return self.thumbnail_path(dax_path, frame_idx).exists()
@@ -166,6 +213,21 @@ class ProgressTracker:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch()
         log.info("Round %d marked transferred.", round_id)
+
+    def mark_fov_analysis_submitted(self, round_id: int, job_id: int) -> None:
+        """Record *job_id* as the SLURM array job submitted for this round's
+        pending FOVs (overwrites any previous job id — idempotent resubmission)."""
+        p = self.fov_submitted_sentinel(round_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(job_id))
+        log.info("Round %d: FOV analysis submitted as job %s.", round_id, job_id)
+
+    def mark_round_mosaic_submitted(self, round_id: int, job_id: int) -> None:
+        """Record *job_id* as the SLURM job submitted to build this round's mosaic(s)."""
+        p = self.round_mosaic_submitted_sentinel(round_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(job_id))
+        log.info("Round %d: mosaic build submitted as job %s.", round_id, job_id)
 
     # ── Summary ───────────────────────────────────────────────────────────────
 

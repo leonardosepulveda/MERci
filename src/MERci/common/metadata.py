@@ -264,6 +264,19 @@ class ExperimentMetadata:
             return rid if not all(exists) else None
         return None
 
+    def round_fully_written(self, round_id: int) -> bool:
+        """
+        True iff every expected raw image file for *round_id* already exists
+        on disk -- purely "has HAL finished writing this round", with no
+        dependency on any analysis sentinel (unlike
+        :func:`MERci.progress.ProgressTracker.all_fovs_done_for_round`, which
+        additionally requires a ``.fov_done`` sentinel per file). Used to
+        decide when a round is safe to transfer off its drive even if no
+        local QC analysis has ever run against it.
+        """
+        files = self.files_for_round(round_id)
+        return bool(files) and all(f.exists() for f in files)
+
 
 # ── Internal helpers ────────────────────────────────────────────────────────
 

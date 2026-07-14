@@ -24,7 +24,7 @@ import pandas as pd
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
 from .common.io       import discover_image_files
-from .transfer        import transfer_round, mirror_tree
+from .transfer        import transfer_round, mirror_tree, sync_files
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
 from .analysis.fov    import analyze_file
@@ -36,6 +36,143 @@ from .acquisition.configs import (
 )
 
 log = logging.getLogger(__name__)
+
+
+# ── Shared, dependency-free task builders ────────────────────────────────────
+# Pulled out of FOVScheduler/RoundScheduler so a standalone SLURM-array CLI
+# script (no scheduler instance, no process pool) can build the exact same
+# paths/kwargs and get identical output.
+
+def build_fov_task_kwargs(fpath: Path, config: ExperimentConfig, tracker: ProgressTracker) -> dict:
+    """Build the kwargs ``analyze_file(fpath, **kwargs)`` needs for *fpath*."""
+    return dict(
+        thumbnails_dir            = config.analysis_dir / "thumbnails",
+        stats_path                = tracker.stats_path(fpath),
+        histogram_path            = tracker.histogram_path(fpath),
+        sentinel_path             = tracker.fov_sentinel(fpath),
+        frame_width               = config.frame_width,
+        frame_height              = config.frame_height,
+        thumbnail_frames          = config.thumbnail_frames,
+        thumbnail_size            = config.thumbnail_size,
+        thumbnail_percentile_clip = config.thumbnail_percentile_clip,
+        histogram_bins            = config.histogram_bins,
+        histogram_range           = config.histogram_range,
+    )
+
+
+def resolve_round_flip_y(round_id: int, config: ExperimentConfig, metadata: ExperimentMetadata) -> bool:
+    """
+    Return the flip_y value for *round_id*.
+
+    If ``config.mosaic_flip_y`` is explicitly set (not None), use it.
+    Otherwise read ``<flip_vertical>`` from the HAL config associated with
+    the first bits-type series in the round.
+    """
+    if config.mosaic_flip_y is not None:
+        return config.mosaic_flip_y
+
+    if config.settings_dir is None:
+        return False
+
+    for s in metadata.series_for_round(round_id):
+        if s.hal_config:
+            hal_path = config.settings_dir / s.hal_config
+            if hal_path.exists():
+                return read_hal_flip_vertical(hal_path)
+    return False
+
+
+def resolve_round_color_frame_indices(
+    round_id: int, config: ExperimentConfig, metadata: ExperimentMetadata,
+) -> Dict[float, int]:
+    """
+    Return {color_nm: frame_idx} for the middle-z slice of *round_id*.
+
+    Falls back to {} (caller substitutes {None: 0}, first frame) when the
+    frame table is not found.
+    """
+    if config.settings_dir is None or config.metadata_dir is None:
+        return {}
+
+    for s in metadata.series_for_round(round_id):
+        if s.hal_config:
+            hal_path = config.settings_dir / s.hal_config
+            ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
+            if ft_path is not None:
+                ft = pd.read_csv(ft_path, index_col=0)
+                indices = get_color_frame_indices(ft)
+                if indices:
+                    return indices
+    log.warning(
+        "Could not determine color frame indices for round %d; "
+        "falling back to frame 0.", round_id
+    )
+    return {}
+
+
+def build_round_mosaics(
+    round_id: int,
+    config:   ExperimentConfig,
+    metadata: ExperimentMetadata,
+    tracker:  ProgressTracker,
+) -> bool:
+    """
+    Build every per-color mosaic for *round_id* from its FOV thumbnails, and
+    mark it done if at least one mosaic was built. Returns whether any mosaic
+    was built. Shared by ``RoundScheduler`` and the standalone
+    ``cli_build_round_mosaic`` SLURM script.
+    """
+    log.info("Building mosaics for round %d …", round_id)
+
+    flip_y        = resolve_round_flip_y(round_id, config, metadata)
+    color_indices = resolve_round_color_frame_indices(round_id, config, metadata)
+
+    # Fallback: one mosaic with frame 0 when no frame table was found
+    if not color_indices:
+        color_indices = {None: 0}
+
+    thumbnails_dir = config.analysis_dir / "thumbnails"
+    any_mosaic_built = False
+
+    for color, frame_idx in color_indices.items():
+        thumbnails, positions = load_thumbnails_for_round(
+            round_id=round_id,
+            metadata=metadata,
+            thumbnails_dir=thumbnails_dir,
+            frame_idx=frame_idx,
+            fov_subset=config.fov_subset,
+        )
+        if not thumbnails:
+            log.warning(
+                "No thumbnails for round %d color %s frame %d; skipping.",
+                round_id, color, frame_idx,
+            )
+            continue
+
+        out_path = tracker.mosaic_path(round_id, color)
+        create_mosaic(
+            thumbnails=thumbnails,
+            positions=positions,
+            output_path=out_path,
+            thumbnail_size=config.thumbnail_size,
+            padding=config.mosaic_padding,
+            flip_y=flip_y,
+        )
+        any_mosaic_built = True
+
+    if any_mosaic_built:
+        tracker.mark_round_done(round_id)
+    return any_mosaic_built
+
+
+def source_dirs_for_round(round_id: int, metadata: ExperimentMetadata) -> List[Path]:
+    """Return the unique data directories that hold files for *round_id*.
+
+    Uses the metadata's resolved paths so a cells round that landed in
+    ``data/`` rather than ``data/cells`` (or vice-versa) is transferred
+    from its real location."""
+    dirs = {f.parent for f in metadata.files_for_round(round_id)}
+    return sorted(dirs)
 
 
 # ── FOV Scheduler ─────────────────────────────────────────────────────────────
@@ -157,20 +294,7 @@ class FOVScheduler:
 
     def _build_task(self, fpath: Path) -> Tuple[Path, dict]:
         """Build the (image_path, kwargs) pair passed to ``analyze_file``."""
-        kwargs = dict(
-            thumbnails_dir            = self.config.analysis_dir / "thumbnails",
-            stats_path                = self.tracker.stats_path(fpath),
-            histogram_path            = self.tracker.histogram_path(fpath),
-            sentinel_path             = self.tracker.fov_sentinel(fpath),
-            frame_width               = self.config.frame_width,
-            frame_height              = self.config.frame_height,
-            thumbnail_frames          = self.config.thumbnail_frames,
-            thumbnail_size            = self.config.thumbnail_size,
-            thumbnail_percentile_clip = self.config.thumbnail_percentile_clip,
-            histogram_bins            = self.config.histogram_bins,
-            histogram_range           = self.config.histogram_range,
-        )
-        return fpath, kwargs
+        return fpath, build_fov_task_kwargs(fpath, self.config, self.tracker)
 
     def _discovery_roots(self) -> List[Path]:
         """
@@ -334,13 +458,8 @@ class RoundScheduler:
     # ── Transfer helpers ──────────────────────────────────────────────────────
 
     def _source_dirs_for_round(self, round_id: int) -> List[Path]:
-        """Return the unique data directories that hold files for *round_id*.
-
-        Uses the metadata's resolved paths so a cells round that landed in
-        ``data/`` rather than ``data/cells`` (or vice-versa) is transferred
-        from its real location."""
-        dirs = {f.parent for f in self.meta.files_for_round(round_id)}
-        return sorted(dirs)
+        """Return the unique data directories that hold files for *round_id*."""
+        return source_dirs_for_round(round_id, self.meta)
 
     def _process_pending_transfers(self, phase: ExperimentPhase) -> None:
         """
@@ -424,95 +543,145 @@ class RoundScheduler:
     # ── Round analysis helpers ────────────────────────────────────────────────
 
     def _resolve_flip_y(self, round_id: int) -> bool:
-        """
-        Return the flip_y value for *round_id*.
-
-        If ``config.mosaic_flip_y`` is explicitly set (not None), use it.
-        Otherwise read ``<flip_vertical>`` from the HAL config associated with
-        the first bits-type series in the round.
-        """
-        if self.config.mosaic_flip_y is not None:
-            return self.config.mosaic_flip_y
-
-        if self.config.settings_dir is None:
-            return False
-
-        series_list = self.meta.series_for_round(round_id)
-        for s in series_list:
-            if s.hal_config:
-                hal_path = self.config.settings_dir / s.hal_config
-                if hal_path.exists():
-                    return read_hal_flip_vertical(hal_path)
-        return False
+        """Return the flip_y value for *round_id*."""
+        return resolve_round_flip_y(round_id, self.config, self.meta)
 
     def _color_frame_indices(self, round_id: int) -> Dict[float, int]:
-        """
-        Return {color_nm: frame_idx} for the middle-z slice of *round_id*.
-
-        Falls back to {0.0: 0} (first frame) when the frame table is not found.
-        """
-        if self.config.settings_dir is None or self.config.metadata_dir is None:
-            return {}
-
-        series_list = self.meta.series_for_round(round_id)
-        for s in series_list:
-            if s.hal_config:
-                hal_path = self.config.settings_dir / s.hal_config
-                ft_path  = find_frame_table_for_hal_config(
-                    hal_path, self.config.metadata_dir
-                )
-                if ft_path is not None:
-                    ft = pd.read_csv(ft_path, index_col=0)
-                    indices = get_color_frame_indices(ft)
-                    if indices:
-                        return indices
-        log.warning(
-            "Could not determine color frame indices for round %d; "
-            "falling back to frame 0.", round_id
-        )
-        return {}
+        """Return {color_nm: frame_idx} for the middle-z slice of *round_id*."""
+        return resolve_round_color_frame_indices(round_id, self.config, self.meta)
 
     def _analyse_one_round(self, round_id: int) -> None:
-        log.info("Building mosaics for round %d …", round_id)
+        build_round_mosaics(round_id, self.config, self.meta, self.tracker)
 
-        flip_y        = self._resolve_flip_y(round_id)
-        color_indices = self._color_frame_indices(round_id)
 
-        # Fallback: one mosaic with frame 0 when no frame table was found
-        if not color_indices:
-            color_indices = {None: 0}
+# ── Transfer Scheduler ────────────────────────────────────────────────────────
 
-        thumbnails_dir = self.config.analysis_dir / "thumbnails"
-        any_mosaic_built = False
+class TransferScheduler:
+    """
+    Continuously transfers each round's raw data — plus the small metadata/
+    positions/settings files a cluster-side ``ExperimentMetadata.load()``
+    needs alongside it — to ``config.transfer_dest`` as soon as the round is
+    **fully written**, decoupled from any local QC analysis.
 
-        for color, frame_idx in color_indices.items():
-            thumbnails, positions = load_thumbnails_for_round(
-                round_id=round_id,
-                metadata=self.meta,
-                thumbnails_dir=thumbnails_dir,
-                frame_idx=frame_idx,
-                fov_subset=self.config.fov_subset,
-            )
-            if not thumbnails:
-                log.warning(
-                    "No thumbnails for round %d color %s frame %d; skipping.",
-                    round_id, color, frame_idx,
-                )
-                continue
+    Unlike ``RoundScheduler``'s ``round_robin_drives`` transfer path (gated
+    on ``tracker.is_round_done``, i.e. mosaics already built locally), this
+    gates purely on ``metadata.round_fully_written`` (every expected raw
+    file for the round exists on disk) — so raw data can leave the
+    microscope computer immediately, with QC analysis moved entirely to a
+    SLURM cluster reading from wherever it lands (see
+    ``06_transfer_to_nas.ipynb`` / ``07_cluster_submit_analysis.ipynb``).
 
-            out_path = self.tracker.mosaic_path(round_id, color)
-            create_mosaic(
-                thumbnails=thumbnails,
-                positions=positions,
-                output_path=out_path,
-                thumbnail_size=self.config.thumbnail_size,
-                padding=self.config.mosaic_padding,
-                flip_y=flip_y,
-            )
-            any_mosaic_built = True
+    Requires ``config.analysis_mode == "round_robin_drives"`` (the "which
+    drive is hot right now" signal this relies on) and ``config.transfer_dest``
+    to be set.
 
-        if any_mosaic_built:
-            self.tracker.mark_round_done(round_id)
+    Typical usage (in a notebook cell)::
+
+        TransferScheduler(config, meta, tracker).run_loop()
+    """
+
+    def __init__(
+        self,
+        config:     ExperimentConfig,
+        metadata:   ExperimentMetadata,
+        tracker:    ProgressTracker,
+        sample_dir: Optional[Path] = None,
+    ) -> None:
+        if config.transfer_dest is None:
+            raise ValueError("TransferScheduler requires config.transfer_dest to be set.")
+        self.config     = config
+        self.meta       = metadata
+        self.tracker    = tracker
+        # Auxiliary files (round_info.csv, positions_*.txt, settings/*.xml) are
+        # synced preserving their path relative to sample_dir; defaults to
+        # data_dir's parent, true for every notebook's ExperimentConfig(data_dir=
+        # SAMPLE_DIR/"data", ...) convention, but overridable in case it isn't.
+        self.sample_dir = Path(sample_dir) if sample_dir is not None else Path(config.data_dir).parent
+        self._transfers_in_progress: set = set()   # round_ids currently being transferred
+
+    def run_loop(
+        self,
+        on_tick: Optional[Callable[[dict], None]] = None,
+        max_iterations: Optional[int] = None,
+    ) -> None:
+        """
+        Run the transfer loop indefinitely (or for *max_iterations* ticks).
+
+        Each tick: sync the small metadata/positions/settings files, then
+        start a background transfer for any round that is fully written, not
+        yet transferred, not already mid-transfer, and not on the currently
+        actively-written (hot) drive.
+        """
+        iteration = 0
+        while True:
+            n_started = self._process_pending_transfers()
+            if on_tick is not None:
+                on_tick({"iteration": iteration, "transfers_started": n_started})
+            log.info("[tick %d] started %d round transfer(s).", iteration, n_started)
+
+            iteration += 1
+            if max_iterations is not None and iteration >= max_iterations:
+                break
+
+            time.sleep(self.config.poll_interval)
+
+    def _aux_file_paths(self) -> List[Path]:
+        """Small, fast-changing files a cluster-side ``ExperimentMetadata.load()``
+        needs alongside the (much larger, background-threaded) round image data."""
+        paths: List[Path] = []
+        if Path(self.config.round_info_csv).exists():
+            paths.append(Path(self.config.round_info_csv))
+        if self.config.metadata_dir is not None:
+            rbc = Path(self.config.metadata_dir) / "round_bit_color_map.csv"
+            if rbc.exists():
+                paths.append(rbc)
+        if self.config.positions_txt is not None:
+            paths.extend(sorted(Path(self.config.positions_txt).parent.glob("positions_*.txt")))
+        if self.config.settings_dir is not None and Path(self.config.settings_dir).exists():
+            paths.extend(sorted(Path(self.config.settings_dir).glob("*.xml")))
+        return paths
+
+    def _process_pending_transfers(self) -> int:
+        sync_files(self._aux_file_paths(), self.sample_dir, self.config.transfer_dest)
+
+        active_round = self.meta.actively_writing_round()
+        active_drive = (
+            self.meta.drive_of_round(active_round) if active_round is not None else None
+        )
+
+        count = 0
+        for rid in self.meta.valid_round_ids():
+            if (
+                self.meta.round_fully_written(rid)
+                and not self.tracker.is_round_transferred(rid)
+                and rid not in self._transfers_in_progress
+                and (active_drive is None or self.meta.drive_of_round(rid) != active_drive)
+            ):
+                self._start_transfer_for_round(rid)
+                count += 1
+        return count
+
+    def _start_transfer_for_round(self, round_id: int) -> None:
+        """Launch a background thread to copy round *round_id* to transfer_dest."""
+        src_dirs = source_dirs_for_round(round_id, self.meta)
+        if not src_dirs:
+            log.warning("Round %d: no source dirs found — skipping transfer.", round_id)
+            return
+
+        self._transfers_in_progress.add(round_id)
+        log.info(
+            "Round %d: starting transfer of %d dir(s) to %s.",
+            round_id, len(src_dirs), self.config.transfer_dest,
+        )
+
+        def _on_done(success: bool) -> None:
+            self._transfers_in_progress.discard(round_id)
+            if success:
+                self.tracker.mark_round_transferred(round_id)
+            else:
+                log.error("Round %d: transfer failed — will retry next tick.", round_id)
+
+        transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
 
 
 # ── Experiment Scheduler ──────────────────────────────────────────────────────

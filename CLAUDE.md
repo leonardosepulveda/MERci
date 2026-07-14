@@ -210,16 +210,37 @@ src/MERci/
                     #   detect-spots, decode-spots, mosaics) from a compact, fully-overridable
                     #   spec (mirrors MerlinAnalysisSpec)
     display.py      # print_frame_table, display_xml (Jupyter helpers)
+    cluster_submit.py # sbatch script generation + submission for cluster-side QC analysis
+                    #   (07_cluster_submit_analysis.ipynb): build_fov_array_script/
+                    #   build_round_mosaic_script (fishtank_config.py's _sbatch_header
+                    #   conventions — FOV-parallel array jobs, not MERlin's single-job
+                    #   convention), submit_sbatch/job_state/is_job_active (subprocess
+                    #   wrappers around sbatch/sacct, never raising — a submission hiccup
+                    #   just logs and returns None)
   analysis/
     fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
                     # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
     spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
                           # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
+    cli_analyze_fov.py       # standalone SLURM-array-task script (not imported by anything else in
+                    #   the package) — self-locates its own src/ root from __file__, so no pip
+                    #   install is needed on the cluster; runs analyze_file for one manifest-line
+                    #   FOV per array task, via the same build_fov_task_kwargs scheduler.py uses
+    cli_build_round_mosaic.py # same self-locating convention; runs build_round_mosaics for
+                    #   --round-id (or a manifest of round ids for an array job)
   state.py          # ExperimentStateMonitor — detects imaging vs. fluidics phases by watching file mtimes
-  progress.py       # ProgressTracker — sentinel files for fov_done, round_done, round_transferred
-  scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, ExperimentScheduler — main analysis loops
-  transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil
+  progress.py       # ProgressTracker — sentinel files for fov_done, round_done, round_transferred,
+                    #   fov_submitted/round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
+  scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
+                    #   (round_robin_drives-only: transfers once a round is fully written, decoupled
+                    #   from local analysis — see "Moving QC analysis to a SLURM cluster" below),
+                    #   ExperimentScheduler — main analysis loops; also exports the shared
+                    #   build_fov_task_kwargs/build_round_mosaics/resolve_round_flip_y/
+                    #   resolve_round_color_frame_indices/source_dirs_for_round functions the
+                    #   schedulers and the cli_*.py cluster scripts both call
+  transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil;
+                    #   sync_files (synchronous small-file copy, preserving relative path — metadata/positions/settings)
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
   disk_audit.py     # discover_sample_dirs, measure_folder (recursive size + file mtime range +
                     #   folder creation time), audit_disk_usage — scans {root}/{lab_member}/{sample_dir}
@@ -282,6 +303,19 @@ notebooks/
                                                    #   per-round intensity/saturation comparisons across the batch —
                                                    #   the MERlin-independent half of the old cluster-side review
                                                    #   notebook (excludes anything needing MERlin's decoded output)
+    06_transfer_to_nas.ipynb                       # round_robin_drives only: TransferScheduler continuously
+                                                   #   copies each round's raw data (once fully written, decoupled
+                                                   #   from any local QC) + small metadata/positions/settings
+                                                   #   files to a NAS -- run on the microscope computer alongside
+                                                   #   HAL/Dave, as the companion to moving QC analysis to a cluster
+    07_cluster_submit_analysis.ipynb               # run ON a cluster login/transfer node (after you've moved data
+                                                   #   from the NAS to cluster storage yourself, e.g. Globus/
+                                                   #   FileZilla): discovers pending FOVs/rounds and submits SLURM
+                                                   #   array jobs (cli_analyze_fov.py / cli_build_round_mosaic.py,
+                                                   #   via acquisition/cluster_submit.py) to do the QC analysis
+                                                   #   01/02 would otherwise do locally -- 01/02 remain supported
+                                                   #   for same_drive/mirror_drive projects; 06/07 are the
+                                                   #   round_robin_drives + cluster-QC alternative
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
@@ -413,7 +447,7 @@ lineage acquisition's own positions file of the same name.
 - `settings_dir` — `SAMPLE_DIR/settings/`; needed for auto flip_y and per-color mosaic lookup
 - `mosaic_flip_y` — `None` (auto-read from HAL config `<flip_vertical>`), `True`, or `False`
 - `fov_subset` — list of FOV ids to restrict analysis; `None` = all FOVs
-- `transfer_dest` — network path (e.g. a NAS) to copy completed round data to; `None` = disabled. In `same_drive`/`mirror_drive` mode this only runs during the fluidics window (see `transfer_min_time`); in `round_robin_drives` mode it runs **continuously**, skipping only the round on the drive HAL is actively writing (`RoundScheduler._process_pending_transfers`) — since each round already lives on its own physical drive, a completed round elsewhere is always safe to copy out.
+- `transfer_dest` — network path (e.g. a NAS) to copy completed round data to; `None` = disabled. In `same_drive`/`mirror_drive` mode this only runs during the fluidics window (see `transfer_min_time`); in `round_robin_drives` mode it runs **continuously** via `RoundScheduler._process_pending_transfers`, skipping only the round on the drive HAL is actively writing, but still gated on that round's mosaics already being built locally (`tracker.is_round_done`) — since each round already lives on its own physical drive, a completed round elsewhere is always safe to copy out. See `TransferScheduler` (below) for the alternative that decouples transfer from local analysis entirely, for projects moving QC to a cluster.
 - `transfer_min_time` — minimum seconds remaining in the fluidics window before starting a transfer (`same_drive`/`mirror_drive` modes only)
 - `analysis_mode` — `"same_drive"` (default, mode B: analyse from `data_dir`), `"mirror_drive"` (mode A: mirror `data_dir` → `analysis_source_dir` during fluidics and analyse from that second-drive copy), or `"round_robin_drives"` (for experiments whose `round_info.csv` spreads hyb rounds across several physical drives via `create_round_info(data_drives=…)` — see prepare_imaging/03). Analysis runs **continuously** in all three modes (not only during fluidics). `config.analysis_data_dir` resolves to the directory the FOV scheduler reads from (not meaningful in `round_robin_drives` mode — see `all_data_roots` below).
 - `analysis_source_dir` — second-drive mirror directory; **required** when `analysis_mode="mirror_drive"`
@@ -432,10 +466,18 @@ lineage acquisition's own positions file of the same name.
 - `<stem>.fov_done` — FOV analysis complete
 - `round_<r>.round_done` — mosaic(s) built for round r
 - `round_<r>.round_transferred` — raw data for round r copied to `transfer_dest`
+- `round_<r>.fov_submitted` / `round_<r>.round_mosaic_submitted` — cluster-side SLURM submission bookkeeping (hold the submitted job id as text, not just an empty touch — see "Moving QC analysis to a SLURM cluster" below)
 
 Multiple notebooks can run concurrently — no shared state.
 
-`FOVScheduler.run_loop()` runs **continuously** (acquisition + fluidics): each tick it (in mirror mode) refreshes the second-drive mirror while idle, discovers stable image files (zarr/dax/tiff) under `config.analysis_data_dir` (or every drive in `config.all_data_roots` in `round_robin_drives` mode — each root's scan is wrapped so an unreachable/disconnected disk logs a warning instead of crashing the tick), and analyses pending files **in parallel across a process pool** (`config.resolved_n_workers`). In `round_robin_drives` mode, files on the drive of `meta.actively_writing_round()` are excluded from `pending` each tick — HAL's current write target is skipped, every other drive's completed rounds analyse immediately. Each worker runs the top-level `analysis.fov.analyze_file`, which reads the stack once and writes thumbnails (PNG) + per-frame stats (CSV) + histograms (`.npz`) + the FOV sentinel. With `n_analysis_workers=1` it runs serially in-process. Respects `fov_subset`; call `.close()` (done automatically when `run_loop` exits) to shut the pool down. `RoundScheduler.run_loop()` also runs continuously, assembling **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optional background transfers via `transfer.transfer_round` happen only during fluidics in `same_drive`/`mirror_drive` mode, or continuously (same active-round/drive exclusion as `FOVScheduler`) in `round_robin_drives` mode. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete.
+`FOVScheduler.run_loop()` runs **continuously** (acquisition + fluidics): each tick it (in mirror mode) refreshes the second-drive mirror while idle, discovers stable image files (zarr/dax/tiff) under `config.analysis_data_dir` (or every drive in `config.all_data_roots` in `round_robin_drives` mode — each root's scan is wrapped so an unreachable/disconnected disk logs a warning instead of crashing the tick), and analyses pending files **in parallel across a process pool** (`config.resolved_n_workers`). In `round_robin_drives` mode, files on the drive of `meta.actively_writing_round()` are excluded from `pending` each tick — HAL's current write target is skipped, every other drive's completed rounds analyse immediately. Each worker runs the top-level `analysis.fov.analyze_file`, which reads the stack once and writes thumbnails (PNG) + per-frame stats (CSV) + histograms (`.npz`) + the FOV sentinel. With `n_analysis_workers=1` it runs serially in-process. Respects `fov_subset`; call `.close()` (done automatically when `run_loop` exits) to shut the pool down. `RoundScheduler.run_loop()` also runs continuously, assembling **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optional background transfers via `transfer.transfer_round` happen only during fluidics in `same_drive`/`mirror_drive` mode, or continuously (same active-round/drive exclusion as `FOVScheduler`) in `round_robin_drives` mode. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete. `FOVScheduler._build_task`/`RoundScheduler._analyse_one_round`'s path/kwarg-construction logic is factored out into module-level `build_fov_task_kwargs`/`build_round_mosaics`/`resolve_round_flip_y`/`resolve_round_color_frame_indices`/`source_dirs_for_round` functions in `scheduler.py` — both the schedulers and the cluster-side CLI scripts below call these, so local and cluster analysis can never disagree about where outputs land.
+
+**Moving QC analysis to a SLURM cluster (`round_robin_drives` projects).** `01_fov_scheduler.ipynb`/`02_round_scheduler.ipynb` remain fully supported for `same_drive`/`mirror_drive` projects, but for `round_robin_drives` projects QC analysis can instead run entirely on a SLURM cluster, freeing the microscope computer:
+
+- **`06_transfer_to_nas.ipynb`** (microscope computer) — `TransferScheduler` (in `scheduler.py`) transfers each round's raw data to `config.transfer_dest` as soon as it's **fully written** (`ExperimentMetadata.round_fully_written(round_id)`: every expected raw file exists — no dependency on any local analysis sentinel), gated only on not being on the drive `meta.actively_writing_round()` is currently hot on — unlike `RoundScheduler`'s `round_robin_drives` transfer path, which additionally requires `tracker.is_round_done` (mosaics already built locally). Each tick it also syncs the small `round_info.csv`/`round_bit_color_map.csv`/`positions_*.txt`/`settings/*.xml` files (via the new `transfer.sync_files`, a synchronous small-file copy — separate from `transfer_round`'s background-threaded directory copy) alongside the round data, since a cluster-side `ExperimentMetadata.load()` needs them too.
+- **`07_cluster_submit_analysis.ipynb`** (run on a cluster login/transfer node, after you've moved data from the NAS to cluster storage yourself — e.g. via Globus/FileZilla; no NAS→cluster automation exists in this repo) — builds `ExperimentConfig`/`ExperimentMetadata`/`ProgressTracker` pointed at the cluster-side `SAMPLE_DIR` exactly like `05_batch_sample_review.ipynb` does, then for each round with pending FOVs (`tracker.pending_fov_files`, which only ever returns files that already exist — partial/incremental arrival is fine) writes a manifest and submits a SLURM **array job** (one task per FOV) via `acquisition/cluster_submit.py`, and similarly submits a mosaic-building job once a round's FOVs are all done (`tracker.pending_rounds`). Submission is tracked with new `ProgressTracker` sentinels — `round_<r>.fov_submitted` / `round_<r>.round_mosaic_submitted` (holding the submitted SLURM job id as text, not just an empty touch) — checked against `cluster_submit.is_job_active` (an `sacct`-based query) before resubmitting, so re-running the notebook while a previous array job is still `PENDING`/`RUNNING` is a no-op.
+- **`analysis/cli_analyze_fov.py` / `analysis/cli_build_round_mosaic.py`** — standalone scripts (not part of the public MERci import surface) that are the actual SLURM-array-task payload: each reads its own `sys.path` bootstrap from `Path(__file__).resolve().parents[2]` (mirroring every notebook's own `MERCI_DIR`/`sys.path.insert` dance), so **no `pip install` is needed on the cluster either** — `MERci/` just needs to exist as a repo clone alongside the data (`git clone` it directly on the cluster, or let it ride along with your NAS→cluster transfer), and the cluster conda env needs only the same scientific dependencies as `environment.yml`, mirroring `merci_env`. `cli_analyze_fov.py` reads one manifest line (an image path) at `$SLURM_ARRAY_TASK_ID` and calls `analyze_file` via `build_fov_task_kwargs`; `cli_build_round_mosaic.py` takes `--round-id` (or a manifest + array index for several rounds at once) and calls `build_round_mosaics`.
+- **`acquisition/cluster_submit.py`** — sbatch script generation + submission, following `acquisition/fishtank_config.py`'s `_sbatch_header` conventions (this is FOV-parallel array work like fishtank's cellpose/detect-spots jobs, not MERlin's single-orchestrator-job convention — see `acquisition/merlin_config.py`): `build_fov_array_script`/`build_round_mosaic_script` write the sbatch text (default partition `"zhuang,sapphire,shared"`, `module load python` + `source activate merci_env`, real `#SBATCH --array=0-{n-1}%{concurrency}`), invoking the CLI scripts above by their absolute path under the cluster's own `MERci/` clone (never `python -m MERci...`, since MERci is never installed as a package). `submit_sbatch`/`job_state`/`is_job_active` wrap `sbatch`/`sacct` (the latter the same tool `data/configs/fishtank/scripts_static/slurm_stats.sh` already uses for job-resource auditing) via `subprocess`, logging and returning `None` rather than raising on any submission hiccup so a polling notebook loop never crashes.
 
 Typical scheduler setup in a notebook:
 

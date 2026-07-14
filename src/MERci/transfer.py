@@ -137,3 +137,55 @@ def transfer_round(
     t = threading.Thread(target=_run, daemon=True, name=f"transfer-{label}")
     t.start()
     return t
+
+
+def sync_files(
+    paths:      List[Path],
+    sample_dir: Path,
+    dest_root:  Path,
+) -> bool:
+    """
+    Copy each file in *paths* to ``dest_root / path.relative_to(sample_dir)``,
+    creating parent directories as needed. Runs synchronously in the calling
+    thread (unlike :func:`transfer_round`/:func:`mirror_tree`) -- meant for
+    the small, fast-changing metadata files (``round_info.csv``,
+    ``round_bit_color_map.csv``, ``positions_*.txt``, ``settings/*.xml``) a
+    cluster-side ``ExperimentMetadata.load()`` needs alongside the (much
+    larger, background-threaded) round image data, so callers can simply
+    re-run this every scheduler tick without spawning a thread per file.
+
+    Parameters
+    ----------
+    paths      : absolute file paths, each somewhere under *sample_dir*
+    sample_dir : experiment root *paths* are relative to
+    dest_root  : destination root (e.g. the NAS ``transfer_dest``); the
+                 relative path of each file under *sample_dir* is preserved
+
+    Returns
+    -------
+    True if every file copied successfully (missing source files are
+    skipped with a warning, not treated as failures -- some may not exist
+    yet, e.g. ``round_bit_color_map.csv`` before notebook 03 has run).
+    """
+    sample_dir = Path(sample_dir)
+    dest_root  = Path(dest_root)
+    overall_ok = True
+    for path in paths:
+        path = Path(path)
+        if not path.exists():
+            log.warning("sync_files: %s does not exist yet — skipping.", path)
+            continue
+        try:
+            rel = path.relative_to(sample_dir)
+        except ValueError:
+            log.error("sync_files: %s is not under sample_dir %s — skipping.", path, sample_dir)
+            overall_ok = False
+            continue
+        dst = dest_root / rel
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(path), str(dst))
+        except Exception as exc:
+            log.error("sync_files: failed to copy %s → %s: %s", path, dst, exc)
+            overall_ok = False
+    return overall_ok
