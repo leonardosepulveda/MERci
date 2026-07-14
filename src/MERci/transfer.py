@@ -15,13 +15,14 @@ copied, …).  Codes ≥ 8 indicate errors.  We treat 0–7 as success.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import platform
 import shutil
 import subprocess
 import threading
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -203,6 +204,133 @@ def transfer_round(
     t = threading.Thread(target=_run, daemon=True, name=f"transfer-{label}")
     t.start()
     return t
+
+
+# ── Per-FOV verified transfer ────────────────────────────────────────────────
+#
+# Unlike transfer_round() above (one robocopy /E per whole round directory,
+# no post-copy verification), these copy and bit-for-bit verify one FOV's
+# full associated file set at a time -- the image store itself (.zarr/.dax/
+# .tiff) plus every same-stem sidecar (.inf/.off/.power/.xml/...), whatever
+# HAL happens to write alongside it, discovered by glob rather than a fixed
+# list. Used by TransferScheduler so that (a) a round's "transferred" state
+# is only ever true once every one of its FOVs has been read back and
+# confirmed identical, byte for byte, to the source -- the bar that has to
+# be cleared before it's safe to delete the only copy of raw acquisition
+# data, and (b) per-FOV completions and their own durations are available
+# immediately (average_seconds_per_fov/ETA no longer need to wait for an
+# entire round to finish before showing anything).
+
+def fov_associated_paths(image_path: Path) -> List[Path]:
+    """
+    Every file/directory in *image_path*'s directory sharing its stem --
+    the image store itself (``.zarr``/``.dax``/``.tiff``) plus whatever
+    same-stem sidecars HAL wrote alongside it (``.inf``, ``.off``,
+    ``.power``, ``.xml``, ...). Discovered by glob rather than a hardcoded
+    extension list, so it doesn't need updating if a HAL version adds or
+    drops a sidecar type.
+    """
+    image_path = Path(image_path)
+    return sorted(image_path.parent.glob(f"{image_path.stem}.*"))
+
+
+def _hash_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    """SHA-256 hex digest of one file's bytes, read in chunks (memory-safe
+    for large zarr chunk files)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_copy(src: Path, dst: Path) -> bool:
+    """
+    Bit-for-bit verification that *dst* is an exact copy of *src* -- full
+    SHA-256 comparison, not just size/timestamp (which is all robocopy's own
+    "up to date" logic checks, and would not catch silent corruption). *src*
+    may be a single file or a directory (e.g. a zarr store, which is really
+    many chunk files) -- for a directory, every file within it, recursively,
+    must exist at *dst* at the same relative path (no missing/extra file)
+    and hash identically.
+    """
+    src, dst = Path(src), Path(dst)
+    if not dst.exists():
+        return False
+
+    if src.is_dir():
+        if not dst.is_dir():
+            return False
+        src_rel = sorted(p.relative_to(src) for p in src.rglob("*") if p.is_file())
+        dst_rel = sorted(p.relative_to(dst) for p in dst.rglob("*") if p.is_file())
+        if src_rel != dst_rel:
+            return False
+        for rel in src_rel:
+            s, d = src / rel, dst / rel
+            if s.stat().st_size != d.stat().st_size:
+                return False
+            if _hash_file(s) != _hash_file(d):
+                return False
+        return True
+
+    if not dst.is_file():
+        return False
+    if src.stat().st_size != dst.stat().st_size:
+        return False
+    return _hash_file(src) == _hash_file(dst)
+
+
+def copy_fov(image_path: Path, dest_root: Path) -> List[Tuple[Path, Path]]:
+    """
+    Copy every file/directory associated with one FOV (see
+    ``fov_associated_paths``) to *dest_root*, preserving the ``data/...``
+    structure (see ``relative_to_data_root``). Returns the ``(src, dst)``
+    pairs copied, for the caller to pass to ``verify_copy``.
+    """
+    dest_root = Path(dest_root)
+    use_robocopy = platform.system() == "Windows"
+    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+
+    pairs: List[Tuple[Path, Path]] = []
+    for src in fov_associated_paths(image_path):
+        dst = dest_root / relative_to_data_root(src)
+        if src.is_dir():
+            copy_fn(src, dst)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dst))
+        pairs.append((src, dst))
+    return pairs
+
+
+def transfer_fov(image_path: Path, dest_root: Path) -> bool:
+    """
+    Copy one FOV's full associated file set to *dest_root* and verify every
+    file bit-for-bit. Returns ``True`` iff every one verified successfully.
+    Does not delete the source -- deletion (see ``delete_source_tree``) is a
+    round-level decision, only safe once EVERY FOV in the round has verified.
+    """
+    pairs = copy_fov(image_path, dest_root)
+    if not pairs:
+        log.warning("No associated files found for %s -- nothing to transfer.", image_path)
+        return False
+    return all(verify_copy(src, dst) for src, dst in pairs)
+
+
+def delete_source_tree(path: Path) -> None:
+    """
+    Delete *path* (file or directory tree) from the source drive.
+
+    Only ever call this after every FOV under *path* has an independently
+    verified (``verify_copy``) copy at the destination -- this function
+    itself does no verification; the caller is the safety boundary.
+    """
+    path = Path(path)
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+    log.info("Deleted source: %s", path)
 
 
 def sync_files(

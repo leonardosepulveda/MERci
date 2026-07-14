@@ -19,6 +19,11 @@ Round-level done:
 Round-level transferred:
     <analysis_dir>/done/round_<r:03d>.round_transferred
 
+FOV-level transferred (per-FOV, verified-copy transfer -- see
+TransferScheduler/transfer.transfer_fov -- distinct from the FOV-level
+*analysis* sentinel above):
+    <analysis_dir>/done/<stem>.fov_transferred
+
 SLURM submission bookkeeping (cluster-side, see cli_analyze_fov.py /
 cli_build_round_mosaic.py / 07_cluster_submit_analysis.ipynb):
     <analysis_dir>/done/round_<r:03d>.fov_submitted            (FOV array job)
@@ -38,6 +43,7 @@ log = logging.getLogger(__name__)
 _FOV_DONE_SUFFIX               = ".fov_done"
 _ROUND_DONE_SUFFIX             = ".round_done"
 _ROUND_TRANSFERRED_SUFFIX      = ".round_transferred"
+_FOV_TRANSFERRED_SUFFIX        = ".fov_transferred"
 _FOV_SUBMITTED_SUFFIX          = ".fov_submitted"
 _ROUND_MOSAIC_SUBMITTED_SUFFIX = ".round_mosaic_submitted"
 
@@ -94,6 +100,9 @@ class ProgressTracker:
     def transfer_sentinel(self, round_id: int) -> Path:
         return self.done_dir / f"round_{round_id:03d}{_ROUND_TRANSFERRED_SUFFIX}"
 
+    def fov_transfer_sentinel(self, image_path: Path) -> Path:
+        return self.done_dir / f"{Path(image_path).stem}{_FOV_TRANSFERRED_SUFFIX}"
+
     def fov_submitted_sentinel(self, round_id: int) -> Path:
         return self.done_dir / f"round_{round_id:03d}{_FOV_SUBMITTED_SUFFIX}"
 
@@ -113,6 +122,11 @@ class ProgressTracker:
     def is_round_transferred(self, round_id: int) -> bool:
         """True if the round's data transfer has completed."""
         return self.transfer_sentinel(round_id).exists()
+
+    def is_fov_transferred(self, image_path: Path) -> bool:
+        """True if this FOV's files have been copied AND bit-for-bit
+        verified at the transfer destination (see transfer.transfer_fov)."""
+        return self.fov_transfer_sentinel(image_path).exists()
 
     def is_fov_analysis_submitted(self, round_id: int) -> bool:
         """True if a SLURM array job was submitted for this round's pending FOVs."""
@@ -213,6 +227,15 @@ class ProgressTracker:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch()
         log.info("Round %d marked transferred.", round_id)
+
+    def mark_fov_transferred(self, image_path: Path) -> None:
+        """Create the FOV-transferred sentinel (idempotent) -- only call this
+        after verify_copy has confirmed every one of this FOV's associated
+        files is a bit-for-bit match at the destination."""
+        p = self.fov_transfer_sentinel(image_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        log.debug("FOV marked transferred: %s", Path(image_path).name)
 
     def mark_fov_analysis_submitted(self, round_id: int, job_id: int) -> None:
         """Record *job_id* as the SLURM array job submitted for this round's

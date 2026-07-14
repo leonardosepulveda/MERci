@@ -169,7 +169,7 @@ def fov_pad_width(total_fovs: int) -> int:
 
 # ── Multi-drive round-robin helpers ─────────────────────────────────────────────
 
-def _normalize_drive_root(drive: Union[str, Path]) -> Path:
+def normalize_drive_root(drive: Union[str, Path]) -> Path:
     """
     Normalize a drive-letter/root string into an absolute path anchor.
 
@@ -194,10 +194,10 @@ def _normalize_drive_root(drive: Union[str, Path]) -> Path:
 
 def _drive_for_bit(bit_idx: int, data_drives: Sequence[Union[str, Path]]) -> Path:
     """Round-robin the bit/hyb index (1-based) across *data_drives*."""
-    return _normalize_drive_root(data_drives[(bit_idx - 1) % len(data_drives)])
+    return normalize_drive_root(data_drives[(bit_idx - 1) % len(data_drives)])
 
 
-def _rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
+def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
     """
     Re-root ``sample_dir`` onto a different drive, preserving its subpath.
 
@@ -207,7 +207,7 @@ def _rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
     the drive's root — e.g. ``SAMPLE_DIR = G:\\Leonardo\\LT058_sample_07\\merfish``
     rebased onto ``"D:"`` gives ``D:\\Leonardo\\LT058_sample_07\\merfish``, not
     just ``D:\\``. ``drive_root`` is expected already normalized (see
-    :func:`_normalize_drive_root`).
+    :func:`normalize_drive_root`).
     """
     sample_dir = Path(sample_dir)
     return drive_root / sample_dir.relative_to(sample_dir.anchor)
@@ -240,7 +240,7 @@ def create_data_drive_skeleton(
     ----------
     sample_dir  : experiment root; each round-robin drive's skeleton is
                   rebased onto this path's own subfolder structure (see
-                  :func:`_rebase_on_drive`), not dumped at the drive's root
+                  :func:`rebase_on_drive`), not dumped at the drive's root
     n_bits      : number of bits (hybridisation) rounds
     data_drives : drive letters / absolute roots to spread hyb rounds across
     mode        : ``"multi"``, ``"single"`` or ``"legacy"`` — selects whether
@@ -251,7 +251,7 @@ def create_data_drive_skeleton(
     """
     tissues = sorted({b.tissue for b in boundaries}) if (mode == "multi" and boundaries) else [None]
     for bit_idx in range(1, n_bits + 1):
-        root = _rebase_on_drive(sample_dir, _drive_for_bit(bit_idx, data_drives))
+        root = rebase_on_drive(sample_dir, _drive_for_bit(bit_idx, data_drives))
         for tissue in tissues:
             base = (root / "data" / f"tissue_{tissue}") if tissue is not None else (root / "data")
             (base / "hybs" / f"H{bit_idx:02d}").mkdir(parents=True, exist_ok=True)
@@ -337,14 +337,14 @@ def create_round_info(
     # When ``data_drives`` is given, that subfolder is additionally rooted at a
     # round-robin-assigned drive instead of always ``sample_dir`` (so successive
     # hyb rounds land on different physical disks) -- rebased onto
-    # ``sample_dir``'s own subpath (see ``_rebase_on_drive``) so e.g.
+    # ``sample_dir``'s own subpath (see ``rebase_on_drive``) so e.g.
     # ``G:\Leonardo\LT058_sample_07\merfish`` round-robins to
     # ``D:\Leonardo\LT058_sample_07\merfish``, not just ``D:\``.
     # ``create_dave_config`` emits a matching ``<change_directory>`` before
     # each round's imaging loop.
     for bit_idx in range(1, n_bits + 1):
         bits_root = (
-            _rebase_on_drive(sample_dir, _drive_for_bit(bit_idx, data_drives))
+            rebase_on_drive(sample_dir, _drive_for_bit(bit_idx, data_drives))
             if data_drives else data.parent
         )
         rows.append({
@@ -460,9 +460,9 @@ def create_round_info_multitissue(
         # tissue/hybs/H{NN} subtree, so rounds are spread across both folders
         # and physical disks; cells/transit always stay rooted at sample_dir.
         # The round-robin drive is rebased onto sample_dir's own subpath (see
-        # _rebase_on_drive) rather than dumped at the drive's root.
+        # rebase_on_drive) rather than dumped at the drive's root.
         if kind != "transit" and not is_cells and data_drives:
-            root = _rebase_on_drive(sample_dir, _drive_for_bit(hyb_idx, data_drives)) / "data"
+            root = rebase_on_drive(sample_dir, _drive_for_bit(hyb_idx, data_drives)) / "data"
         else:
             root = data
         base = root / f"tissue_{tissue}" if mode == "multi" else root

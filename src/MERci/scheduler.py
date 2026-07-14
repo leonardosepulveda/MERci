@@ -14,6 +14,7 @@ ExperimentScheduler
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -25,7 +26,10 @@ import pandas as pd
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
 from .common.io       import discover_image_files
-from .transfer        import transfer_round, mirror_tree, sync_files, rewrite_round_info_dirs, relative_to_data_root
+from .transfer        import (
+    transfer_round, mirror_tree, sync_files, rewrite_round_info_dirs,
+    transfer_fov, delete_source_tree,
+)
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
 from .analysis.fov    import analyze_file
@@ -572,18 +576,37 @@ class TransferScheduler:
     SLURM cluster reading from wherever it lands (see
     ``06_transfer_to_nas.ipynb`` / ``07_cluster_submit_analysis.ipynb``).
 
+    Transfers **one FOV at a time** (every associated file: the image store
+    plus same-stem sidecars — see ``transfer.fov_associated_paths``), each
+    independently copied and bit-for-bit verified (``transfer.verify_copy``)
+    before its own ``.fov_transferred`` sentinel is written — not one bulk
+    ``robocopy /E`` per round with no post-copy check. A round is marked
+    ``round_transferred`` only once every one of its FOVs has verified.
+    If ``delete_source_after_verify=True``, the round's entire source data
+    directory is deleted **once every FOV in it has verified** — never per
+    FOV, and never based on anything less than a full SHA-256 comparison
+    (see ``transfer.delete_source_tree``); this is irreversible, so it
+    defaults to ``False``.
+
     Requires ``config.analysis_mode == "round_robin_drives"`` (the "which
     drive is hot right now" signal this relies on) and ``config.transfer_dest``
     to be set.
 
     Call ``transfer_progress()`` at any time (e.g. from an ``on_tick``
     callback) for a display-ready snapshot: FOVs arrived vs. total, the
-    measured average seconds/FOV from recently completed round transfers,
-    and ETAs for the in-progress round and for everything remaining.
+    measured average seconds/FOV from recently completed FOV transfers, and
+    ETAs for the in-progress rounds and for everything remaining.
+
+    ``sync_static_metadata()`` handles the small, unchanging-once-acquisition-
+    starts metadata/positions/settings files — call it **once**, not from the
+    tick loop (see ``06_transfer_to_nas.ipynb`` section 4); it is not called
+    automatically by ``run_loop``.
 
     Typical usage (in a notebook cell)::
 
-        TransferScheduler(config, meta, tracker).run_loop()
+        scheduler = TransferScheduler(config, meta, tracker)
+        scheduler.sync_static_metadata()   # once
+        scheduler.run_loop()               # continuous, per-round data only
     """
 
     def __init__(
@@ -592,6 +615,7 @@ class TransferScheduler:
         metadata:   ExperimentMetadata,
         tracker:    ProgressTracker,
         sample_dir: Optional[Path] = None,
+        delete_source_after_verify: bool = False,
     ) -> None:
         if config.transfer_dest is None:
             raise ValueError("TransferScheduler requires config.transfer_dest to be set.")
@@ -603,13 +627,17 @@ class TransferScheduler:
         # data_dir's parent, true for every notebook's ExperimentConfig(data_dir=
         # SAMPLE_DIR/"data", ...) convention, but overridable in case it isn't.
         self.sample_dir = Path(sample_dir) if sample_dir is not None else Path(config.data_dir).parent
+        # Irreversible -- only ever deletes a round's source directory after
+        # EVERY FOV in it has an independently SHA-256-verified copy at
+        # transfer_dest (see _transfer_round_worker). Defaults to False.
+        self.delete_source_after_verify = delete_source_after_verify
         self._transfers_in_progress: set = set()   # round_ids currently being transferred
-        self._round_start_info: Dict[int, Tuple[float, int]] = {}   # round_id -> (start_time, n_files)
-        # Seconds-per-file samples from the last 20 *completed* round transfers,
+        # Seconds-per-FOV samples from the last 200 *completed* FOV transfers,
         # used to estimate remaining time -- a deque so the average tracks
         # recent network conditions rather than being dragged down by a slow
-        # transfer from hours ago.
-        self._transfer_rate_samples: "deque[float]" = deque(maxlen=20)
+        # transfer from hours ago. Per-FOV (not per-round) so the estimate
+        # updates immediately rather than waiting for an entire round to finish.
+        self._fov_rate_samples: "deque[float]" = deque(maxlen=200)
 
     def run_loop(
         self,
@@ -619,10 +647,11 @@ class TransferScheduler:
         """
         Run the transfer loop indefinitely (or for *max_iterations* ticks).
 
-        Each tick: sync the small metadata/positions/settings files, then
-        start a background transfer for any round that is fully written, not
-        yet transferred, not already mid-transfer, and not on the currently
-        actively-written (hot) drive.
+        Each tick: start a background per-FOV transfer for any round that is
+        fully written, not yet transferred, not already mid-transfer, and not
+        on the currently actively-written (hot) drive. Does NOT sync static
+        metadata/positions/settings files -- call ``sync_static_metadata()``
+        once beforehand instead (see ``06_transfer_to_nas.ipynb`` section 4).
         """
         iteration = 0
         while True:
@@ -637,14 +666,18 @@ class TransferScheduler:
 
             time.sleep(self.config.poll_interval)
 
-    def _aux_file_paths(self) -> List[Path]:
-        """Small, fast-changing files a cluster-side ``ExperimentMetadata.load()``
-        needs alongside the (much larger, background-threaded) round image data.
+    def sync_static_metadata(self) -> None:
+        """
+        Sync the small files that DON'T change once acquisition starts --
+        ``round_bit_color_map.csv``, ``positions_*.txt``, ``settings/*.xml``
+        (verbatim), and ``round_info.csv`` (rewritten -- see
+        :func:`transfer.rewrite_round_info_dirs`) -- to ``config.transfer_dest``.
 
-        ``round_info.csv`` is deliberately excluded here -- it needs its
-        ``dir`` column rewritten, not a verbatim copy, so it's handled
-        separately by :func:`transfer.rewrite_round_info_dirs` in
-        :meth:`_process_pending_transfers`."""
+        Call this **once** (e.g. a dedicated notebook cell), not from the
+        tick loop: unlike the per-round data these files don't grow or change
+        during acquisition, so re-syncing them every tick was pure overhead.
+        Safe to re-run any time (e.g. if you edit ``round_info.csv`` by hand).
+        """
         paths: List[Path] = []
         if self.config.metadata_dir is not None:
             rbc = Path(self.config.metadata_dir) / "round_bit_color_map.csv"
@@ -654,16 +687,14 @@ class TransferScheduler:
             paths.extend(sorted(Path(self.config.positions_txt).parent.glob("positions_*.txt")))
         if self.config.settings_dir is not None and Path(self.config.settings_dir).exists():
             paths.extend(sorted(Path(self.config.settings_dir).glob("*.xml")))
-        return paths
-
-    def _process_pending_transfers(self) -> int:
-        sync_files(self._aux_file_paths(), self.sample_dir, self.config.transfer_dest)
+        sync_files(paths, self.sample_dir, self.config.transfer_dest)
 
         round_info_csv = Path(self.config.round_info_csv)
         if round_info_csv.exists():
             dest = Path(self.config.transfer_dest) / round_info_csv.relative_to(self.sample_dir)
             rewrite_round_info_dirs(round_info_csv, dest)
 
+    def _process_pending_transfers(self) -> int:
         active_round = self.meta.actively_writing_round()
         active_drive = (
             self.meta.drive_of_round(active_round) if active_round is not None else None
@@ -682,32 +713,66 @@ class TransferScheduler:
         return count
 
     def _start_transfer_for_round(self, round_id: int) -> None:
-        """Launch a background thread to copy round *round_id* to transfer_dest."""
-        src_dirs = source_dirs_for_round(round_id, self.meta)
-        if not src_dirs:
-            log.warning("Round %d: no source dirs found — skipping transfer.", round_id)
+        """Launch a background thread that transfers round *round_id* one
+        FOV at a time (see ``_transfer_round_worker``)."""
+        self._transfers_in_progress.add(round_id)
+        t = threading.Thread(
+            target=self._transfer_round_worker, args=(round_id,),
+            daemon=True, name=f"transfer-round{round_id}",
+        )
+        t.start()
+
+    def _transfer_round_worker(self, round_id: int) -> None:
+        """
+        Copy and verify round *round_id*'s FOVs one at a time (skipping any
+        already ``.fov_transferred`` from a prior run), then -- only if every
+        single one verified -- mark the round transferred and, if
+        ``delete_source_after_verify``, delete its source directory.
+
+        Runs in a background thread; partial progress (both individual FOV
+        sentinels and per-FOV timing samples) is durable even if interrupted
+        mid-round -- the next call picks up exactly where it left off.
+        """
+        round_obj = self.meta.rounds.get(round_id)
+        if round_obj is None:
+            log.warning("Round %d: not found in metadata — skipping transfer.", round_id)
+            self._transfers_in_progress.discard(round_id)
             return
 
-        n_files    = len(self.meta.files_for_round(round_id))
-        started_at = time.time()
-        self._transfers_in_progress.add(round_id)
-        self._round_start_info[round_id] = (started_at, n_files)
+        dest_root = Path(self.config.transfer_dest)
+        all_verified = True
+        n_transferred_this_round = 0
+
+        for fov_id, image_paths in sorted(round_obj.fov_files.items()):
+            for image_path in image_paths:
+                if self.tracker.is_fov_transferred(image_path):
+                    continue
+                started_at = time.time()
+                ok = transfer_fov(image_path, dest_root)
+                if ok:
+                    self.tracker.mark_fov_transferred(image_path)
+                    self._fov_rate_samples.append(time.time() - started_at)
+                    n_transferred_this_round += 1
+                else:
+                    all_verified = False
+                    log.error(
+                        "Round %d: FOV transfer failed to verify: %s — will retry next tick.",
+                        round_id, image_path,
+                    )
+
         log.info(
-            "Round %d: starting transfer of %d dir(s) (%d file(s)) to %s.",
-            round_id, len(src_dirs), n_files, self.config.transfer_dest,
+            "Round %d: transferred %d FOV(s) this pass.", round_id, n_transferred_this_round,
         )
 
-        def _on_done(success: bool) -> None:
-            self._transfers_in_progress.discard(round_id)
-            start_time, n = self._round_start_info.pop(round_id, (started_at, n_files))
-            if success:
-                self.tracker.mark_round_transferred(round_id)
-                if n > 0:
-                    self._transfer_rate_samples.append((time.time() - start_time) / n)
-            else:
-                log.error("Round %d: transfer failed — will retry next tick.", round_id)
+        if all_verified:
+            self.tracker.mark_round_transferred(round_id)
+            log.info("Round %d marked transferred.", round_id)
+            if self.delete_source_after_verify:
+                for src_dir in source_dirs_for_round(round_id, self.meta):
+                    log.info("Round %d: deleting verified source directory %s", round_id, src_dir)
+                    delete_source_tree(src_dir)
 
-        transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
+        self._transfers_in_progress.discard(round_id)
 
     # ── Progress / ETA queries ────────────────────────────────────────────────
 
@@ -718,33 +783,24 @@ class TransferScheduler:
 
     def count_arrived_files(self, round_id: int) -> int:
         """
-        Approximate count of *round_id*'s expected raw files that already
-        exist at ``transfer_dest``.
-
-        Existence-based, same caveat as ``ExperimentMetadata.round_fully_written``:
-        it doesn't verify an individual file's copy has *finished* (a zarr
-        FOV's destination directory can exist before every one of its
-        internal chunk files has arrived), just that robocopy has started
-        writing it -- good enough for a progress estimate, not a
-        completeness guarantee (that's what ``tracker.is_round_transferred``
-        is for). Rounds already marked transferred short-circuit to the full
-        count, skipping the filesystem check.
+        Count of *round_id*'s expected raw files with a verified
+        ``.fov_transferred`` sentinel (see ``ProgressTracker.is_fov_transferred``)
+        -- a real completeness guarantee (full SHA-256 match), not just
+        "something exists at the destination path."
         """
         if self.tracker.is_round_transferred(round_id):
             return len(self.meta.files_for_round(round_id))
-        dest_root = Path(self.config.transfer_dest)
         return sum(
             1 for f in self.meta.files_for_round(round_id)
-            if (dest_root / relative_to_data_root(f.parent) / f.name).exists()
+            if self.tracker.is_fov_transferred(f)
         )
 
     def average_seconds_per_fov(self) -> Optional[float]:
-        """Mean seconds-per-file from the most recent completed round
-        transfers (up to the last 20), or ``None`` if no round transfer has
-        completed yet."""
-        if not self._transfer_rate_samples:
+        """Mean seconds-per-FOV from the most recent completed FOV transfers
+        (up to the last 200), or ``None`` if none have completed yet."""
+        if not self._fov_rate_samples:
             return None
-        return sum(self._transfer_rate_samples) / len(self._transfer_rate_samples)
+        return sum(self._fov_rate_samples) / len(self._fov_rate_samples)
 
     def transfer_progress(self) -> dict:
         """

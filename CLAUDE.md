@@ -171,6 +171,11 @@ src/MERci/
                     #   group via the same fov_pad_width, no artificial floor -- both this and
                     #   create_round_info share that one pad-width function now); both take
                     #   data_drives= to round-robin hyb rounds across physical drives),
+                    #   rebase_on_drive/normalize_drive_root (public -- re-root a path onto a
+                    #   different drive, preserving its subpath, e.g. G:\Leonardo\sample ->
+                    #   V:\Leonardo\sample; used internally for round-robin hyb rounds AND by
+                    #   06_transfer_to_nas.ipynb to derive TRANSFER_DEST from just a destination
+                    #   drive, so the NAS path never has to be retyped by hand),
                     #   create_data_drive_skeleton (pre-creates each
                     #   hyb's H## folder only on the drive it's actually assigned to), create_dave_config
                     #   (positions_dir= enables per-segment loops; every loop gets its own identically-
@@ -249,10 +254,20 @@ src/MERci/
                     #   --round-id (or a manifest of round ids for an array job)
   state.py          # ExperimentStateMonitor — detects imaging vs. fluidics phases by watching file mtimes
   progress.py       # ProgressTracker — sentinel files for fov_done, round_done, round_transferred,
-                    #   fov_submitted/round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
+                    #   fov_transferred (per-FOV, verified-copy transfer — distinct from fov_done, which
+                    #   is local QC analysis completion, not a transfer state), fov_submitted/
+                    #   round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
                     #   (round_robin_drives-only: transfers once a round is fully written, decoupled
-                    #   from local analysis — see "Moving QC analysis to a SLURM cluster" below),
+                    #   from local analysis, ONE FOV AT A TIME with full bit-for-bit verification before
+                    #   each is marked transferred (see transfer.py's transfer_fov) — a round is
+                    #   round_transferred only once every one of its FOVs has verified, at which point
+                    #   (delete_source_after_verify=True, off by default — irreversible) its entire
+                    #   source data directory is deleted; sync_static_metadata() handles the small,
+                    #   unchanging-once-acquisition-starts files (round_info.csv rewritten/
+                    #   round_bit_color_map.csv/positions_*.txt/settings/*.xml) — call it once, not from
+                    #   the tick loop, since re-syncing them every tick was pure overhead — see "Moving
+                    #   QC analysis to a SLURM cluster" below),
                     #   ExperimentScheduler — main analysis loops; also exports the shared
                     #   build_fov_task_kwargs/build_round_mosaics/resolve_round_flip_y/
                     #   resolve_round_color_frame_indices/source_dirs_for_round functions the
@@ -274,7 +289,19 @@ src/MERci/
                     #   notebook cell that wants to see a one-off folder sync finish, e.g. data/mosaic10x or
                     #   the static MERci/merlin/fishtank folders, before moving on) — robocopy/shutil either
                     #   way; sync_files (synchronous small-file copy, preserving relative path —
-                    #   metadata/positions/settings)
+                    #   metadata/positions/settings).
+                    #   Per-FOV verified transfer (used by TransferScheduler instead of transfer_round —
+                    #   one bulk robocopy per round with no post-copy check): fov_associated_paths (every
+                    #   file/dir sharing an image's stem — the store itself plus whatever same-stem
+                    #   .inf/.off/.power/.xml sidecars HAL wrote, found by glob, not a fixed extension
+                    #   list), copy_fov (copies them, preserving data/... structure), verify_copy (full
+                    #   SHA-256 of every file — not just size/timestamp, which is all robocopy's own
+                    #   "up to date" check does and would not catch silent corruption; for a directory,
+                    #   recurses and also requires the exact same set of relative paths on both sides),
+                    #   transfer_fov (copy_fov + verify_copy, returns whether every file verified),
+                    #   delete_source_tree (rmtree/unlink — does no verification itself; the caller,
+                    #   TransferScheduler, is the safety boundary and only ever calls this once every
+                    #   FOV in a round has independently verified)
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
   disk_audit.py     # discover_sample_dirs, measure_folder (recursive size + file mtime range +
                     #   folder creation time), audit_disk_usage — scans {root}/{lab_member}/{sample_dir}
@@ -338,18 +365,24 @@ notebooks/
                                                    #   the MERlin-independent half of the old cluster-side review
                                                    #   notebook (excludes anything needing MERlin's decoded output)
     06_transfer_to_nas.ipynb                       # round_robin_drives only: TransferScheduler continuously
-                                                   #   copies each round's raw data (once fully written, decoupled
-                                                   #   from any local QC), nested under TRANSFER_DEST exactly as
-                                                   #   it is locally (data/cells, data/hybs/H01, ... -- see
-                                                   #   transfer.relative_to_data_root) + small metadata/positions/
-                                                   #   settings files + a rewritten round_info.csv copy (dir
-                                                   #   column repointed at that same relative data/... path, via
-                                                   #   transfer.rewrite_round_info_dirs) to a NAS -- run on the
-                                                   #   microscope computer alongside HAL/Dave, as the companion to
-                                                   #   moving QC analysis to a cluster; also has a one-time (not
-                                                   #   per-tick) cell mirroring the static data/mosaic10x/MERci/
-                                                   #   merlin/fishtank folders, so TRANSFER_DEST ends up a full
-                                                   #   copy of SAMPLE_DIR
+                                                   #   copies each round's raw data ONE FOV AT A TIME (once fully
+                                                   #   written, decoupled from any local QC), each bit-for-bit
+                                                   #   SHA-256 verified before being marked transferred, nested
+                                                   #   under TRANSFER_DEST exactly as it is locally (data/cells,
+                                                   #   data/hybs/H01, ... -- see transfer.relative_to_data_root)
+                                                   #   -- a round is round_transferred only once every FOV in it
+                                                   #   has verified, at which point (DELETE_SOURCE_AFTER_
+                                                   #   VERIFIED_TRANSFER, off by default) its source directory is
+                                                   #   deleted; TRANSFER_DEST is derived from just a destination
+                                                   #   drive (dave.rebase_on_drive) rather than typed by hand; a
+                                                   #   one-time (not per-tick) section syncs round_info.csv
+                                                   #   (rewritten, via transfer.rewrite_round_info_dirs) /
+                                                   #   round_bit_color_map.csv/positions_*.txt/settings/*.xml plus
+                                                   #   the equally-static data/mosaic10x/MERci/merlin/fishtank
+                                                   #   folders, so TRANSFER_DEST ends up a full copy of
+                                                   #   SAMPLE_DIR -- run on the microscope computer alongside
+                                                   #   HAL/Dave, as the companion to moving QC analysis to a
+                                                   #   cluster
     07_cluster_submit_analysis.ipynb               # run ON a cluster login/transfer node (after you've moved data
                                                    #   from the NAS to cluster storage yourself, e.g. Globus/
                                                    #   FileZilla): discovers pending FOVs/rounds and submits SLURM
@@ -523,7 +556,7 @@ Multiple notebooks can run concurrently — no shared state.
 
 **Moving QC analysis to a SLURM cluster (`round_robin_drives` projects).** `01_fov_scheduler.ipynb`/`02_round_scheduler.ipynb` remain fully supported for `same_drive`/`mirror_drive` projects, but for `round_robin_drives` projects QC analysis can instead run entirely on a SLURM cluster, freeing the microscope computer:
 
-- **`06_transfer_to_nas.ipynb`** (microscope computer) — `TransferScheduler` (in `scheduler.py`) transfers each round's raw data to `config.transfer_dest` as soon as it's **fully written** (`ExperimentMetadata.round_fully_written(round_id)`: every expected raw file exists — no dependency on any local analysis sentinel), gated only on not being on the drive `meta.actively_writing_round()` is currently hot on — unlike `RoundScheduler`'s `round_robin_drives` transfer path, which additionally requires `tracker.is_round_done` (mosaics already built locally). Each tick it also syncs the small `round_info.csv`/`round_bit_color_map.csv`/`positions_*.txt`/`settings/*.xml` files (via the new `transfer.sync_files`, a synchronous small-file copy — separate from `transfer_round`'s background-threaded directory copy) alongside the round data, since a cluster-side `ExperimentMetadata.load()` needs them too.
+- **`06_transfer_to_nas.ipynb`** (microscope computer) — `TransferScheduler` (in `scheduler.py`) transfers each round's raw data to `config.transfer_dest` as soon as it's **fully written** (`ExperimentMetadata.round_fully_written(round_id)`: every expected raw file exists — no dependency on any local analysis sentinel), gated only on not being on the drive `meta.actively_writing_round()` is currently hot on — unlike `RoundScheduler`'s `round_robin_drives` transfer path, which additionally requires `tracker.is_round_done` (mosaics already built locally) and uses the simpler, unverified whole-directory `transfer.transfer_round`. `TransferScheduler` instead transfers **one FOV at a time** (`transfer.transfer_fov`: every file sharing that FOV's stem, bit-for-bit SHA-256 verified against the source before being marked `.fov_transferred`) — a round becomes `round_transferred` only once every one of its FOVs has verified, and only then, if constructed with `delete_source_after_verify=True` (off by default — irreversible), is that round's entire source data directory deleted. `TRANSFER_DEST` is derived from just a destination drive via `dave.rebase_on_drive` (mirrors `SAMPLE_DIR`'s own subpath, same convention round-robin hyb rounds use) rather than typed out by hand. The notebook calls `scheduler.sync_static_metadata()` **once** (not from the tick loop) to sync `round_info.csv`/`round_bit_color_map.csv`/`positions_*.txt`/`settings/*.xml` — none of these change once acquisition starts, so re-syncing them every tick was pure overhead — alongside a one-time mirror of the equally-static `data/mosaic10x`/`MERci`/`merlin`/`fishtank` folders (`transfer.mirror_dir_sync`), so `TRANSFER_DEST` ends up a genuinely complete copy of `SAMPLE_DIR`.
 - **`07_cluster_submit_analysis.ipynb`** (run on a cluster login/transfer node, after you've moved data from the NAS to cluster storage yourself — e.g. via Globus/FileZilla; no NAS→cluster automation exists in this repo) — builds `ExperimentConfig`/`ExperimentMetadata`/`ProgressTracker` pointed at the cluster-side `SAMPLE_DIR` exactly like `05_batch_sample_review.ipynb` does, then for each round with pending FOVs (`tracker.pending_fov_files`, which only ever returns files that already exist — partial/incremental arrival is fine) writes a manifest and submits a SLURM **array job** (one task per FOV) via `acquisition/cluster_submit.py`, and similarly submits a mosaic-building job once a round's FOVs are all done (`tracker.pending_rounds`). Submission is tracked with new `ProgressTracker` sentinels — `round_<r>.fov_submitted` / `round_<r>.round_mosaic_submitted` (holding the submitted SLURM job id as text, not just an empty touch) — checked against `cluster_submit.is_job_active` (an `sacct`-based query) before resubmitting, so re-running the notebook while a previous array job is still `PENDING`/`RUNNING` is a no-op.
 - **`analysis/cli_analyze_fov.py` / `analysis/cli_build_round_mosaic.py`** — standalone scripts (not part of the public MERci import surface) that are the actual SLURM-array-task payload: each reads its own `sys.path` bootstrap from `Path(__file__).resolve().parents[2]` (mirroring every notebook's own `MERCI_DIR`/`sys.path.insert` dance), so **no `pip install` is needed on the cluster either** — `MERci/` just needs to exist as a repo clone alongside the data (`git clone` it directly on the cluster, or let it ride along with your NAS→cluster transfer), and the cluster conda env needs only the same scientific dependencies as `environment.yml`, mirroring `merci_env`. `cli_analyze_fov.py` reads one manifest line (an image path) at `$SLURM_ARRAY_TASK_ID` and calls `analyze_file` via `build_fov_task_kwargs`; `cli_build_round_mosaic.py` takes `--round-id` (or a manifest + array index for several rounds at once) and calls `build_round_mosaics`.
 - **`acquisition/cluster_submit.py`** — sbatch script generation + submission, following `acquisition/fishtank_config.py`'s `_sbatch_header` conventions (this is FOV-parallel array work like fishtank's cellpose/detect-spots jobs, not MERlin's single-orchestrator-job convention — see `acquisition/merlin_config.py`): `build_fov_array_script`/`build_round_mosaic_script` write the sbatch text (default partition `"zhuang,sapphire,shared"`, `module load python` + `source activate merci_env`, real `#SBATCH --array=0-{n-1}%{concurrency}`), invoking the CLI scripts above by their absolute path under the cluster's own `MERci/` clone (never `python -m MERci...`, since MERci is never installed as a package). `submit_sbatch`/`job_state`/`is_job_active` wrap `sbatch`/`sacct` (the latter the same tool `data/configs/fishtank/scripts_static/slurm_stats.sh` already uses for job-resource auditing) via `subprocess`, logging and returning `None` rather than raising on any submission hiccup so a polling notebook loop never crashes.
