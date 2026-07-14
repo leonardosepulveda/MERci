@@ -39,6 +39,7 @@ The ``round_info.csv`` drives everything:
 """
 from __future__ import annotations
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -57,6 +58,8 @@ from .kilroy import (
     protocol_valve_commands,
 )
 from .positions import group_boundaries_by_path_mode
+
+log = logging.getLogger(__name__)
 
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
@@ -146,6 +149,22 @@ def count_positions(positions_path: Path) -> int:
             if len(line.split(",")) >= 2:
                 n += 1
     return n
+
+
+def fov_pad_width(total_fovs: int) -> int:
+    """
+    Zero-pad width wide enough to represent every FOV index ``0 … total_fovs-1``
+    (e.g. 150 FOVs -> 3 digits, ``"000".."149"``; 1036 FOVs -> 4 digits,
+    ``"0000".."1035"``) -- derived from the actual FOV count read from the
+    positions file, never a fixed literal. HAL's own file-naming width scales
+    the same way with FOV count, so a hardcoded width (e.g. always 3 digits)
+    silently stops matching real files the moment an experiment's FOV count
+    crosses a digit boundary the hardcoded value didn't anticipate -- exactly
+    what happened for a 1036-FOV experiment whose round_info.csv was written
+    with a stale/assumed 3-digit width. No artificial floor: an experiment
+    with only a handful of FOVs genuinely needs only that many digits.
+    """
+    return len(str(max(total_fovs - 1, 0)))
 
 
 # ── Multi-drive round-robin helpers ─────────────────────────────────────────────
@@ -247,6 +266,7 @@ def create_round_info(
     cells_hal_config: str,
     sample_dir:       Path,
     data_drives:      Optional[Sequence[Union[str, Path]]] = None,
+    positions_txt:    Optional[Path] = None,
 ) -> pd.DataFrame:
     """
     Build the ``round_info.csv`` dataframe for a standard MERFISH experiment.
@@ -269,21 +289,43 @@ def create_round_info(
                         ``sample_dir/data/hybs/H{NN}``); the cells round is
                         unaffected (always ``sample_dir/data/cells``). ``None``
                         (default) preserves today's single-drive layout.
+    positions_txt     : the experiment's positions file, used to count real
+                        FOVs and derive the ``series`` pattern's zero-pad
+                        width (see :func:`fov_pad_width`) -- e.g. 150 FOVs ->
+                        ``{fov:03d}``, 1036 FOVs -> ``{fov:04d}``. ``None``
+                        (default) falls back to a fixed 3-digit width (the
+                        previous, hardcoded behaviour) with a warning, since
+                        the true FOV count isn't known without it -- pass
+                        this whenever the positions file is available, which
+                        it should be by the time ``round_info.csv`` is built.
 
     Returns
     -------
     pd.DataFrame with columns ``imaging_round``, ``imaging_type``, ``series``,
     ``hal_config``, ``data_dir``
     """
-    mic      = microscope.lower()
-    data     = Path(sample_dir) / "data"
+    mic  = microscope.lower()
+    data = Path(sample_dir) / "data"
     rows: List[dict] = []
+
+    if positions_txt is not None:
+        pad = fov_pad_width(count_positions(positions_txt))
+    else:
+        log.warning(
+            "create_round_info: no positions_txt given -- falling back to a "
+            "fixed 3-digit FOV zero-pad width. Pass positions_txt so the "
+            "width is derived from the real FOV count instead (an "
+            "experiment with >=1000 FOVs needs 4+ digits, and a fixed width "
+            "silently stops matching real files once FOV count crosses a "
+            "digit boundary)."
+        )
+        pad = 3
 
     # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
     rows.append({
         "imaging_round": 1,
         "imaging_type":  "cells",
-        "series":        f"hal-{mic}-cells_{{fov:03d}}",
+        "series":        f"hal-{mic}-cells_{{fov:0{pad}d}}",
         "hal_config":    cells_hal_config,
         "data_dir":      str(data / "cells"),
     })
@@ -308,7 +350,7 @@ def create_round_info(
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
-            "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:03d}}",
+            "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:0{pad}d}}",
             "hal_config":    bits_hal_config,
             "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
@@ -467,15 +509,10 @@ def create_round_info_multitissue(
     # ignored and the shared names would overwrite each other.
     counts = [count_positions(pos_dir / posfile) for (_, _, _, posfile) in seg_templates]
 
-    def _group_pad(total: int) -> int:
-        # Digits needed for the largest index (total-1); floor at 3 so the index
-        # keeps the conventional 3-wide form the analysis side expects.
-        return max(3, len(str(total - 1))) if total > 0 else 3
-
     boundary_total = sum(c for (t, c) in zip(seg_templates, counts) if t[0] == "boundary")
     transit_total  = sum(c for (t, c) in zip(seg_templates, counts) if t[0] == "transit")
-    boundary_pad   = _group_pad(boundary_total)
-    transit_pad    = _group_pad(transit_total)
+    boundary_pad   = fov_pad_width(boundary_total)
+    transit_pad    = fov_pad_width(transit_total)
 
     # Enrich each template with its running start offset and group pad.
     enriched: List[dict] = []

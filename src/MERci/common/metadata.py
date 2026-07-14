@@ -53,6 +53,14 @@ class SeriesInfo:
     candidate_dirs: List[Path]    = field(default_factory=list)
 
     _regex: "re.Pattern" = field(init=False, repr=False)
+    # Cache of {directory: {fov_id: path}}, lazily built the first time
+    # resolve_path() needs to fall back to a directory scan (see below) --
+    # scanning is O(entries in dir), so this makes repeated per-FOV lookups
+    # against the same directory (the common case: one round's 1000+ FOVs)
+    # cost one scan total, not one per FOV.
+    _dir_scan_cache: Dict[Path, Dict[int, Path]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self._regex = _pattern_to_regex(self.name)
@@ -80,15 +88,52 @@ class SeriesInfo:
         dirs  = self.candidate_dirs or ([self.data_dir] if self.data_dir else [Path(".")])
         return [Path(d) / fname for d in dirs]
 
+    def _scan_dir_for_fov(self, dir_path: Path, fov_id: int, image_suffix: str) -> Optional[Path]:
+        """
+        Width-agnostic fallback: scan *dir_path* once, mapping every entry
+        that matches this series' pattern (``fov_from_stem`` -- built from
+        ``\\d+``, so it never assumed a specific zero-pad width to begin
+        with) to its FOV id, then look up *fov_id* in that map.
+
+        Exists because ``round_info.csv``'s ``series`` pattern encodes a
+        SPECIFIC zero-pad width (e.g. ``{fov:03d}``) that can go stale --
+        e.g. positions.txt regenerated with more FOVs (needing more digits)
+        after round_info.csv was already written -- in which case
+        ``build_filename``'s exact-width guess silently never matches any
+        real file, even though the file is right there under a different
+        width. Cached per directory so 1000+ per-FOV lookups against the
+        same round only pay for one scan.
+        """
+        if dir_path not in self._dir_scan_cache:
+            found: Dict[int, Path] = {}
+            if dir_path.exists():
+                suffix_lower = image_suffix.lower()
+                for entry in dir_path.iterdir():
+                    if entry.suffix.lower() != suffix_lower:
+                        continue
+                    entry_fov = self.fov_from_stem(entry.stem)
+                    if entry_fov is not None:
+                        found[entry_fov] = entry
+            self._dir_scan_cache[dir_path] = found
+        return self._dir_scan_cache[dir_path].get(fov_id)
+
     def resolve_path(self, fov_id: int, image_suffix: str = ".dax") -> Path:
         """
         Return the first candidate path that exists on disk, falling back to
-        the primary candidate when none exists yet (e.g. before acquisition).
+        a width-agnostic directory scan (see ``_scan_dir_for_fov``) if the
+        exact-width guess doesn't match anything, and finally to the primary
+        candidate when the FOV genuinely doesn't exist yet (e.g. before
+        acquisition).
         """
         paths = self.candidate_paths(fov_id, image_suffix)
         for p in paths:
             if p.exists():
                 return p
+        dirs = self.candidate_dirs or ([self.data_dir] if self.data_dir else [Path(".")])
+        for d in dirs:
+            found = self._scan_dir_for_fov(Path(d), fov_id, image_suffix)
+            if found is not None:
+                return found
         return paths[0]
 
 
