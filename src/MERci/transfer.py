@@ -23,7 +23,57 @@ import threading
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import pandas as pd
+
 log = logging.getLogger(__name__)
+
+
+def relative_to_data_root(path: Path) -> Path:
+    """
+    Return *path*'s sub-path starting at its ``data`` directory component,
+    e.g. ``D:/Leonardo/sample/merfish/data/hybs/H01`` -> ``data/hybs/H01``.
+
+    Round-robin-drives rounds live under a per-round drive (``D:``, ``E:``,
+    ``F:``, …), each still nested under its own ``.../data/...`` — this
+    strips the drive-specific prefix so the round lands at the SAME logical
+    location once consolidated onto one destination root, whether it came
+    from a round-robin drive or straight from ``SAMPLE_DIR/data/...``. Falls
+    back to just *path*'s own name (the previous, flatter behaviour) if no
+    ``data`` component is found, so a transfer still proceeds either way.
+    """
+    parts = Path(path).parts
+    lower = [p.lower() for p in parts]
+    if "data" in lower:
+        return Path(*parts[lower.index("data"):])
+    log.warning(
+        "No 'data' directory component found in %s -- transferring to "
+        "dest_root/%s instead of a nested data/... path.",
+        path, Path(path).name,
+    )
+    return Path(Path(path).name)
+
+
+def rewrite_round_info_dirs(round_info_csv: Path, dest_path: Path) -> None:
+    """
+    Copy *round_info_csv* to *dest_path*, rewriting its ``dir``/``data_dir``
+    column (if present) from each round's original absolute, drive-specific
+    acquisition path to the same canonical ``data/...`` sub-path
+    :func:`transfer_round` copies that round's files to (see
+    :func:`relative_to_data_root`) -- so a cluster-side
+    ``ExperimentMetadata.load()`` reading this copy resolves paths under
+    its OWN ``data_dir`` instead of a microscope-local drive that doesn't
+    exist there. The original file -- the microscope's live
+    ``round_info.csv``, which must keep absolute per-drive paths for the
+    running acquisition -- is left untouched.
+    """
+    df = pd.read_csv(round_info_csv)
+    col = "dir" if "dir" in df.columns else ("data_dir" if "data_dir" in df.columns else None)
+    if col is not None:
+        df[col] = df[col].apply(
+            lambda v: str(relative_to_data_root(Path(v))) if pd.notna(v) else v
+        )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(dest_path, index=False)
 
 
 def _copy_robocopy(src: Path, dst: Path) -> bool:
@@ -60,6 +110,22 @@ def _copy_shutil(src: Path, dst: Path) -> bool:
     except Exception as exc:
         log.error("Transfer failed %s → %s: %s", src, dst, exc)
         return False
+
+
+def mirror_dir_sync(src: Path, dst: Path) -> bool:
+    """
+    Mirror directory *src* into *dst* synchronously (blocks the calling
+    thread until done) — for one-off, run-once-and-watch-it-finish syncs
+    (e.g. ``data/mosaic10x``, or the static ``MERci``/``merlin``/``fishtank``
+    folders) where a notebook cell wants the result before moving on, unlike
+    :func:`mirror_tree`/:func:`transfer_round`'s background-threaded copies
+    meant to not block a polling tick loop. Safe to re-run — additive/
+    incremental via the same ``robocopy /E /Z`` (or ``shutil.copytree``)
+    used everywhere else in this module.
+    """
+    use_robocopy = platform.system() == "Windows"
+    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+    return copy_fn(Path(src), Path(dst))
 
 
 def mirror_tree(
@@ -105,8 +171,8 @@ def transfer_round(
     on_complete:  Optional[Callable[[bool], None]] = None,
 ) -> threading.Thread:
     """
-    Copy each directory in *source_dirs* to ``dest_root / dir.name`` in a
-    background daemon thread.
+    Copy each directory in *source_dirs* to ``dest_root / relative_to_data_root(dir)``
+    (e.g. ``dest_root/data/hybs/H01``) in a background daemon thread.
 
     Parameters
     ----------
@@ -126,7 +192,7 @@ def transfer_round(
     def _run() -> None:
         overall_ok = True
         for src in source_dirs:
-            dst = dest_root / src.name
+            dst = dest_root / relative_to_data_root(src)
             log.info("Transfer: %s  →  %s", src, dst)
             ok = copy_fn(src, dst)
             if not ok:

@@ -248,8 +248,24 @@ src/MERci/
                     #   build_fov_task_kwargs/build_round_mosaics/resolve_round_flip_y/
                     #   resolve_round_color_frame_indices/source_dirs_for_round functions the
                     #   schedulers and the cli_*.py cluster scripts both call
-  transfer.py       # transfer_round (per-round → NAS), mirror_tree (incremental data_dir → 2nd drive) — background robocopy/shutil;
-                    #   sync_files (synchronous small-file copy, preserving relative path — metadata/positions/settings)
+  transfer.py       # transfer_round (per-round → NAS, one background thread per round; destination is
+                    #   dest_root/relative_to_data_root(src) — e.g. dest_root/data/hybs/H01 — NOT dest_root/
+                    #   src.name, so a round-robin round transferred from its own physical drive (e.g.
+                    #   D:/.../data/hybs/H01) still lands at the SAME logical data/... location a same-drive
+                    #   round would, and TRANSFER_DEST ends up a full mirror of SAMPLE_DIR rather than a flat
+                    #   dump of per-round folder names), relative_to_data_root (strips everything before a
+                    #   path's own 'data' component — the shared logic behind that destination choice),
+                    #   rewrite_round_info_dirs (copies round_info.csv rewriting its dir column's absolute,
+                    #   drive-specific per-round paths to that same relative data/... form, so a cluster-side
+                    #   ExperimentMetadata.load() reading the transferred copy resolves paths under ITS OWN
+                    #   data_dir instead of a microscope-local drive letter that doesn't exist there — the
+                    #   original microscope-side round_info.csv, which must keep absolute per-drive paths for
+                    #   the live acquisition, is never touched), mirror_tree (incremental data_dir → 2nd
+                    #   drive, background thread) / mirror_dir_sync (same copy logic, but synchronous — for a
+                    #   notebook cell that wants to see a one-off folder sync finish, e.g. data/mosaic10x or
+                    #   the static MERci/merlin/fishtank folders, before moving on) — robocopy/shutil either
+                    #   way; sync_files (synchronous small-file copy, preserving relative path —
+                    #   metadata/positions/settings)
   visualization.py  # visualize_shutter_sequence, plot_fov_layout, plot_stats_over_rounds, display_mosaic
   disk_audit.py     # discover_sample_dirs, measure_folder (recursive size + file mtime range +
                     #   folder creation time), audit_disk_usage — scans {root}/{lab_member}/{sample_dir}
@@ -314,9 +330,17 @@ notebooks/
                                                    #   notebook (excludes anything needing MERlin's decoded output)
     06_transfer_to_nas.ipynb                       # round_robin_drives only: TransferScheduler continuously
                                                    #   copies each round's raw data (once fully written, decoupled
-                                                   #   from any local QC) + small metadata/positions/settings
-                                                   #   files to a NAS -- run on the microscope computer alongside
-                                                   #   HAL/Dave, as the companion to moving QC analysis to a cluster
+                                                   #   from any local QC), nested under TRANSFER_DEST exactly as
+                                                   #   it is locally (data/cells, data/hybs/H01, ... -- see
+                                                   #   transfer.relative_to_data_root) + small metadata/positions/
+                                                   #   settings files + a rewritten round_info.csv copy (dir
+                                                   #   column repointed at that same relative data/... path, via
+                                                   #   transfer.rewrite_round_info_dirs) to a NAS -- run on the
+                                                   #   microscope computer alongside HAL/Dave, as the companion to
+                                                   #   moving QC analysis to a cluster; also has a one-time (not
+                                                   #   per-tick) cell mirroring the static data/mosaic10x/MERci/
+                                                   #   merlin/fishtank folders, so TRANSFER_DEST ends up a full
+                                                   #   copy of SAMPLE_DIR
     07_cluster_submit_analysis.ipynb               # run ON a cluster login/transfer node (after you've moved data
                                                    #   from the NAS to cluster storage yourself, e.g. Globus/
                                                    #   FileZilla): discovers pending FOVs/rounds and submits SLURM
@@ -470,7 +494,7 @@ lineage acquisition's own positions file of the same name.
 - `all_data_roots` — every directory referenced in `round_info_csv`'s `data_dir` column plus `data_dir` itself, read directly from the CSV; used by `FOVScheduler`/`ExperimentStateMonitor` in `round_robin_drives` mode to scan every physical drive instead of one root. No new config field is needed for the drive list itself — `round_info.csv` is the single source of truth.
 - `n_analysis_workers` — FOV process-pool size; `None` = `cpu_count − 2` (`config.resolved_n_workers`). Each worker holds one image stack (~200 MB) in RAM.
 
-`ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir`/`data_dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir`. Each series carries an ordered list of **candidate directories** (`SeriesInfo.candidate_dirs`); `resolve_path(fov, suffix)` returns the first candidate that exists on disk, falling back to the primary one before acquisition. The **cells round** is treated as a bona fide imaging round (typically `imaging_round=1`) and its files are accepted in **either** `data/cells/` or the top-level `data/`, regardless of which the `data_dir` column records — so `all_fovs_done_for_round`, mosaics, and transfers all find the cells data wherever HAL actually wrote it. Two more methods support `round_robin_drives` mode: `drive_of_round(round_id)` returns the drive letter of a round's `data_dir`, and `actively_writing_round()` returns the round HAL is most likely writing right now — the highest round id that has started (≥1 expected file exists) but isn't yet complete (not every expected file exists); it returns `None` once that round is fully on disk, so a just-finished round's drive isn't wrongly excluded for its whole following fluidics window.
+`ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir`/`data_dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir` — and that column's value can be **either** an absolute path (round-robin rounds on the microscope, genuinely on their own physical drive, e.g. `D:/.../data/hybs/H01`) **or** a path relative to *this machine's own* `data_dir`'s parent (e.g. `data/hybs/H01` — what a transferred experiment's round_info.csv copy carries after `transfer.rewrite_round_info_dirs`, since the original absolute drive letter is meaningless once consolidated onto a NAS/cluster). Each series carries an ordered list of **candidate directories** (`SeriesInfo.candidate_dirs`); `resolve_path(fov, suffix)` returns the first candidate that exists on disk, falling back to the primary one before acquisition. The **cells round** is treated as a bona fide imaging round (typically `imaging_round=1`) and its files are accepted in **either** `data/cells/` or the top-level `data/`, regardless of which the `data_dir` column records — so `all_fovs_done_for_round`, mosaics, and transfers all find the cells data wherever HAL actually wrote it. Two more methods support `round_robin_drives` mode: `drive_of_round(round_id)` returns the drive letter of a round's `data_dir`, and `actively_writing_round()` returns the round HAL is most likely writing right now — the highest round id that has started (≥1 expected file exists) but isn't yet complete (not every expected file exists); it returns `None` once that round is fully on disk, so a just-finished round's drive isn't wrongly excluded for its whole following fluidics window.
 
 `ExperimentStateMonitor` determines the microscope phase by watching the newest file mtime in `data_dir` (or, in `round_robin_drives` mode, across every drive in `config.all_data_roots`):
 - **IMAGING**: a new image file was written within `imaging_idle_threshold` seconds

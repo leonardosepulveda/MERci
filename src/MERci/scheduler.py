@@ -25,7 +25,7 @@ import pandas as pd
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
 from .common.io       import discover_image_files
-from .transfer        import transfer_round, mirror_tree, sync_files
+from .transfer        import transfer_round, mirror_tree, sync_files, rewrite_round_info_dirs, relative_to_data_root
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
 from .analysis.fov    import analyze_file
@@ -639,10 +639,13 @@ class TransferScheduler:
 
     def _aux_file_paths(self) -> List[Path]:
         """Small, fast-changing files a cluster-side ``ExperimentMetadata.load()``
-        needs alongside the (much larger, background-threaded) round image data."""
+        needs alongside the (much larger, background-threaded) round image data.
+
+        ``round_info.csv`` is deliberately excluded here -- it needs its
+        ``dir`` column rewritten, not a verbatim copy, so it's handled
+        separately by :func:`transfer.rewrite_round_info_dirs` in
+        :meth:`_process_pending_transfers`."""
         paths: List[Path] = []
-        if Path(self.config.round_info_csv).exists():
-            paths.append(Path(self.config.round_info_csv))
         if self.config.metadata_dir is not None:
             rbc = Path(self.config.metadata_dir) / "round_bit_color_map.csv"
             if rbc.exists():
@@ -655,6 +658,11 @@ class TransferScheduler:
 
     def _process_pending_transfers(self) -> int:
         sync_files(self._aux_file_paths(), self.sample_dir, self.config.transfer_dest)
+
+        round_info_csv = Path(self.config.round_info_csv)
+        if round_info_csv.exists():
+            dest = Path(self.config.transfer_dest) / round_info_csv.relative_to(self.sample_dir)
+            rewrite_round_info_dirs(round_info_csv, dest)
 
         active_round = self.meta.actively_writing_round()
         active_drive = (
@@ -727,7 +735,7 @@ class TransferScheduler:
         dest_root = Path(self.config.transfer_dest)
         return sum(
             1 for f in self.meta.files_for_round(round_id)
-            if (dest_root / f.parent.name / f.name).exists()
+            if (dest_root / relative_to_data_root(f.parent) / f.name).exists()
         )
 
     def average_seconds_per_fov(self) -> Optional[float]:

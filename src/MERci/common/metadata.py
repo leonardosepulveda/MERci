@@ -434,7 +434,19 @@ def _build_metadata(
         # Candidate directories, in search order.  The cells round is allowed
         # to live in either the top-level ``data/`` or a ``data/cells`` subfolder,
         # so it gets both as fallbacks regardless of what round_info.csv recorded.
-        primary = s.data_dir if s.data_dir is not None else data_dir
+        #
+        # ``dir`` is normally an absolute, drive-specific path (round-robin
+        # rounds genuinely live on their own physical drive during
+        # acquisition, e.g. ``D:/.../data/hybs/H01``) -- resolved as-is. A
+        # transferred experiment's round_info.csv copy instead carries a
+        # *relative* ``data/...`` sub-path for these rounds (see
+        # ``transfer.rewrite_round_info_dirs``), meaningless on its own once
+        # consolidated onto one destination root; resolve that case relative
+        # to *this machine's own* SAMPLE_DIR (``data_dir``'s parent) instead.
+        if s.data_dir is not None:
+            primary = s.data_dir if s.data_dir.is_absolute() else (data_dir.parent / s.data_dir)
+        else:
+            primary = data_dir
         if _is_cells_series(s):
             s.candidate_dirs = _dedupe_paths([primary, data_dir, data_dir / "cells"])
         else:
