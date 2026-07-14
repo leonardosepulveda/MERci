@@ -616,9 +616,12 @@ class TransferScheduler:
         tracker:    ProgressTracker,
         sample_dir: Optional[Path] = None,
         delete_source_after_verify: bool = False,
+        verify_method: str = "hash",
     ) -> None:
         if config.transfer_dest is None:
             raise ValueError("TransferScheduler requires config.transfer_dest to be set.")
+        if verify_method not in ("hash", "size"):
+            raise ValueError(f"verify_method must be 'hash' or 'size', got {verify_method!r}")
         self.config     = config
         self.meta       = metadata
         self.tracker    = tracker
@@ -628,16 +631,27 @@ class TransferScheduler:
         # SAMPLE_DIR/"data", ...) convention, but overridable in case it isn't.
         self.sample_dir = Path(sample_dir) if sample_dir is not None else Path(config.data_dir).parent
         # Irreversible -- only ever deletes a round's source directory after
-        # EVERY FOV in it has an independently SHA-256-verified copy at
-        # transfer_dest (see _transfer_round_worker). Defaults to False.
+        # EVERY FOV in it has an independently verified copy at transfer_dest
+        # (see _transfer_round_worker). Defaults to False.
         self.delete_source_after_verify = delete_source_after_verify
+        # "hash": full SHA-256 of every file -- catches silent corruption, but
+        # reads every byte twice (once at source, once at destination), which
+        # can dominate total transfer time over a slow network share. "size":
+        # just file size + exact same file set -- much faster, catches
+        # truncation/incomplete copies (the realistic LAN failure mode) but
+        # not a same-size corruption. See transfer.verify_copy.
+        self.verify_method = verify_method
         self._transfers_in_progress: set = set()   # round_ids currently being transferred
         # Seconds-per-FOV samples from the last 200 *completed* FOV transfers,
         # used to estimate remaining time -- a deque so the average tracks
         # recent network conditions rather than being dragged down by a slow
         # transfer from hours ago. Per-FOV (not per-round) so the estimate
         # updates immediately rather than waiting for an entire round to finish.
-        self._fov_rate_samples: "deque[float]" = deque(maxlen=200)
+        # Copy and verify time are tracked separately so a slow FOV can be
+        # diagnosed as copy-bound (e.g. network bandwidth) vs. verify-bound
+        # (e.g. "hash" re-reading everything) instead of only one combined number.
+        self._fov_copy_time_samples:   "deque[float]" = deque(maxlen=200)
+        self._fov_verify_time_samples: "deque[float]" = deque(maxlen=200)
 
     def run_loop(
         self,
@@ -747,11 +761,11 @@ class TransferScheduler:
             for image_path in image_paths:
                 if self.tracker.is_fov_transferred(image_path):
                     continue
-                started_at = time.time()
-                ok = transfer_fov(image_path, dest_root)
-                if ok:
+                result = transfer_fov(image_path, dest_root, verify_method=self.verify_method)
+                if result["verified"]:
                     self.tracker.mark_fov_transferred(image_path)
-                    self._fov_rate_samples.append(time.time() - started_at)
+                    self._fov_copy_time_samples.append(result["copy_seconds"])
+                    self._fov_verify_time_samples.append(result["verify_seconds"])
                     n_transferred_this_round += 1
                 else:
                     all_verified = False
@@ -795,12 +809,40 @@ class TransferScheduler:
             if self.tracker.is_fov_transferred(f)
         )
 
-    def average_seconds_per_fov(self) -> Optional[float]:
-        """Mean seconds-per-FOV from the most recent completed FOV transfers
-        (up to the last 200), or ``None`` if none have completed yet."""
-        if not self._fov_rate_samples:
+    @property
+    def n_fov_rate_samples(self) -> int:
+        """How many completed-FOV timing samples the running averages below
+        are actually based on right now (capped at 200) -- distinct from the
+        deque's maxlen, so a display can say e.g. "mean over 6 transfers"
+        instead of a fixed "up to 200" that reads as if 200 already happened."""
+        return len(self._fov_copy_time_samples)
+
+    def average_copy_seconds_per_fov(self) -> Optional[float]:
+        """Mean copy-only seconds-per-FOV (excludes verification) from the
+        most recent completed transfers (up to the last 200), or ``None`` if
+        none have completed yet."""
+        if not self._fov_copy_time_samples:
             return None
-        return sum(self._fov_rate_samples) / len(self._fov_rate_samples)
+        return sum(self._fov_copy_time_samples) / len(self._fov_copy_time_samples)
+
+    def average_verify_seconds_per_fov(self) -> Optional[float]:
+        """Mean verify-only seconds-per-FOV (excludes copying) from the most
+        recent completed transfers (up to the last 200), or ``None`` if none
+        have completed yet. With ``verify_method="hash"`` this reads every
+        file a second time and can dominate ``average_seconds_per_fov``."""
+        if not self._fov_verify_time_samples:
+            return None
+        return sum(self._fov_verify_time_samples) / len(self._fov_verify_time_samples)
+
+    def average_seconds_per_fov(self) -> Optional[float]:
+        """Mean total (copy + verify) seconds-per-FOV from the most recent
+        completed FOV transfers (up to the last 200), or ``None`` if none
+        have completed yet."""
+        copy_avg   = self.average_copy_seconds_per_fov()
+        verify_avg = self.average_verify_seconds_per_fov()
+        if copy_avg is None:
+            return None
+        return copy_avg + (verify_avg or 0.0)
 
     def transfer_progress(self) -> dict:
         """
@@ -812,7 +854,21 @@ class TransferScheduler:
                                           every expected raw file (existence-
                                           based, see ``count_arrived_files``)
           avg_seconds_per_fov           : see ``average_seconds_per_fov``;
-                                          ``None`` until a round has finished
+                                          ``None`` until a FOV has completed
+          avg_copy_seconds_per_fov /
+          avg_verify_seconds_per_fov    : the same average split into its
+                                          copy-only and verify-only halves
+                                          (see ``average_copy_seconds_per_fov``/
+                                          ``average_verify_seconds_per_fov``)
+                                          -- diagnoses whether a slow rate is
+                                          copy-bound (network) or verify-bound
+                                          (``verify_method="hash"`` rereading
+                                          everything)
+          n_rate_samples                : how many completed-FOV timing
+                                          samples the averages above are
+                                          actually based on right now (capped
+                                          at 200) -- NOT a claim that 200
+                                          have happened
           in_progress_rounds            : round ids currently mid-transfer
           in_progress_fovs_remaining    : files not yet arrived, summed over
                                           ``in_progress_rounds``
@@ -852,6 +908,9 @@ class TransferScheduler:
             "fovs_arrived":               fovs_arrived,
             "fovs_total":                 fovs_total,
             "avg_seconds_per_fov":        avg_rate,
+            "avg_copy_seconds_per_fov":   self.average_copy_seconds_per_fov(),
+            "avg_verify_seconds_per_fov": self.average_verify_seconds_per_fov(),
+            "n_rate_samples":             self.n_fov_rate_samples,
             "in_progress_rounds":         in_progress,
             "in_progress_fovs_remaining": in_progress_remaining,
             "eta_in_progress_s":          eta_in_progress,

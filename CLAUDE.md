@@ -259,12 +259,16 @@ src/MERci/
                     #   round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
                     #   (round_robin_drives-only: transfers once a round is fully written, decoupled
-                    #   from local analysis, ONE FOV AT A TIME with full bit-for-bit verification before
-                    #   each is marked transferred (see transfer.py's transfer_fov) — a round is
-                    #   round_transferred only once every one of its FOVs has verified, at which point
-                    #   (delete_source_after_verify=True, off by default — irreversible) its entire
-                    #   source data directory is deleted; sync_static_metadata() handles the small,
-                    #   unchanging-once-acquisition-starts files (round_info.csv rewritten/
+                    #   from local analysis, ONE FOV AT A TIME, each verified (verify_method="hash"|"size"
+                    #   constructor param, see transfer.py's verify_copy) before being marked transferred
+                    #   — a round is round_transferred only once every one of its FOVs has verified, at
+                    #   which point (delete_source_after_verify=True, off by default — irreversible) its
+                    #   entire source data directory is deleted; average_seconds_per_fov/
+                    #   average_copy_seconds_per_fov/average_verify_seconds_per_fov track copy and verify
+                    #   time in separate rolling deques (n_fov_rate_samples reports how many samples that
+                    #   actually is right now, capped at 200 — not a claim that 200 already happened) so a
+                    #   slow rate can be diagnosed as network-bound vs. verification-bound; sync_static_metadata()
+                    #   handles the small, unchanging-once-acquisition-starts files (round_info.csv rewritten/
                     #   round_bit_color_map.csv/positions_*.txt/settings/*.xml) — call it once, not from
                     #   the tick loop, since re-syncing them every tick was pure overhead — see "Moving
                     #   QC analysis to a SLURM cluster" below),
@@ -294,11 +298,18 @@ src/MERci/
                     #   one bulk robocopy per round with no post-copy check): fov_associated_paths (every
                     #   file/dir sharing an image's stem — the store itself plus whatever same-stem
                     #   .inf/.off/.power/.xml sidecars HAL wrote, found by glob, not a fixed extension
-                    #   list), copy_fov (copies them, preserving data/... structure), verify_copy (full
-                    #   SHA-256 of every file — not just size/timestamp, which is all robocopy's own
-                    #   "up to date" check does and would not catch silent corruption; for a directory,
-                    #   recurses and also requires the exact same set of relative paths on both sides),
-                    #   transfer_fov (copy_fov + verify_copy, returns whether every file verified),
+                    #   list), copy_fov (copies them, preserving data/... structure), verify_copy(src, dst,
+                    #   method="hash"|"size") — "hash": full SHA-256 of every file, not just size/timestamp
+                    #   (all robocopy's own "up to date" check does, which would not catch silent
+                    #   corruption); reads every byte TWICE (source + destination), which can dominate
+                    #   total transfer time over a slow network share (measured ~80 s/FOV on a 14504-FOV
+                    #   experiment on 2026-07-14) — "size": file size + exact same file set only, no
+                    #   content read at all, much faster, still catches the realistic LAN failure mode
+                    #   (truncated/incomplete copy) but not a same-size corruption; for a directory,
+                    #   recurses and also requires the exact same set of relative paths on both sides.
+                    #   transfer_fov(image_path, dest_root, verify_method=...) — copy_fov + verify_copy,
+                    #   returns {verified, copy_seconds, verify_seconds} (timed separately so a slow FOV
+                    #   can be diagnosed as copy-bound vs. verify-bound instead of one combined number),
                     #   delete_source_tree (rmtree/unlink — does no verification itself; the caller,
                     #   TransferScheduler, is the safety boundary and only ever calls this once every
                     #   FOV in a round has independently verified)
@@ -366,9 +377,12 @@ notebooks/
                                                    #   notebook (excludes anything needing MERlin's decoded output)
     06_transfer_to_nas.ipynb                       # round_robin_drives only: TransferScheduler continuously
                                                    #   copies each round's raw data ONE FOV AT A TIME (once fully
-                                                   #   written, decoupled from any local QC), each bit-for-bit
-                                                   #   SHA-256 verified before being marked transferred, nested
-                                                   #   under TRANSFER_DEST exactly as it is locally (data/cells,
+                                                   #   written, decoupled from any local QC), each verified per
+                                                   #   VERIFY_METHOD ("hash": full SHA-256, reads every byte
+                                                   #   twice, can dominate transfer time over a slow network
+                                                   #   share; "size": size + file-count only, much faster, still
+                                                   #   catches truncated copies) before being marked transferred,
+                                                   #   nested under TRANSFER_DEST exactly as it is locally (data/cells,
                                                    #   data/hybs/H01, ... -- see transfer.relative_to_data_root)
                                                    #   -- a round is round_transferred only once every FOV in it
                                                    #   has verified, at which point (DELETE_SOURCE_AFTER_

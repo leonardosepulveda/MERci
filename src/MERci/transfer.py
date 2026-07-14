@@ -21,6 +21,7 @@ import platform
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -244,16 +245,28 @@ def _hash_file(path: Path, chunk_size: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def verify_copy(src: Path, dst: Path) -> bool:
+def verify_copy(src: Path, dst: Path, method: str = "hash") -> bool:
     """
-    Bit-for-bit verification that *dst* is an exact copy of *src* -- full
-    SHA-256 comparison, not just size/timestamp (which is all robocopy's own
-    "up to date" logic checks, and would not catch silent corruption). *src*
-    may be a single file or a directory (e.g. a zarr store, which is really
-    many chunk files) -- for a directory, every file within it, recursively,
-    must exist at *dst* at the same relative path (no missing/extra file)
-    and hash identically.
+    Verify that *dst* is a copy of *src*. *src* may be a single file or a
+    directory (e.g. a zarr store, which is really many chunk files) -- for a
+    directory, every file within it, recursively, must exist at *dst* at the
+    same relative path (no missing/extra file); which comparison is applied
+    per file depends on *method*:
+
+    - ``"hash"`` (default): full SHA-256 comparison -- catches silent
+      corruption, not just truncation, but reads every byte of every file
+      TWICE (once at the source, once at the destination). Over a network
+      share this doubles the slowest leg's I/O and can dominate total
+      transfer time for large files -- measure ``transfer_fov``'s
+      ``verify_seconds`` before assuming this is affordable at your data rate.
+    - ``"size"``: only compares file size (no content read at all) -- much
+      faster, but won't catch a corrupted file that happens to keep the
+      same size (rare for a truncated/interrupted copy, the realistic
+      failure mode for a LAN transfer, but not a byte-flip).
     """
+    if method not in ("hash", "size"):
+        raise ValueError(f"Unknown verify method: {method!r} (expected 'hash' or 'size')")
+
     src, dst = Path(src), Path(dst)
     if not dst.exists():
         return False
@@ -269,7 +282,7 @@ def verify_copy(src: Path, dst: Path) -> bool:
             s, d = src / rel, dst / rel
             if s.stat().st_size != d.stat().st_size:
                 return False
-            if _hash_file(s) != _hash_file(d):
+            if method == "hash" and _hash_file(s) != _hash_file(d):
                 return False
         return True
 
@@ -277,7 +290,9 @@ def verify_copy(src: Path, dst: Path) -> bool:
         return False
     if src.stat().st_size != dst.stat().st_size:
         return False
-    return _hash_file(src) == _hash_file(dst)
+    if method == "hash":
+        return _hash_file(src) == _hash_file(dst)
+    return True
 
 
 def copy_fov(image_path: Path, dest_root: Path) -> List[Tuple[Path, Path]]:
@@ -303,18 +318,29 @@ def copy_fov(image_path: Path, dest_root: Path) -> List[Tuple[Path, Path]]:
     return pairs
 
 
-def transfer_fov(image_path: Path, dest_root: Path) -> bool:
+def transfer_fov(image_path: Path, dest_root: Path, verify_method: str = "hash") -> dict:
     """
-    Copy one FOV's full associated file set to *dest_root* and verify every
-    file bit-for-bit. Returns ``True`` iff every one verified successfully.
-    Does not delete the source -- deletion (see ``delete_source_tree``) is a
-    round-level decision, only safe once EVERY FOV in the round has verified.
+    Copy one FOV's full associated file set to *dest_root* and verify it
+    (see ``verify_copy``'s *method* parameter for the ``"hash"``/``"size"``
+    trade-off). Does not delete the source -- deletion (see
+    ``delete_source_tree``) is a round-level decision, only safe once EVERY
+    FOV in the round has verified.
+
+    Returns a dict: ``verified`` (bool, True iff every associated file
+    verified), ``copy_seconds``/``verify_seconds`` (measured separately, so
+    a slow FOV can be diagnosed as copy-bound (e.g. network bandwidth) vs.
+    verify-bound (e.g. ``"hash"`` reading everything twice) rather than only
+    ever seeing one combined number).
     """
+    t0 = time.time()
     pairs = copy_fov(image_path, dest_root)
+    t1 = time.time()
     if not pairs:
         log.warning("No associated files found for %s -- nothing to transfer.", image_path)
-        return False
-    return all(verify_copy(src, dst) for src, dst in pairs)
+        return {"verified": False, "copy_seconds": t1 - t0, "verify_seconds": 0.0}
+    verified = all(verify_copy(src, dst, method=verify_method) for src, dst in pairs)
+    t2 = time.time()
+    return {"verified": verified, "copy_seconds": t1 - t0, "verify_seconds": t2 - t1}
 
 
 def delete_source_tree(path: Path) -> None:
