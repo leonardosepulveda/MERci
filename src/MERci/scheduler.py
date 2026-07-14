@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -575,6 +576,11 @@ class TransferScheduler:
     drive is hot right now" signal this relies on) and ``config.transfer_dest``
     to be set.
 
+    Call ``transfer_progress()`` at any time (e.g. from an ``on_tick``
+    callback) for a display-ready snapshot: FOVs arrived vs. total, the
+    measured average seconds/FOV from recently completed round transfers,
+    and ETAs for the in-progress round and for everything remaining.
+
     Typical usage (in a notebook cell)::
 
         TransferScheduler(config, meta, tracker).run_loop()
@@ -598,6 +604,12 @@ class TransferScheduler:
         # SAMPLE_DIR/"data", ...) convention, but overridable in case it isn't.
         self.sample_dir = Path(sample_dir) if sample_dir is not None else Path(config.data_dir).parent
         self._transfers_in_progress: set = set()   # round_ids currently being transferred
+        self._round_start_info: Dict[int, Tuple[float, int]] = {}   # round_id -> (start_time, n_files)
+        # Seconds-per-file samples from the last 20 *completed* round transfers,
+        # used to estimate remaining time -- a deque so the average tracks
+        # recent network conditions rather than being dragged down by a slow
+        # transfer from hours ago.
+        self._transfer_rate_samples: "deque[float]" = deque(maxlen=20)
 
     def run_loop(
         self,
@@ -668,20 +680,120 @@ class TransferScheduler:
             log.warning("Round %d: no source dirs found — skipping transfer.", round_id)
             return
 
+        n_files    = len(self.meta.files_for_round(round_id))
+        started_at = time.time()
         self._transfers_in_progress.add(round_id)
+        self._round_start_info[round_id] = (started_at, n_files)
         log.info(
-            "Round %d: starting transfer of %d dir(s) to %s.",
-            round_id, len(src_dirs), self.config.transfer_dest,
+            "Round %d: starting transfer of %d dir(s) (%d file(s)) to %s.",
+            round_id, len(src_dirs), n_files, self.config.transfer_dest,
         )
 
         def _on_done(success: bool) -> None:
             self._transfers_in_progress.discard(round_id)
+            start_time, n = self._round_start_info.pop(round_id, (started_at, n_files))
             if success:
                 self.tracker.mark_round_transferred(round_id)
+                if n > 0:
+                    self._transfer_rate_samples.append((time.time() - start_time) / n)
             else:
                 log.error("Round %d: transfer failed — will retry next tick.", round_id)
 
         transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
+
+    # ── Progress / ETA queries ────────────────────────────────────────────────
+
+    @property
+    def in_progress_rounds(self) -> List[int]:
+        """Round ids currently being copied to transfer_dest (background threads)."""
+        return sorted(self._transfers_in_progress)
+
+    def count_arrived_files(self, round_id: int) -> int:
+        """
+        Approximate count of *round_id*'s expected raw files that already
+        exist at ``transfer_dest``.
+
+        Existence-based, same caveat as ``ExperimentMetadata.round_fully_written``:
+        it doesn't verify an individual file's copy has *finished* (a zarr
+        FOV's destination directory can exist before every one of its
+        internal chunk files has arrived), just that robocopy has started
+        writing it -- good enough for a progress estimate, not a
+        completeness guarantee (that's what ``tracker.is_round_transferred``
+        is for). Rounds already marked transferred short-circuit to the full
+        count, skipping the filesystem check.
+        """
+        if self.tracker.is_round_transferred(round_id):
+            return len(self.meta.files_for_round(round_id))
+        dest_root = Path(self.config.transfer_dest)
+        return sum(
+            1 for f in self.meta.files_for_round(round_id)
+            if (dest_root / f.parent.name / f.name).exists()
+        )
+
+    def average_seconds_per_fov(self) -> Optional[float]:
+        """Mean seconds-per-file from the most recent completed round
+        transfers (up to the last 20), or ``None`` if no round transfer has
+        completed yet."""
+        if not self._transfer_rate_samples:
+            return None
+        return sum(self._transfer_rate_samples) / len(self._transfer_rate_samples)
+
+    def transfer_progress(self) -> dict:
+        """
+        Snapshot of transfer progress across the whole experiment, for
+        display in a notebook.
+
+        Returns a dict with:
+          fovs_arrived / fovs_total     : files landed at transfer_dest vs.
+                                          every expected raw file (existence-
+                                          based, see ``count_arrived_files``)
+          avg_seconds_per_fov           : see ``average_seconds_per_fov``;
+                                          ``None`` until a round has finished
+          in_progress_rounds            : round ids currently mid-transfer
+          in_progress_fovs_remaining    : files not yet arrived, summed over
+                                          ``in_progress_rounds``
+          eta_in_progress_s             : estimated seconds to finish
+                                          whatever's currently in flight, or
+                                          ``None`` without a rate yet
+          all_remaining_fovs            : every not-yet-arrived file across
+                                          ALL rounds (written or not)
+          eta_all_remaining_s           : estimated seconds to finish
+                                          transferring everything, ASSUMING
+                                          every round were already fully
+                                          written right now (i.e. this
+                                          estimates transfer time only, not
+                                          how long HAL still has to image)
+        """
+        round_ids  = self.meta.valid_round_ids()
+        arrived_by_round = {rid: self.count_arrived_files(rid) for rid in round_ids}
+        total_by_round   = {rid: len(self.meta.files_for_round(rid)) for rid in round_ids}
+
+        fovs_arrived = sum(arrived_by_round.values())
+        fovs_total   = sum(total_by_round.values())
+        avg_rate     = self.average_seconds_per_fov()
+
+        in_progress = self.in_progress_rounds
+        in_progress_remaining = sum(
+            total_by_round[rid] - arrived_by_round[rid] for rid in in_progress
+        )
+        eta_in_progress = (
+            in_progress_remaining * avg_rate
+            if avg_rate is not None and in_progress else None
+        )
+
+        all_remaining = fovs_total - fovs_arrived
+        eta_all = all_remaining * avg_rate if avg_rate is not None else None
+
+        return {
+            "fovs_arrived":               fovs_arrived,
+            "fovs_total":                 fovs_total,
+            "avg_seconds_per_fov":        avg_rate,
+            "in_progress_rounds":         in_progress,
+            "in_progress_fovs_remaining": in_progress_remaining,
+            "eta_in_progress_s":          eta_in_progress,
+            "all_remaining_fovs":         all_remaining,
+            "eta_all_remaining_s":        eta_all,
+        }
 
 
 # ── Experiment Scheduler ──────────────────────────────────────────────────────
