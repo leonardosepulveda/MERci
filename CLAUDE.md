@@ -221,6 +221,15 @@ src/MERci/
     fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
                     # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
+    stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
+                    #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
+                    #   delimited, one row per frame, column ``stage-z``), summarize_stage_z (first/
+                    #   min/max + all_same, since the focus lock should hold stage-z constant for a
+                    #   whole stack), update_stage_z_cache (extends an on-disk CSV cache with only
+                    #   not-yet-read (round, FOV, series) combinations, so a many-thousand-FOV
+                    #   experiment's ``.off`` files are each read at most once), round_label/
+                    #   assign_x_positions (continuous cells→hyb01→hyb02→... FOV ordering for
+                    #   plotting drift over the whole acquisition) — see notebooks/analysis/08
     spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
                           # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
     cli_analyze_fov.py       # standalone SLURM-array-task script (not imported by anything else in
@@ -316,6 +325,13 @@ notebooks/
                                                    #   01/02 would otherwise do locally -- 01/02 remain supported
                                                    #   for same_drive/mirror_drive projects; 06/07 are the
                                                    #   round_robin_drives + cluster-QC alternative
+    08_stage_z_drift.ipynb                         # one-shot QC: reads each FOV's ``.off`` focus-lock
+                                                   #   sidecar's stage-z column (analysis/stage_z.py),
+                                                   #   caching results to analysis/stage_z_summary.csv so
+                                                   #   re-runs only read newly-written ``.off`` files, then
+                                                   #   scatter-plots the first-frame stage-z value across a
+                                                   #   continuous cells→hyb01→hyb02→... FOV order to visualise
+                                                   #   drift over the whole acquisition
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
