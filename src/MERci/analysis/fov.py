@@ -305,6 +305,40 @@ def analyze_file(
     return image_path.name
 
 
+def compute_histogram_only(
+    image_path:      Path,
+    histogram_path:  Path,
+    frame_width:     Optional[int]      = None,
+    frame_height:    Optional[int]      = None,
+    histogram_bins:  int                = 512,
+    histogram_range: Tuple[int, int]    = (0, 65535),
+) -> str:
+    """
+    Read one image file's stack and save its per-frame histogram --
+    unlike :func:`analyze_file`, does NOT also compute thumbnails/stats,
+    for callers that only need the histogram (e.g. a process-pool-
+    parallelized backfill outside the standard FOV-analysis pipeline).
+
+    Top-level, picklable function so it can be dispatched to a
+    :class:`concurrent.futures.ProcessPoolExecutor` worker, same
+    convention as :func:`analyze_file`.
+
+    Returns
+    -------
+    The image filename (for logging by the parent).
+    """
+    from MERci.common.io import read_image
+
+    image_path = Path(image_path)
+    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
+    try:
+        if not Path(histogram_path).exists():
+            get_histogram(stack, Path(histogram_path), bins=histogram_bins, hist_range=histogram_range)
+    finally:
+        del stack
+    return image_path.name
+
+
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 def load_stats(stats_csv: Path) -> pd.DataFrame:

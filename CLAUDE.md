@@ -233,7 +233,11 @@ src/MERci/
                     #   just logs and returns None)
   analysis/
     fov.py          # create_thumbnail(s), measure_stats, get_histogram, load_stats, load_histogram,
-                    # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel) — FOV-level analysis
+                    # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel),
+                    # compute_histogram_only (same picklable-top-level-function convention as
+                    # analyze_file, for a ProcessPoolExecutor worker, but histogram only — skips
+                    # thumbnails/stats for callers outside the standard pipeline that don't need them,
+                    # e.g. misc/measure_tissue_thickness.ipynb's backfill) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
     stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
                     #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
@@ -453,11 +457,15 @@ notebooks/
                                                    #   z-planes with no tissue. Reuses each FOV's already-
                                                    #   computed per-frame histogram (analysis.fov.get_histogram,
                                                    #   the same routine 01_fov_scheduler.ipynb/
-                                                   #   07_cluster_submit_analysis.ipynb already run) if present,
-                                                   #   backfilling (sequentially, mirroring
-                                                   #   05_batch_sample_review.ipynb) only what's missing —
-                                                   #   true-pixel counts per z come directly off saved histogram
-                                                   #   bins, no raw pixel re-read. Binarization threshold is
+                                                   #   07_cluster_submit_analysis.ipynb already run) if present
+                                                   #   (loaded directly, cheap), backfilling only what's missing
+                                                   #   IN PARALLEL across a process pool (config.resolved_n_workers,
+                                                   #   same convention as FOVScheduler) via the new
+                                                   #   analysis.fov.compute_histogram_only (histogram only, no
+                                                   #   thumbnails/stats) — live progress/ETA via
+                                                   #   progress_display.ProgressReporter while it runs. True-pixel
+                                                   #   counts per z come directly off saved histogram bins, no raw
+                                                   #   pixel re-read. Binarization threshold is
                                                    #   auto-estimated from a pooled reference-frame histogram by
                                                    #   reusing acquisition.mosaic._estimate_bimodal_threshold's
                                                    #   peak-finding verbatim (log10-wrapped, since this
