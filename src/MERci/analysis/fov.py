@@ -9,6 +9,7 @@ create_thumbnail            – downsample + contrast-stretch one frame → PNG
 create_thumbnails_for_stack – batch version over many frames
 measure_stats               – per-frame min/mean/median/max → CSV
 get_histogram               – per-frame intensity histograms → .npz
+get_histogram_for_frames    – histogram only selected frame indices (partial read) → .npz
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
 """
@@ -337,6 +338,65 @@ def compute_histogram_only(
     finally:
         del stack
     return image_path.name
+
+
+def get_histogram_for_frames(
+    image_path:      Path,
+    histogram_path:  Path,
+    frame_indices:   List[int],
+    frame_width:     Optional[int]      = None,
+    frame_height:    Optional[int]      = None,
+    histogram_bins:  int                = 512,
+    histogram_range: Tuple[int, int]    = (0, 65535),
+) -> Dict:
+    """
+    Histogram only the requested *frame_indices* out of a stack (e.g. one
+    channel's z-range out of a much larger multi-color acquisition), reading
+    only those frames off disk via :func:`MERci.common.io.read_image_frames`
+    instead of the whole stack -- unlike :func:`compute_histogram_only`,
+    which always reads and histograms every frame.
+
+    Saved arrays (in the .npz at *histogram_path*)
+    ------------------------------------------------
+    counts        : shape (len(frame_indices), bins) -- rows in the SAME
+                    order as frame_indices, not the stack's own frame order.
+    frame_indices : the original (global, whole-stack) frame indices each
+                    row of ``counts`` corresponds to -- needed since this
+                    histogram covers a subset, not every frame 0..n-1.
+    bin_centers, bin_edges : same as :func:`get_histogram`.
+
+    Returns
+    -------
+    dict with keys ``counts``, ``frame_indices``, ``bin_centers``, ``bin_edges``
+    """
+    from MERci.common.io import read_image_frames
+
+    image_path     = Path(image_path)
+    histogram_path = Path(histogram_path).with_suffix(".npz")
+    frame_indices  = list(frame_indices)
+
+    stack = read_image_frames(image_path, frame_indices,
+                              frame_width=frame_width, frame_height=frame_height)
+    try:
+        all_counts = np.zeros((len(frame_indices), histogram_bins), dtype=np.int64)
+        edges: Optional[np.ndarray] = None
+        for row, frame in enumerate(stack):
+            counts, edges = np.histogram(frame.ravel(), bins=histogram_bins, range=histogram_range)
+            all_counts[row] = counts
+    finally:
+        del stack
+
+    bin_centers = 0.5 * (edges[:-1] + edges[1:])
+    result = {
+        "counts":        all_counts,
+        "frame_indices": np.asarray(frame_indices, dtype=np.int64),
+        "bin_centers":   bin_centers,
+        "bin_edges":     edges,
+    }
+    _atomic_save(histogram_path, lambda tmp: np.savez_compressed(str(tmp), **result))
+    log.debug("Histogram saved (%d/%d frames, %d bins): %s",
+              len(frame_indices), len(frame_indices), histogram_bins, histogram_path)
+    return result
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────

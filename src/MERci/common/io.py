@@ -321,6 +321,161 @@ def read_image(
     )
 
 
+# ── Selective per-frame reading ──────────────────────────────────────────────
+#
+# read_image() above always loads the WHOLE stack. A caller that only needs a
+# handful of frames out of a much larger stack (e.g. one channel's z-range
+# out of a multi-color, 100+-frame acquisition) pays for reading and holding
+# every frame it doesn't need -- real cost under many concurrent workers, and
+# real cost even sequentially for a large batch. These read only the
+# requested frame indices, with genuine partial I/O where the format allows
+# it (zarr fancy-indexes just the needed chunks; dax seeks directly to each
+# frame's byte offset) rather than reading everything and throwing most of it away.
+
+def read_dax_frames(
+    dax_path:      Path,
+    frame_indices: List[int],
+    frame_width:   Optional[int] = None,
+    frame_height:  Optional[int] = None,
+    dtype:         type          = np.uint16,
+) -> np.ndarray:
+    """
+    Read only *frame_indices* from a raw ``.dax`` file, seeking directly to
+    each frame's byte offset instead of reading the whole file.
+
+    Dimension resolution follows :func:`read_dax`: explicit kwargs, then the
+    ``.inf`` sidecar. Unlike :func:`read_dax`, ``n_frames`` isn't needed (and
+    isn't accepted) since we never infer total frame count from file size.
+
+    Returns
+    -------
+    ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    dax_path = Path(dax_path)
+    inf_path = dax_path.with_suffix(".inf")
+    inf: Dict[str, Any] = {}
+    if inf_path.exists():
+        try:
+            inf = parse_inf(inf_path)
+        except Exception as exc:
+            log.warning("Could not parse %s: %s", inf_path, exc)
+
+    fw = frame_width  or inf.get("frame_width")
+    fh = frame_height or inf.get("frame_height")
+    if fw is None or fh is None:
+        raise ValueError(
+            f"Frame dimensions unknown for '{dax_path}'. "
+            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
+        )
+
+    pixels_per_frame = int(fw) * int(fh)
+    frame_bytes      = pixels_per_frame * np.dtype(dtype).itemsize
+
+    frames = []
+    with open(dax_path, "rb") as fh_bin:
+        for idx in frame_indices:
+            fh_bin.seek(idx * frame_bytes)
+            raw = fh_bin.read(frame_bytes)
+            if len(raw) < frame_bytes:
+                raise IOError(
+                    f"'{dax_path.name}': frame {idx} truncated "
+                    f"(got {len(raw)} of {frame_bytes} bytes -- file too short?)"
+                )
+            frames.append(np.frombuffer(raw, dtype=dtype).reshape(int(fh), int(fw)))
+    return np.stack(frames, axis=0)
+
+
+def read_zarr_frames(
+    zarr_path:     Path,
+    frame_indices: List[int],
+    dtype:         type = np.uint16,
+) -> np.ndarray:
+    """
+    Read only *frame_indices* from a ``.zarr`` store via fancy indexing on
+    the on-disk array -- zarr only reads the chunks actually covering the
+    requested indices, not the full array (unlike :func:`read_zarr`'s ``[:]``).
+
+    Returns
+    -------
+    ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    try:
+        import zarr
+    except ImportError as exc:
+        raise ImportError(
+            "The 'zarr' package is required for .zarr support. "
+            "Install it with: pip install zarr"
+        ) from exc
+
+    store = zarr.open(str(zarr_path), mode="r")
+    if isinstance(store, zarr.Array):
+        arr = store
+    else:
+        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
+        if not keys:
+            raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
+        arr = store[keys[0]]
+
+    result = arr[list(frame_indices)]
+    return np.asarray(result).astype(dtype)
+
+
+def read_tiff_frames(
+    tiff_path:     Path,
+    frame_indices: List[int],
+    dtype:         type = np.uint16,
+) -> np.ndarray:
+    """
+    Read only *frame_indices* (pages) from a multi-page ``.tiff`` via
+    ``tifffile``'s own selective-page read (``key=``), not a full-stack load.
+
+    Returns
+    -------
+    ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    try:
+        import tifffile
+    except ImportError as exc:
+        raise ImportError(
+            "The 'tifffile' package is required for .tiff support. "
+            "Install it with: pip install tifffile"
+        ) from exc
+
+    arr = np.asarray(tifffile.imread(str(tiff_path), key=list(frame_indices)))
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, ...]
+    return arr.astype(dtype)
+
+
+def read_image_frames(
+    path:          Path,
+    frame_indices: List[int],
+    frame_width:   Optional[int] = None,
+    frame_height:  Optional[int] = None,
+    dtype:         type          = np.uint16,
+) -> np.ndarray:
+    """
+    Format-agnostic selective-frame reader. Dispatches to
+    :func:`read_dax_frames`, :func:`read_zarr_frames`, or
+    :func:`read_tiff_frames` based on the file extension -- same convention
+    as :func:`read_image`, but for only the requested *frame_indices*.
+    """
+    path   = Path(path)
+    suffix = path.suffix.lower()
+    frame_indices = list(frame_indices)
+    if suffix == ".dax":
+        return read_dax_frames(path, frame_indices, frame_width=frame_width,
+                               frame_height=frame_height, dtype=dtype)
+    if suffix == ".zarr":
+        return read_zarr_frames(path, frame_indices, dtype=dtype)
+    if suffix in (".tiff", ".tif"):
+        return read_tiff_frames(path, frame_indices, dtype=dtype)
+    raise ValueError(
+        f"Unsupported image format '{suffix}' for path: {path}. "
+        "Supported formats: .dax, .zarr, .tiff"
+    )
+
+
 def discover_image_files(
     data_dir:        Path,
     suffix:          str   = ".zarr",

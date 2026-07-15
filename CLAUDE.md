@@ -76,6 +76,11 @@ src/MERci/
     metadata.py     # ExperimentMetadata — parses round_info.csv + positions.txt
     io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
                     # save_positions_array, discover_image_files
+                    # + selective per-frame reading (only the requested frame_indices, real partial I/O
+                    #   where the format allows it -- zarr fancy-indexing, dax direct byte-offset seeking,
+                    #   tifffile's own key= page selection -- rather than reading the whole stack and
+                    #   discarding most of it): read_dax_frames, read_zarr_frames, read_tiff_frames,
+                    #   read_image_frames (format-agnostic dispatcher, mirrors read_image)
     experiment_info.py  # ExperimentInfo (core fields + extra dict, mirrors SeriesInfo.extra_meta's
                     #   pattern for the bc/lt/mf master-CSV schemas), save/load_experiment_info (flat
                     #   YAML round-trip), collect_experiment_info (batch-read many experiment_info.yaml
@@ -236,8 +241,14 @@ src/MERci/
                     # analyze_file (top-level per-FOV worker: read once + all analyses + sentinel),
                     # compute_histogram_only (same picklable-top-level-function convention as
                     # analyze_file, for a ProcessPoolExecutor worker, but histogram only — skips
-                    # thumbnails/stats for callers outside the standard pipeline that don't need them,
-                    # e.g. misc/measure_tissue_thickness.ipynb's backfill) — FOV-level analysis
+                    # thumbnails/stats for callers outside the standard pipeline that don't need them),
+                    # get_histogram_for_frames (histograms only the given frame_indices, read via
+                    # io.read_image_frames' partial I/O instead of the whole stack — for a caller that
+                    # only ever needs one channel's z-range out of a much larger multi-color acquisition,
+                    # e.g. misc/measure_tissue_thickness.ipynb's backfill; saves an extra frame_indices
+                    # array alongside counts in the .npz, since counts' rows then no longer align 1:1
+                    # with the file's own frame order — a full compute_histogram_only/analyze_file
+                    # histogram has no such array and is read positionally instead) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
     stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
                     #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
@@ -459,13 +470,31 @@ notebooks/
                                                    #   the same routine 01_fov_scheduler.ipynb/
                                                    #   07_cluster_submit_analysis.ipynb already run) if present
                                                    #   (loaded directly, cheap), backfilling only what's missing
-                                                   #   IN PARALLEL across a process pool (config.resolved_n_workers,
-                                                   #   same convention as FOVScheduler) via the new
-                                                   #   analysis.fov.compute_histogram_only (histogram only, no
-                                                   #   thumbnails/stats) — live progress/ETA via
-                                                   #   progress_display.ProgressReporter while it runs. True-pixel
-                                                   #   counts per z come directly off saved histogram bins, no raw
-                                                   #   pixel re-read. Binarization threshold is
+                                                   #   SEQUENTIALLY, one FOV at a time, reading only CHANNEL_NM's
+                                                   #   frames off disk (analysis.fov.get_histogram_for_frames, a
+                                                   #   targeted partial read via io.read_image_frames — not the
+                                                   #   full ~141-frame stack compute_histogram_only/analyze_file
+                                                   #   would read) — live progress/ETA via
+                                                   #   progress_display.ProgressReporter while it runs.
+                                                   #   Deliberately NOT process-pool-parallelized: an earlier
+                                                   #   version sized a pool off config.resolved_n_workers
+                                                   #   (os.cpu_count() - 2, the same convention FOVScheduler
+                                                   #   uses locally) and crashed with BrokenProcessPool on a
+                                                   #   shared SLURM node — os.cpu_count() reports the node's
+                                                   #   total cores, not the job's actual memory allocation, so
+                                                   #   the pool over-subscribed and got OOM-killed; reading only
+                                                   #   the needed channel's frames (not the whole stack) keeps
+                                                   #   the sequential version fast enough without a pool.
+                                                   #   fov_histograms[fov_id] is normalized to
+                                                   #   {"counts_by_frame": {frame_idx: counts_row}, ...} for
+                                                   #   both cases — a freshly-backfilled partial histogram (has
+                                                   #   its own frame_indices array, since its counts rows no
+                                                   #   longer align 1:1 with the file's frame order) and an
+                                                   #   already-on-disk full histogram (positional, array index
+                                                   #   IS the frame index) — so sections 5/6 read
+                                                   #   hist["counts_by_frame"][frame_idx] uniformly either way.
+                                                   #   True-pixel counts per z come directly off saved histogram
+                                                   #   bins, no raw pixel re-read. Binarization threshold is
                                                    #   auto-estimated from a pooled reference-frame histogram by
                                                    #   reusing acquisition.mosaic._estimate_bimodal_threshold's
                                                    #   peak-finding verbatim (log10-wrapped, since this
