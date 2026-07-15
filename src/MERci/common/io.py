@@ -15,6 +15,8 @@ read_image              – format-agnostic dispatcher for the three formats abo
 get_dax_shape           – read .dax shape without loading pixel data
 discover_image_files    – scan a directory for stable image files
                           (handles flat files and .zarr directory stores)
+path_mtime              – effective last-write mtime of a file OR a directory
+                          store (max mtime of its contents, zarr-aware)
 read_dax_frames/read_zarr_frames/read_tiff_frames/read_image_frames
                         – read only the given frame_indices (real partial I/O)
 iter_dax_frames/iter_zarr_frames/iter_tiff_frames/iter_image_frames
@@ -636,3 +638,23 @@ def _dir_content_size(path: Path) -> int:
         for f in path.rglob("*")
         if f.is_file()
     )
+
+
+def path_mtime(path: Path) -> float:
+    """
+    Effective last-write time of *path*: its own mtime for a flat file, or the
+    max mtime of every file inside it for a directory store (e.g. ``.zarr``).
+
+    A directory's own mtime only updates when an entry is added/removed/renamed
+    directly inside it -- it doesn't reliably bubble up when a chunk file nested
+    a level or two deeper is written, so recursing into the actual files (same
+    walk as :func:`_dir_content_size`, just mtime instead of size) is needed to
+    get a meaningful "when did writing finish" timestamp for a directory store.
+    """
+    path = Path(path)
+    if path.is_dir():
+        mtimes = [f.stat().st_mtime for f in path.rglob("*") if f.is_file()]
+        if not mtimes:
+            raise FileNotFoundError(f"No files found under directory store: {path}")
+        return max(mtimes)
+    return path.stat().st_mtime
