@@ -10,6 +10,11 @@ create_thumbnails_for_stack – batch version over many frames
 measure_stats               – per-frame min/mean/median/max → CSV
 get_histogram               – per-frame intensity histograms → .npz
 get_histogram_for_frames    – histogram only selected frame indices (partial read) → .npz
+measure_tissue_ntp_profile  – sequential per-z true-pixel-count scan with early stop
+                              once a frame first fails a threshold (no histogram needed)
+ntp_profile_from_histogram  – same early-stop scan, sourced from an existing full
+                              histogram instead of raw pixels (no stack read at all)
+save_ntp_profile/load_ntp_profile – persist/reload a measure_tissue_ntp_profile() result
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
 """
@@ -397,6 +402,153 @@ def get_histogram_for_frames(
     log.debug("Histogram saved (%d/%d frames, %d bins): %s",
               len(frame_indices), len(frame_indices), histogram_bins, histogram_path)
     return result
+
+
+def measure_tissue_ntp_profile(
+    image_path:      Path,
+    z_frame_indices: List[Tuple[int, float]],
+    threshold:       float,
+    ntp_threshold:   float,
+    frame_width:     Optional[int] = None,
+    frame_height:    Optional[int] = None,
+) -> Dict:
+    """
+    Sequentially read one FOV's z-stack, one frame at a time in the given
+    (shallow -> deep) order, counting true-pixels (intensity >= *threshold*)
+    directly from each raw frame -- no histogram needed, since *threshold* is
+    already fixed by the time this runs (e.g. pooled and estimated across
+    every FOV's reference frame beforehand). Stops reading as soon as a
+    frame's true-pixel count (NTP) first drops to or below *ntp_threshold*:
+    past that point every deeper frame is assumed to be past the tissue too,
+    so reading it would be wasted I/O. This assumes tissue signal is
+    monotonically non-increasing with depth past its edge -- a real signal
+    that dips below threshold and reappears deeper would be missed (unlike
+    reading every frame and taking the deepest ever-passing z).
+
+    Parameters
+    ----------
+    image_path      : path to the FOV's image stack
+    z_frame_indices : ``[(frame_idx, z_um), ...]`` in the order to scan
+                       (shallow -> deep) -- frame_idx is the file's own
+                       (global, whole-stack) frame index
+    threshold       : intensity threshold a pixel must meet to count as
+                       "true tissue" (same units as the raw pixel values)
+    ntp_threshold   : a frame still counts as "has tissue" while its NTP
+                       exceeds this
+
+    Returns
+    -------
+    dict with keys:
+      z_um          : z (um) of every frame actually read, in read order
+      ntp           : true-pixel count for each of those frames
+      last_z_um     : deepest z reached before the first failing frame, or
+                       None if the very first frame read already failed
+      stopped_early : True if reading stopped before the last requested frame
+    """
+    from MERci.common.io import iter_image_frames
+
+    z_frame_indices = list(z_frame_indices)
+    frame_indices   = [idx for idx, _ in z_frame_indices]
+    z_by_frame_idx  = dict(z_frame_indices)
+
+    z_um_read:   List[float] = []
+    ntp_read:    List[int]   = []
+    last_z_um:   Optional[float] = None
+    stopped_early = False
+
+    frames = iter_image_frames(image_path, frame_indices,
+                               frame_width=frame_width, frame_height=frame_height)
+    for pos, (frame_idx, frame) in enumerate(frames):
+        z_um = z_by_frame_idx[frame_idx]
+        ntp  = int(np.count_nonzero(frame >= threshold))
+        z_um_read.append(z_um)
+        ntp_read.append(ntp)
+        if ntp > ntp_threshold:
+            last_z_um = z_um
+        else:
+            stopped_early = pos < len(frame_indices) - 1
+            break
+
+    return {
+        "z_um":          np.asarray(z_um_read, dtype=np.float64),
+        "ntp":           np.asarray(ntp_read,  dtype=np.int64),
+        "last_z_um":     last_z_um,
+        "stopped_early": stopped_early,
+    }
+
+
+def ntp_profile_from_histogram(
+    hist:            Dict,
+    z_frame_indices: List[Tuple[int, float]],
+    threshold:       float,
+    ntp_threshold:   float,
+) -> Dict:
+    """
+    Same early-stop true-pixel-count scan as :func:`measure_tissue_ntp_profile`,
+    but sourced from an already-on-disk FULL per-frame histogram (e.g. written
+    by :func:`get_histogram`/:func:`analyze_file`) instead of raw pixels: once
+    a complete histogram already exists, extracting NTP per z from its saved
+    bins is pure in-memory arithmetic, so there's nothing left to save by
+    reading the stack at all.
+
+    ``hist["counts"]`` must be positional (row *i* is frame *i*) -- a FULL
+    histogram, not a :func:`get_histogram_for_frames` partial one.
+
+    Returns
+    -------
+    Same shape as :func:`measure_tissue_ntp_profile`'s return value.
+    """
+    bin_edges    = hist["bin_edges"]
+    passing_bins = bin_edges[:-1] >= threshold
+
+    z_frame_indices = list(z_frame_indices)
+    z_um_read:   List[float] = []
+    ntp_read:    List[int]   = []
+    last_z_um:   Optional[float] = None
+    stopped_early = False
+
+    for pos, (frame_idx, z_um) in enumerate(z_frame_indices):
+        counts = hist["counts"][frame_idx]
+        ntp    = int(counts[passing_bins].sum())
+        z_um_read.append(z_um)
+        ntp_read.append(ntp)
+        if ntp > ntp_threshold:
+            last_z_um = z_um
+        else:
+            stopped_early = pos < len(z_frame_indices) - 1
+            break
+
+    return {
+        "z_um":          np.asarray(z_um_read, dtype=np.float64),
+        "ntp":           np.asarray(ntp_read,  dtype=np.int64),
+        "last_z_um":     last_z_um,
+        "stopped_early": stopped_early,
+    }
+
+
+def save_ntp_profile(path: Path, profile: Dict) -> None:
+    """Persist a :func:`measure_tissue_ntp_profile` result to a compressed .npz."""
+    path = Path(path).with_suffix(".npz")
+    last_z_um = np.nan if profile["last_z_um"] is None else profile["last_z_um"]
+    payload = {
+        "z_um":          np.asarray(profile["z_um"], dtype=np.float64),
+        "ntp":           np.asarray(profile["ntp"],  dtype=np.int64),
+        "last_z_um":     np.float64(last_z_um),
+        "stopped_early": np.bool_(profile["stopped_early"]),
+    }
+    _atomic_save(path, lambda tmp: np.savez_compressed(str(tmp), **payload))
+
+
+def load_ntp_profile(path: Path) -> Dict:
+    """Load a previously saved :func:`measure_tissue_ntp_profile` result."""
+    data      = np.load(Path(path))
+    last_z_um = float(data["last_z_um"])
+    return {
+        "z_um":          data["z_um"],
+        "ntp":           data["ntp"],
+        "last_z_um":     None if np.isnan(last_z_um) else last_z_um,
+        "stopped_early": bool(data["stopped_early"]),
+    }
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────

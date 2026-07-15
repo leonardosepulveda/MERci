@@ -15,13 +15,19 @@ read_image              – format-agnostic dispatcher for the three formats abo
 get_dax_shape           – read .dax shape without loading pixel data
 discover_image_files    – scan a directory for stable image files
                           (handles flat files and .zarr directory stores)
+read_dax_frames/read_zarr_frames/read_tiff_frames/read_image_frames
+                        – read only the given frame_indices (real partial I/O)
+iter_dax_frames/iter_zarr_frames/iter_tiff_frames/iter_image_frames
+                        – same, but lazy: yields (frame_idx, frame) one at a
+                          time, so a caller can stop partway through without
+                          reading the remaining frames at all
 """
 from __future__ import annotations
 
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -327,29 +333,32 @@ def read_image(
 # handful of frames out of a much larger stack (e.g. one channel's z-range
 # out of a multi-color, 100+-frame acquisition) pays for reading and holding
 # every frame it doesn't need -- real cost under many concurrent workers, and
-# real cost even sequentially for a large batch. These read only the
-# requested frame indices, with genuine partial I/O where the format allows
-# it (zarr fancy-indexes just the needed chunks; dax seeks directly to each
-# frame's byte offset) rather than reading everything and throwing most of it away.
+# real cost even sequentially for a large batch. The read_*_frames functions
+# below read only the requested frame indices, with genuine partial I/O where
+# the format allows it (zarr fancy-indexes just the needed chunks; dax seeks
+# directly to each frame's byte offset; tifffile decodes only the requested
+# pages) rather than reading everything and throwing most of it away. Each
+# has a lazy iter_*_frames counterpart yielding one frame at a time -- for a
+# caller that might stop partway through frame_indices (e.g. a sequential
+# scan with a per-frame stopping condition), the eager versions still read
+# every requested frame even if the caller only ends up using the first few.
 
-def read_dax_frames(
+def iter_dax_frames(
     dax_path:      Path,
     frame_indices: List[int],
     frame_width:   Optional[int] = None,
     frame_height:  Optional[int] = None,
     dtype:         type          = np.uint16,
-) -> np.ndarray:
+) -> Iterator[Tuple[int, np.ndarray]]:
     """
-    Read only *frame_indices* from a raw ``.dax`` file, seeking directly to
-    each frame's byte offset instead of reading the whole file.
+    Lazily yield ``(frame_idx, frame)`` from a raw ``.dax`` file, one frame at
+    a time, seeking directly to each frame's byte offset -- unlike
+    :func:`read_dax_frames`, a caller can stop partway through *frame_indices*
+    (e.g. once some per-frame condition is met) without paying for the reads
+    it never asked for.
 
     Dimension resolution follows :func:`read_dax`: explicit kwargs, then the
-    ``.inf`` sidecar. Unlike :func:`read_dax`, ``n_frames`` isn't needed (and
-    isn't accepted) since we never infer total frame count from file size.
-
-    Returns
-    -------
-    ``(len(frame_indices), height, width)`` array, in the given order.
+    ``.inf`` sidecar.
     """
     dax_path = Path(dax_path)
     inf_path = dax_path.with_suffix(".inf")
@@ -371,7 +380,6 @@ def read_dax_frames(
     pixels_per_frame = int(fw) * int(fh)
     frame_bytes      = pixels_per_frame * np.dtype(dtype).itemsize
 
-    frames = []
     with open(dax_path, "rb") as fh_bin:
         for idx in frame_indices:
             fh_bin.seek(idx * frame_bytes)
@@ -381,23 +389,39 @@ def read_dax_frames(
                     f"'{dax_path.name}': frame {idx} truncated "
                     f"(got {len(raw)} of {frame_bytes} bytes -- file too short?)"
                 )
-            frames.append(np.frombuffer(raw, dtype=dtype).reshape(int(fh), int(fw)))
-    return np.stack(frames, axis=0)
+            yield idx, np.frombuffer(raw, dtype=dtype).reshape(int(fh), int(fw))
 
 
-def read_zarr_frames(
-    zarr_path:     Path,
+def read_dax_frames(
+    dax_path:      Path,
     frame_indices: List[int],
-    dtype:         type = np.uint16,
+    frame_width:   Optional[int] = None,
+    frame_height:  Optional[int] = None,
+    dtype:         type          = np.uint16,
 ) -> np.ndarray:
     """
-    Read only *frame_indices* from a ``.zarr`` store via fancy indexing on
-    the on-disk array -- zarr only reads the chunks actually covering the
-    requested indices, not the full array (unlike :func:`read_zarr`'s ``[:]``).
+    Read only *frame_indices* from a raw ``.dax`` file (see
+    :func:`iter_dax_frames`), stacked into one array.
 
     Returns
     -------
     ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    frames = [frame for _, frame in iter_dax_frames(
+        dax_path, frame_indices, frame_width=frame_width, frame_height=frame_height, dtype=dtype,
+    )]
+    return np.stack(frames, axis=0)
+
+
+def iter_zarr_frames(
+    zarr_path:     Path,
+    frame_indices: List[int],
+    dtype:         type = np.uint16,
+) -> Iterator[Tuple[int, np.ndarray]]:
+    """
+    Lazily yield ``(frame_idx, frame)`` from a ``.zarr`` store, one frame at a
+    time -- each single-index read only fetches the chunk(s) covering that
+    frame, so a caller stopping early never pays for the remaining frames.
     """
     try:
         import zarr
@@ -416,22 +440,48 @@ def read_zarr_frames(
             raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
         arr = store[keys[0]]
 
-    result = arr[list(frame_indices)]
-    return np.asarray(result).astype(dtype)
+    for idx in frame_indices:
+        yield idx, np.asarray(arr[idx]).astype(dtype)
 
 
-def read_tiff_frames(
-    tiff_path:     Path,
+def read_zarr_frames(
+    zarr_path:     Path,
     frame_indices: List[int],
     dtype:         type = np.uint16,
 ) -> np.ndarray:
     """
-    Read only *frame_indices* (pages) from a multi-page ``.tiff`` via
-    ``tifffile``'s own selective-page read (``key=``), not a full-stack load.
+    Read only *frame_indices* from a ``.zarr`` store (see
+    :func:`iter_zarr_frames`), stacked into one array -- zarr only reads the
+    chunks actually covering the requested indices, not the full array
+    (unlike :func:`read_zarr`'s ``[:]``).
 
     Returns
     -------
     ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    frames = [frame for _, frame in iter_zarr_frames(zarr_path, frame_indices, dtype=dtype)]
+    return np.stack(frames, axis=0)
+
+
+def iter_tiff_frames(
+    tiff_path:     Path,
+    frame_indices: List[int],
+    dtype:         type = np.uint16,
+) -> Iterator[Tuple[int, np.ndarray]]:
+    """
+    Lazily yield ``(frame_idx, frame)`` from a multi-page ``.tiff``, one frame
+    at a time, via a single kept-open :class:`tifffile.TiffFile` handle -- a
+    caller stopping early never decodes the remaining frames.
+
+    Uses ``TiffFile.asarray(key=idx, series=None)`` -- the same key-based
+    selection :func:`read_tiff_frames`/module-level ``tifffile.imread(...,
+    key=...)`` use -- NOT ``tf.pages[idx]``. A stack written by
+    ``tifffile.imwrite`` from one ``(n_frames, H, W)`` array is typically
+    stored as a *single* IFD/page holding every frame (confirmed directly,
+    tifffile's "shaped" convention), not one page per frame, so indexing
+    ``tf.pages`` directly reads the wrong data for exactly the files this
+    package itself writes. ``series=None`` matters too: leaving it at its
+    default resolved a *different* (incorrect) code path in testing.
     """
     try:
         import tifffile
@@ -441,10 +491,59 @@ def read_tiff_frames(
             "Install it with: pip install tifffile"
         ) from exc
 
-    arr = np.asarray(tifffile.imread(str(tiff_path), key=list(frame_indices)))
-    if arr.ndim == 2:
-        arr = arr[np.newaxis, ...]
-    return arr.astype(dtype)
+    with tifffile.TiffFile(str(tiff_path)) as tf:
+        for idx in frame_indices:
+            yield idx, np.asarray(tf.asarray(key=idx, series=None)).astype(dtype)
+
+
+def read_tiff_frames(
+    tiff_path:     Path,
+    frame_indices: List[int],
+    dtype:         type = np.uint16,
+) -> np.ndarray:
+    """
+    Read only *frame_indices* (pages) from a multi-page ``.tiff`` (see
+    :func:`iter_tiff_frames`), stacked into one array.
+
+    Returns
+    -------
+    ``(len(frame_indices), height, width)`` array, in the given order.
+    """
+    frames = [frame for _, frame in iter_tiff_frames(tiff_path, frame_indices, dtype=dtype)]
+    return np.stack(frames, axis=0)
+
+
+def iter_image_frames(
+    path:          Path,
+    frame_indices: List[int],
+    frame_width:   Optional[int] = None,
+    frame_height:  Optional[int] = None,
+    dtype:         type          = np.uint16,
+) -> Iterator[Tuple[int, np.ndarray]]:
+    """
+    Format-agnostic lazy per-frame reader. Dispatches to
+    :func:`iter_dax_frames`, :func:`iter_zarr_frames`, or
+    :func:`iter_tiff_frames` based on the file extension. Unlike
+    :func:`read_image_frames`, this never reads ahead of what the caller
+    actually consumes -- for a caller that may stop partway through
+    *frame_indices* (e.g. a sequential scan with an early-exit condition),
+    every frame after the stopping point is never read from disk at all.
+    """
+    path   = Path(path)
+    suffix = path.suffix.lower()
+    frame_indices = list(frame_indices)
+    if suffix == ".dax":
+        yield from iter_dax_frames(path, frame_indices, frame_width=frame_width,
+                                   frame_height=frame_height, dtype=dtype)
+    elif suffix == ".zarr":
+        yield from iter_zarr_frames(path, frame_indices, dtype=dtype)
+    elif suffix in (".tiff", ".tif"):
+        yield from iter_tiff_frames(path, frame_indices, dtype=dtype)
+    else:
+        raise ValueError(
+            f"Unsupported image format '{suffix}' for path: {path}. "
+            "Supported formats: .dax, .zarr, .tiff"
+        )
 
 
 def read_image_frames(
@@ -455,25 +554,17 @@ def read_image_frames(
     dtype:         type          = np.uint16,
 ) -> np.ndarray:
     """
-    Format-agnostic selective-frame reader. Dispatches to
-    :func:`read_dax_frames`, :func:`read_zarr_frames`, or
-    :func:`read_tiff_frames` based on the file extension -- same convention
-    as :func:`read_image`, but for only the requested *frame_indices*.
+    Format-agnostic selective-frame reader: reads every requested frame (see
+    :func:`iter_image_frames` instead if the caller might stop early).
+
+    Returns
+    -------
+    ``(len(frame_indices), height, width)`` array, in the given order.
     """
-    path   = Path(path)
-    suffix = path.suffix.lower()
-    frame_indices = list(frame_indices)
-    if suffix == ".dax":
-        return read_dax_frames(path, frame_indices, frame_width=frame_width,
-                               frame_height=frame_height, dtype=dtype)
-    if suffix == ".zarr":
-        return read_zarr_frames(path, frame_indices, dtype=dtype)
-    if suffix in (".tiff", ".tif"):
-        return read_tiff_frames(path, frame_indices, dtype=dtype)
-    raise ValueError(
-        f"Unsupported image format '{suffix}' for path: {path}. "
-        "Supported formats: .dax, .zarr, .tiff"
-    )
+    frames = [frame for _, frame in iter_image_frames(
+        path, frame_indices, frame_width=frame_width, frame_height=frame_height, dtype=dtype,
+    )]
+    return np.stack(frames, axis=0)
 
 
 def discover_image_files(
