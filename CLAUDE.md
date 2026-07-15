@@ -259,9 +259,9 @@ src/MERci/
                     #   round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
                     #   (round_robin_drives-only: transfers once a round is fully written, decoupled
-                    #   from local analysis, ONE FOV AT A TIME, each verified (verify_method="hash"|"size"
-                    #   constructor param, see transfer.py's verify_copy) before being marked transferred
-                    #   — a round is round_transferred only once every one of its FOVs has verified, at
+                    #   from local analysis, ONE FOV AT A TIME, each verified (verify_method="hash"|"sample"|
+                    #   "size" constructor param + verify_sample_bytes, see transfer.py's verify_copy) before
+                    #   being marked transferred — a round is round_transferred only once every one of its FOVs has verified, at
                     #   which point (delete_source_after_verify=True, off by default — irreversible) its
                     #   entire source data directory is deleted; average_seconds_per_fov/
                     #   average_copy_seconds_per_fov/average_verify_seconds_per_fov track copy and verify
@@ -299,14 +299,19 @@ src/MERci/
                     #   file/dir sharing an image's stem — the store itself plus whatever same-stem
                     #   .inf/.off/.power/.xml sidecars HAL wrote, found by glob, not a fixed extension
                     #   list), copy_fov (copies them, preserving data/... structure), verify_copy(src, dst,
-                    #   method="hash"|"size") — "hash": full SHA-256 of every file, not just size/timestamp
-                    #   (all robocopy's own "up to date" check does, which would not catch silent
-                    #   corruption); reads every byte TWICE (source + destination), which can dominate
-                    #   total transfer time over a slow network share (measured ~80 s/FOV on a 14504-FOV
-                    #   experiment on 2026-07-14) — "size": file size + exact same file set only, no
-                    #   content read at all, much faster, still catches the realistic LAN failure mode
-                    #   (truncated/incomplete copy) but not a same-size corruption; for a directory,
-                    #   recurses and also requires the exact same set of relative paths on both sides.
+                    #   method="hash"|"sample"|"size", sample_bytes=...) — "hash": full SHA-256 of every
+                    #   file, not just size/timestamp (all robocopy's own "up to date" check does, which
+                    #   would not catch silent corruption); reads every byte TWICE (source + destination),
+                    #   which can dominate total transfer time over a slow network share (measured
+                    #   ~50-80 s/FOV on a 14504-FOV experiment on 2026-07-14/15, vs ~1 s/FOV for "size") —
+                    #   "sample": SHA-256 of just the first+last sample_bytes of each file (whole file if
+                    #   smaller), bounded I/O regardless of file size — a middle ground added 2026-07-15:
+                    #   catches truncation with certainty and corruption within the sampled head/tail
+                    #   windows, but can miss corruption confined to a large file's untouched middle —
+                    #   "size": file size + exact same file set only, no content read at all, fastest,
+                    #   still catches the realistic LAN failure mode (truncated/incomplete copy) but not a
+                    #   same-size corruption; for a directory, recurses and also requires the exact same
+                    #   set of relative paths on both sides.
                     #   transfer_fov(image_path, dest_root, verify_method=...) — copy_fov + verify_copy,
                     #   returns {verified, copy_seconds, verify_seconds} (timed separately so a slow FOV
                     #   can be diagnosed as copy-bound vs. verify-bound instead of one combined number),
@@ -380,8 +385,10 @@ notebooks/
                                                    #   written, decoupled from any local QC), each verified per
                                                    #   VERIFY_METHOD ("hash": full SHA-256, reads every byte
                                                    #   twice, can dominate transfer time over a slow network
-                                                   #   share; "size": size + file-count only, much faster, still
-                                                   #   catches truncated copies) before being marked transferred,
+                                                   #   share; "sample": SHA-256 of just the first+last
+                                                   #   VERIFY_SAMPLE_BYTES of each file, a middle ground; "size":
+                                                   #   size + file-count only, fastest, still catches truncated
+                                                   #   copies) before being marked transferred,
                                                    #   nested under TRANSFER_DEST exactly as it is locally (data/cells,
                                                    #   data/hybs/H01, ... -- see transfer.relative_to_data_root)
                                                    #   -- a round is round_transferred only once every FOV in it

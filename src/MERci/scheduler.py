@@ -617,11 +617,12 @@ class TransferScheduler:
         sample_dir: Optional[Path] = None,
         delete_source_after_verify: bool = False,
         verify_method: str = "hash",
+        verify_sample_bytes: int = 4 * (1 << 20),
     ) -> None:
         if config.transfer_dest is None:
             raise ValueError("TransferScheduler requires config.transfer_dest to be set.")
-        if verify_method not in ("hash", "size"):
-            raise ValueError(f"verify_method must be 'hash' or 'size', got {verify_method!r}")
+        if verify_method not in ("hash", "sample", "size"):
+            raise ValueError(f"verify_method must be 'hash', 'sample', or 'size', got {verify_method!r}")
         self.config     = config
         self.meta       = metadata
         self.tracker    = tracker
@@ -634,13 +635,20 @@ class TransferScheduler:
         # EVERY FOV in it has an independently verified copy at transfer_dest
         # (see _transfer_round_worker). Defaults to False.
         self.delete_source_after_verify = delete_source_after_verify
-        # "hash": full SHA-256 of every file -- catches silent corruption, but
-        # reads every byte twice (once at source, once at destination), which
-        # can dominate total transfer time over a slow network share. "size":
-        # just file size + exact same file set -- much faster, catches
+        # "hash": full SHA-256 of every file -- catches silent corruption anywhere
+        # in the file, but reads every byte twice (once at source, once at
+        # destination), which can dominate total transfer time over a slow
+        # network share (measured ~50 s/FOV vs ~1 s/FOV for "size" on the live
+        # 14504-FOV experiment this was built for). "sample": SHA-256 of just
+        # the first+last verify_sample_bytes of each file (whole file if
+        # smaller) -- bounded I/O regardless of file size, catches truncation
+        # with certainty and corruption within the sampled windows, but can
+        # miss corruption confined to a large file's untouched middle. "size":
+        # just file size + exact same file set -- fastest, catches
         # truncation/incomplete copies (the realistic LAN failure mode) but
         # not a same-size corruption. See transfer.verify_copy.
-        self.verify_method = verify_method
+        self.verify_method       = verify_method
+        self.verify_sample_bytes = verify_sample_bytes
         self._transfers_in_progress: set = set()   # round_ids currently being transferred
         # Seconds-per-FOV samples from the last 200 *completed* FOV transfers,
         # used to estimate remaining time -- a deque so the average tracks
@@ -761,7 +769,10 @@ class TransferScheduler:
             for image_path in image_paths:
                 if self.tracker.is_fov_transferred(image_path):
                     continue
-                result = transfer_fov(image_path, dest_root, verify_method=self.verify_method)
+                result = transfer_fov(
+                    image_path, dest_root,
+                    verify_method=self.verify_method, sample_bytes=self.verify_sample_bytes,
+                )
                 if result["verified"]:
                     self.tracker.mark_fov_transferred(image_path)
                     self._fov_copy_time_samples.append(result["copy_seconds"])

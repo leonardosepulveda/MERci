@@ -245,7 +245,30 @@ def _hash_file(path: Path, chunk_size: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def verify_copy(src: Path, dst: Path, method: str = "hash") -> bool:
+def _hash_file_sampled(path: Path, sample_bytes: int = 4 * (1 << 20)) -> str:
+    """
+    SHA-256 of a bounded sample of *path*'s bytes: the first and last
+    *sample_bytes* (the whole file if it's smaller than 2x that), plus the
+    file's exact size mixed into the digest (so a truncated file never
+    matches even if its head happens to). Bounded I/O regardless of file
+    size -- unlike ``_hash_file``, which reads every byte -- at the cost of
+    being unable to detect corruption confined entirely to the middle of a
+    large file (see ``verify_copy``'s ``"sample"`` method).
+    """
+    size = path.stat().st_size
+    h = hashlib.sha256()
+    h.update(str(size).encode())
+    with open(path, "rb") as fh:
+        if size <= 2 * sample_bytes:
+            h.update(fh.read())
+        else:
+            h.update(fh.read(sample_bytes))
+            fh.seek(-sample_bytes, 2)
+            h.update(fh.read(sample_bytes))
+    return h.hexdigest()
+
+
+def verify_copy(src: Path, dst: Path, method: str = "hash", sample_bytes: int = 4 * (1 << 20)) -> bool:
     """
     Verify that *dst* is a copy of *src*. *src* may be a single file or a
     directory (e.g. a zarr store, which is really many chunk files) -- for a
@@ -254,18 +277,33 @@ def verify_copy(src: Path, dst: Path, method: str = "hash") -> bool:
     per file depends on *method*:
 
     - ``"hash"`` (default): full SHA-256 comparison -- catches silent
-      corruption, not just truncation, but reads every byte of every file
-      TWICE (once at the source, once at the destination). Over a network
-      share this doubles the slowest leg's I/O and can dominate total
-      transfer time for large files -- measure ``transfer_fov``'s
-      ``verify_seconds`` before assuming this is affordable at your data rate.
+      corruption anywhere in the file, not just truncation, but reads every
+      byte of every file TWICE (once at the source, once at the
+      destination). Over a network share this doubles the slowest leg's I/O
+      and can dominate total transfer time for large files -- measured
+      ~50 s/FOV vs. ~1 s/FOV for ``"size"`` on the live 14504-FOV experiment
+      this was built for (2026-07-14/15).
+    - ``"sample"``: SHA-256 of just the first+last *sample_bytes* of each
+      file (whole file if smaller than that), size mixed into the digest so
+      truncation is always caught. Bounded I/O regardless of file size --
+      a middle ground: much cheaper than ``"hash"`` for large files, and
+      catches truncation with certainty plus any corruption that happens to
+      fall within the sampled head/tail windows, but (unlike ``"hash"``)
+      can miss corruption confined entirely to a large file's untouched middle.
     - ``"size"``: only compares file size (no content read at all) -- much
       faster, but won't catch a corrupted file that happens to keep the
       same size (rare for a truncated/interrupted copy, the realistic
       failure mode for a LAN transfer, but not a byte-flip).
     """
-    if method not in ("hash", "size"):
-        raise ValueError(f"Unknown verify method: {method!r} (expected 'hash' or 'size')")
+    if method not in ("hash", "sample", "size"):
+        raise ValueError(f"Unknown verify method: {method!r} (expected 'hash', 'sample', or 'size')")
+
+    def _content_matches(s: Path, d: Path) -> bool:
+        if method == "hash":
+            return _hash_file(s) == _hash_file(d)
+        if method == "sample":
+            return _hash_file_sampled(s, sample_bytes) == _hash_file_sampled(d, sample_bytes)
+        return True
 
     src, dst = Path(src), Path(dst)
     if not dst.exists():
@@ -282,7 +320,7 @@ def verify_copy(src: Path, dst: Path, method: str = "hash") -> bool:
             s, d = src / rel, dst / rel
             if s.stat().st_size != d.stat().st_size:
                 return False
-            if method == "hash" and _hash_file(s) != _hash_file(d):
+            if not _content_matches(s, d):
                 return False
         return True
 
@@ -290,9 +328,7 @@ def verify_copy(src: Path, dst: Path, method: str = "hash") -> bool:
         return False
     if src.stat().st_size != dst.stat().st_size:
         return False
-    if method == "hash":
-        return _hash_file(src) == _hash_file(dst)
-    return True
+    return _content_matches(src, dst)
 
 
 def copy_fov(image_path: Path, dest_root: Path) -> List[Tuple[Path, Path]]:
@@ -318,11 +354,14 @@ def copy_fov(image_path: Path, dest_root: Path) -> List[Tuple[Path, Path]]:
     return pairs
 
 
-def transfer_fov(image_path: Path, dest_root: Path, verify_method: str = "hash") -> dict:
+def transfer_fov(
+    image_path: Path, dest_root: Path,
+    verify_method: str = "hash", sample_bytes: int = 4 * (1 << 20),
+) -> dict:
     """
     Copy one FOV's full associated file set to *dest_root* and verify it
-    (see ``verify_copy``'s *method* parameter for the ``"hash"``/``"size"``
-    trade-off). Does not delete the source -- deletion (see
+    (see ``verify_copy``'s *method* parameter for the ``"hash"``/``"sample"``/
+    ``"size"`` trade-off). Does not delete the source -- deletion (see
     ``delete_source_tree``) is a round-level decision, only safe once EVERY
     FOV in the round has verified.
 
@@ -338,7 +377,10 @@ def transfer_fov(image_path: Path, dest_root: Path, verify_method: str = "hash")
     if not pairs:
         log.warning("No associated files found for %s -- nothing to transfer.", image_path)
         return {"verified": False, "copy_seconds": t1 - t0, "verify_seconds": 0.0}
-    verified = all(verify_copy(src, dst, method=verify_method) for src, dst in pairs)
+    verified = all(
+        verify_copy(src, dst, method=verify_method, sample_bytes=sample_bytes)
+        for src, dst in pairs
+    )
     t2 = time.time()
     return {"verified": verified, "copy_seconds": t1 - t0, "verify_seconds": t2 - t1}
 
