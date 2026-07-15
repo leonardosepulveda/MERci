@@ -257,6 +257,16 @@ src/MERci/
                     #   fov_transferred (per-FOV, verified-copy transfer — distinct from fov_done, which
                     #   is local QC analysis completion, not a transfer state), fov_submitted/
                     #   round_mosaic_submitted (cluster SLURM bookkeeping, hold the job id)
+  progress_display.py # ProgressReporter — reusable, dependency-free live console/notebook progress +
+                    #   ETA display for any long-running per-item loop (n/total, percent, a text bar,
+                    #   elapsed, ETA extrapolated from the average per-item rate seen so far); wrap an
+                    #   iterable directly (`for x in ProgressReporter(len(items), "label").wrap(items)`)
+                    #   or drive update()/done() manually. Distinct from progress.py's ProgressTracker,
+                    #   which persists completion via on-disk sentinels across separate runs — this is
+                    #   purely a live display for a loop running right now, no persistence. Not used by
+                    #   TransferScheduler (which already has its own bespoke, more detailed copy/verify-
+                    #   split timing — see scheduler.py) — meant for notebooks that don't have that
+                    #   already, e.g. misc/measure_tissue_thickness.ipynb's histogram backfill loop.
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
                     #   (round_robin_drives-only: transfers once a round is fully written, decoupled
                     #   from local analysis, ONE FOV AT A TIME, each verified (verify_method="hash"|"sample"|
