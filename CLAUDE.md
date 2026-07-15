@@ -256,27 +256,26 @@ src/MERci/
                     # compute_histogram_only (same picklable-top-level-function convention as
                     # analyze_file, for a ProcessPoolExecutor worker, but histogram only — skips
                     # thumbnails/stats for callers outside the standard pipeline that don't need them),
-                    # get_histogram_for_frames (histograms only the given frame_indices, read via
-                    # io.read_image_frames' partial I/O instead of the whole stack — for a caller that
-                    # only ever needs a few frames out of a much larger multi-color acquisition, e.g.
-                    # misc/measure_tissue_thickness.ipynb's single-reference-frame threshold-estimation
-                    # step; saves an extra frame_indices array alongside counts in the .npz, since counts'
-                    # rows then no longer align 1:1 with the file's own frame order — a full
-                    # compute_histogram_only/analyze_file histogram has no such array and is read
-                    # positionally instead), measure_tissue_ntp_profile (reads every z-plane in a given
-                    # channel's frame range via io.iter_image_frames — still far fewer frames than the
-                    # whole multi-color stack — and counts true-pixels per z directly against an
-                    # already-known threshold; NOT early-stopping: real data showed tissue signal isn't
-                    # always monotonic with depth — some FOVs are blank at the top of the imaged range and
-                    # only pick up signal partway down, and a few turn off and back on more than once — so
-                    # finding the true shallowest/deepest z with signal requires reading every requested z),
-                    # ntp_profile_from_histogram (same full-range scan, but sourced from an already-on-disk
-                    # FULL per-frame histogram instead of raw pixels — pure in-memory arithmetic, no stack
-                    # read at all when one's already cached), _summarize_ntp_profile (shared helper: given
-                    # every z's true-pixel count, returns z_first_um/z_last_um — shallowest/deepest z with
-                    # signal, either None if none passed — and is_contiguous, False if signal turned off
-                    # and back on somewhere in between), save_ntp_profile/load_ntp_profile (persist/reload
-                    # either scan's result) — FOV-level analysis
+                    # compute_channel_counters (reads every z-plane in a given channel's frame range via
+                    # io.iter_image_frames — still far fewer frames than the whole multi-color stack — and
+                    # builds an EXACT, bin-width-1 histogram of each frame: a true Counter over observed
+                    # pixel intensities, stored SPARSELY as (values, counts) pairs via numpy.unique rather
+                    # than a dense fixed-width array — used by misc/measure_tissue_thickness.ipynb, which
+                    # needs every intensity value's exact count, not a lossy fixed-bin approximation, so it
+                    # can derive a mean, a percentile, a re-binned view, and a true-pixel count for any
+                    # threshold from ONE cached read instead of recomputing/re-reading pixels for each),
+                    # save_channel_counters/load_channel_counters (persist/reload — ragged per-z arrays,
+                    # stored as numpy object arrays, needing allow_pickle=True to read back),
+                    # counter_mean/counter_percentile/rebin_counter/ntp_from_counter (derive a mean /
+                    # percentile / re-binned histogram over arbitrary bin_edges / true-pixel count from a
+                    # (values, counts) Counter — pure arithmetic, no raw pixel re-read), 
+                    # ntp_profile_from_counters (per-z true-pixel-count profile purely from a
+                    # compute_channel_counters() result — no disk read at all once Counters are cached),
+                    # _summarize_ntp_profile (shared helper: given every z's true-pixel count, returns
+                    # z_first_um/z_last_um — shallowest/deepest z with signal, either None if none passed —
+                    # and is_contiguous, False if signal turned off and back on somewhere in between; real
+                    # data showed tissue signal isn't always monotonic with depth, so every z must be
+                    # counted rather than stopping at the first failure) — FOV-level analysis
     round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
     stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
                     #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
@@ -496,68 +495,69 @@ notebooks/
                                                    #   time on z-planes with no tissue, at EITHER end of the
                                                    #   stack (real data showed some FOVs are blank at the top
                                                    #   of the imaged range and only pick up signal partway
-                                                   #   down, not just "signal that eventually stops"). Two
-                                                   #   independent stages, each with its own 3-tier cache
-                                                   #   reuse (own cache -> an existing full per-frame
-                                                   #   histogram if routine QC analysis already wrote one ->
-                                                   #   compute/scan fresh only as a last resort), sequential
-                                                   #   rather than process-pool-parallelized (see the
-                                                   #   BrokenProcessPool note below): (1) get just each FOV's
-                                                   #   single REFERENCE frame's histogram (analysis.fov.
-                                                   #   get_histogram_for_frames, 1 frame/FOV, cheap regardless
-                                                   #   of stack size) and pool them to estimate a binarization
-                                                   #   threshold as the valley between its two most prominent
-                                                   #   peaks (reuses acquisition.mosaic.
-                                                   #   _estimate_bimodal_threshold's exact peak-finding,
-                                                   #   log10-wrapped since this pipeline's saved histograms
-                                                   #   are linear-binned, unlike 02_create_boundary_from_
-                                                   #   mosaic.ipynb's log-rebinned raw pixels — review the
-                                                   #   plot, override THRESHOLD manually if the estimate looks
-                                                   #   wrong); (2) once THRESHOLD is fixed, for every FOV read
-                                                   #   EVERY z-plane of CHANNEL_NM (analysis.fov.
-                                                   #   measure_tissue_ntp_profile, via io.iter_image_frames --
-                                                   #   still far fewer frames than the round's full multi-
-                                                   #   color stack, just not early-stopping any more: an
-                                                   #   earlier version stopped at the first z that failed
-                                                   #   NTP_THRESHOLD, assuming signal only decreases with
-                                                   #   depth, but real data falsified that assumption) and
-                                                   #   count true-pixels (NTP, intensity >= THRESHOLD)
-                                                   #   directly per z, reporting z_first_um/z_last_um (the
+                                                   #   down, not just "signal that eventually stops"). One
+                                                   #   backfill step, sequential rather than process-pool-
+                                                   #   parallelized (see the BrokenProcessPool note below): for
+                                                   #   every FOV, read every z-plane of CHANNEL_NM (still far
+                                                   #   fewer frames than the round's full multi-color stack)
+                                                   #   and build an EXACT, bin-width-1 histogram of each frame
+                                                   #   — a true Counter over observed pixel intensities
+                                                   #   (analysis.fov.compute_channel_counters, stored sparsely
+                                                   #   via numpy.unique, cached per FOV under analysis/
+                                                   #   tissue_thickness_cache/channel_counters/ — deliberately
+                                                   #   NOT the canonical tracker.histogram_path() routine
+                                                   #   analysis uses, and with no fallback-reuse of an existing
+                                                   #   full histogram either: FOVScheduler's own histograms are
+                                                   #   fixed-width/lossy 512-bin ones, which can't be turned
+                                                   #   back into an exact per-intensity Counter — writing a
+                                                   #   partial histogram to that canonical path was also a real
+                                                   #   bug hit and fixed earlier in development, since
+                                                   #   analyze_file would then think the FOV is already fully
+                                                   #   analyzed and skip writing the real one). Every other step
+                                                   #   is then pure in-memory arithmetic over that one cached
+                                                   #   read, no further disk I/O: (1) across every FOV and z,
+                                                   #   find the single frame with the highest MEAN intensity
+                                                   #   (analysis.fov.counter_mean) and use it as the reference
+                                                   #   frame for threshold estimation — not a fixed z pooled
+                                                   #   across FOVs (an earlier version's approach, which
+                                                   #   produced a poor, non-bimodal pooled histogram once it
+                                                   #   became clear some FOVs are blank at that fixed z);
+                                                   #   displays that one frame's actual image (Counters have no
+                                                   #   spatial information, so this needs one extra single-frame
+                                                   #   re-read) plus two re-binned views of its exact histogram
+                                                   #   (analysis.fov.rebin_counter) — log-scale (drives the
+                                                   #   automatic threshold estimate, reusing acquisition.mosaic.
+                                                   #   _estimate_bimodal_threshold's exact peak-finding) and
+                                                   #   linear-scale from its minimum value to a percentile
+                                                   #   cutoff (analysis.fov.counter_percentile) — review both,
+                                                   #   override THRESHOLD manually if the estimate looks wrong;
+                                                   #   (2) once THRESHOLD is fixed, derive every FOV's true-
+                                                   #   pixel-count (NTP) profile directly from its cached
+                                                   #   Counter (analysis.fov.ntp_profile_from_counters /
+                                                   #   ntp_from_counter), reporting z_first_um/z_last_um (the
                                                    #   shallowest/deepest z with NTP > NTP_THRESHOLD) and
                                                    #   is_contiguous (False if signal turned off and back on
-                                                   #   somewhere in between -- debris, folded tissue, noise).
-                                                   #   When a full histogram is already cached, the same
-                                                   #   full-range scan instead runs in-memory off its bins
-                                                   #   (analysis.fov.ntp_profile_from_histogram) with no stack
-                                                   #   read at all. Both stages' own caches live under a
-                                                   #   dedicated analysis/tissue_thickness_cache/
-                                                   #   {reference_histograms,ntp_profiles}/ -- deliberately
-                                                   #   NOT the canonical tracker.histogram_path() routine
-                                                   #   analysis (analyze_file/compute_histogram_only) uses,
-                                                   #   since both of this notebook's histograms are partial
-                                                   #   (one frame, or one channel's z-range) and writing a
-                                                   #   partial one to that canonical path would make
-                                                   #   analyze_file think the FOV is already fully analyzed
-                                                   #   and skip ever writing the real, complete histogram (a
-                                                   #   real bug hit and fixed during development). Live
-                                                   #   progress/ETA via progress_display.ProgressReporter
-                                                   #   while either stage's backfill runs. Deliberately NOT
-                                                   #   process-pool-parallelized: an earlier version sized a
+                                                   #   somewhere in between -- debris, folded tissue, noise; an
+                                                   #   earlier version stopped scanning at the first z that
+                                                   #   failed, assuming signal only decreases with depth, but
+                                                   #   real data falsified that assumption, so every z is now
+                                                   #   read/counted). Live progress/ETA via progress_display.
+                                                   #   ProgressReporter while the backfill runs. Deliberately
+                                                   #   NOT process-pool-parallelized: an earlier version sized a
                                                    #   pool off config.resolved_n_workers (os.cpu_count() - 2,
                                                    #   the same convention FOVScheduler uses locally) and
                                                    #   crashed with BrokenProcessPool on a shared SLURM node —
                                                    #   os.cpu_count() reports the node's total cores, not the
                                                    #   job's actual memory allocation, so the pool over-
-                                                   #   subscribed and got OOM-killed; reading only what's
-                                                   #   actually needed (1 frame/FOV in stage 1; only
-                                                   #   CHANNEL_NM's frames, not the whole multi-color stack,
-                                                   #   in stage 2) keeps the sequential version fast without a
-                                                   #   pool. Saves two side-by-side heatmaps (z_first_um,
-                                                   #   z_last_um, one shared color scale) + a histogram figure
-                                                   #   to a new analysis/figures/ subfolder (no prior
-                                                   #   convention existed for this) plus a results CSV. No
-                                                   #   SLURM needed — only reads/writes small histogram/
-                                                   #   profile files unless backfilling.
+                                                   #   subscribed and got OOM-killed; reading only CHANNEL_NM's
+                                                   #   frames (not the whole multi-color stack) keeps the
+                                                   #   sequential version fast without a pool. Saves the
+                                                   #   reference-frame image, its histogram (log + linear
+                                                   #   views), and two side-by-side heatmaps (z_first_um,
+                                                   #   z_last_um, one shared color scale) to a new analysis/
+                                                   #   figures/ subfolder (no prior convention existed for this)
+                                                   #   plus a results CSV. No SLURM needed — only reads/writes
+                                                   #   small Counter cache files unless backfilling.
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)

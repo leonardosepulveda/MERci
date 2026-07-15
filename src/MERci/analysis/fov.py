@@ -9,12 +9,16 @@ create_thumbnail            – downsample + contrast-stretch one frame → PNG
 create_thumbnails_for_stack – batch version over many frames
 measure_stats               – per-frame min/mean/median/max → CSV
 get_histogram               – per-frame intensity histograms → .npz
-get_histogram_for_frames    – histogram only selected frame indices (partial read) → .npz
-measure_tissue_ntp_profile  – per-z true-pixel-count scan over one channel's frames
-                              (no histogram needed); finds z_first/z_last with signal
-ntp_profile_from_histogram  – same scan, sourced from an existing full histogram
-                              instead of raw pixels (no stack read at all)
-save_ntp_profile/load_ntp_profile – persist/reload a measure_tissue_ntp_profile() result
+compute_channel_counters    – EXACT, bin-width-1 histogram ("Counter": sparse
+                              (value, count) pairs via numpy.unique) of every
+                              z-plane in a given channel's frame range
+save_channel_counters/load_channel_counters – persist/reload a compute_channel_counters() result
+counter_mean/counter_percentile/rebin_counter/ntp_from_counter
+                            – derive a mean / percentile / re-binned histogram /
+                              true-pixel count from a (values, counts) Counter,
+                              no raw pixel re-read needed
+ntp_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
+                              is_contiguous) purely from a compute_channel_counters() result
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
 """
@@ -345,71 +349,124 @@ def compute_histogram_only(
     return image_path.name
 
 
-def get_histogram_for_frames(
+def compute_channel_counters(
     image_path:      Path,
-    histogram_path:  Path,
-    frame_indices:   List[int],
-    frame_width:     Optional[int]      = None,
-    frame_height:    Optional[int]      = None,
-    histogram_bins:  int                = 512,
-    histogram_range: Tuple[int, int]    = (0, 65535),
+    z_frame_indices: List[Tuple[int, float]],
+    frame_width:     Optional[int] = None,
+    frame_height:    Optional[int] = None,
 ) -> Dict:
     """
-    Histogram only the requested *frame_indices* out of a stack (e.g. one
-    channel's z-range out of a much larger multi-color acquisition), reading
-    only those frames off disk via :func:`MERci.common.io.read_image_frames`
-    instead of the whole stack -- unlike :func:`compute_histogram_only`,
-    which always reads and histograms every frame.
+    Read every z-plane in *z_frame_indices* for one FOV (e.g. one channel's
+    z-range out of a much larger multi-color acquisition -- only these frames
+    are ever read, via :func:`MERci.common.io.iter_image_frames`, not the
+    whole stack) and build an EXACT, bin-width-1 histogram of each frame: a
+    true Counter over observed pixel intensities, stored *sparsely* (only
+    intensity values that actually occur, via :func:`numpy.unique`) rather
+    than a dense fixed-width array.
 
-    Saved arrays (in the .npz at *histogram_path*)
-    ------------------------------------------------
-    counts        : shape (len(frame_indices), bins) -- rows in the SAME
-                    order as frame_indices, not the stack's own frame order.
-    frame_indices : the original (global, whole-stack) frame indices each
-                    row of ``counts`` corresponds to -- needed since this
-                    histogram covers a subset, not every frame 0..n-1.
-    bin_centers, bin_edges : same as :func:`get_histogram`.
+    Exact, per-intensity-value counts mean any downstream view -- log-scale,
+    linear-scale, an arbitrary ``[lo, hi]`` range, a percentile cutoff, a
+    true-pixel count against any threshold -- can be derived later
+    (:func:`rebin_counter`, :func:`counter_mean`, :func:`counter_percentile`,
+    :func:`ntp_from_counter`) without re-reading pixels or losing precision to
+    a fixed binning choice picked up front.
 
     Returns
     -------
-    dict with keys ``counts``, ``frame_indices``, ``bin_centers``, ``bin_edges``
+    dict with keys:
+      z_um          : (n_z,) z of each frame, in the given order
+      frame_indices : (n_z,) global frame index of each frame
+      values_per_z  : list of length n_z; values_per_z[i] = sorted unique
+                       intensity values observed in frame i
+      counts_per_z  : list of length n_z; counts_per_z[i] = pixel count for
+                       each of values_per_z[i] (same order/length)
     """
-    from MERci.common.io import read_image_frames
+    from MERci.common.io import iter_image_frames
 
-    image_path     = Path(image_path)
-    histogram_path = Path(histogram_path).with_suffix(".npz")
-    frame_indices  = list(frame_indices)
+    z_frame_indices = list(z_frame_indices)
+    frame_indices   = [idx for idx, _ in z_frame_indices]
+    z_um            = np.asarray([z for _, z in z_frame_indices], dtype=np.float64)
 
-    stack = read_image_frames(image_path, frame_indices,
-                              frame_width=frame_width, frame_height=frame_height)
-    try:
-        all_counts = np.zeros((len(frame_indices), histogram_bins), dtype=np.int64)
-        edges: Optional[np.ndarray] = None
-        for row, frame in enumerate(stack):
-            counts, edges = np.histogram(frame.ravel(), bins=histogram_bins, range=histogram_range)
-            all_counts[row] = counts
-    finally:
-        del stack
+    values_per_z: List[np.ndarray] = []
+    counts_per_z: List[np.ndarray] = []
+    for _, frame in iter_image_frames(image_path, frame_indices,
+                                      frame_width=frame_width, frame_height=frame_height):
+        values, counts = np.unique(frame, return_counts=True)
+        values_per_z.append(values.astype(np.int32))
+        counts_per_z.append(counts.astype(np.int64))
 
-    bin_centers = 0.5 * (edges[:-1] + edges[1:])
-    result = {
-        "counts":        all_counts,
+    return {
+        "z_um":          z_um,
         "frame_indices": np.asarray(frame_indices, dtype=np.int64),
-        "bin_centers":   bin_centers,
-        "bin_edges":     edges,
+        "values_per_z":  values_per_z,
+        "counts_per_z":  counts_per_z,
     }
-    _atomic_save(histogram_path, lambda tmp: np.savez_compressed(str(tmp), **result))
-    log.debug("Histogram saved (%d/%d frames, %d bins): %s",
-              len(frame_indices), len(frame_indices), histogram_bins, histogram_path)
-    return result
+
+
+def save_channel_counters(path: Path, data: Dict) -> None:
+    """Persist a :func:`compute_channel_counters` result to a compressed .npz."""
+    path = Path(path).with_suffix(".npz")
+    payload = {
+        "z_um":          np.asarray(data["z_um"], dtype=np.float64),
+        "frame_indices": np.asarray(data["frame_indices"], dtype=np.int64),
+        # Ragged (different length per z) -- stored as object arrays; np.load
+        # needs allow_pickle=True to read these back (see load_channel_counters).
+        "values_per_z":  np.array(data["values_per_z"], dtype=object),
+        "counts_per_z":  np.array(data["counts_per_z"], dtype=object),
+    }
+    _atomic_save(path, lambda tmp: np.savez_compressed(str(tmp), **payload))
+
+
+def load_channel_counters(path: Path) -> Dict:
+    """Load a previously saved :func:`compute_channel_counters` result."""
+    data = np.load(Path(path), allow_pickle=True)
+    return {
+        "z_um":          data["z_um"],
+        "frame_indices": data["frame_indices"],
+        "values_per_z":  list(data["values_per_z"]),
+        "counts_per_z":  list(data["counts_per_z"]),
+    }
+
+
+def counter_mean(values: np.ndarray, counts: np.ndarray) -> float:
+    """Exact mean intensity from a ``(values, counts)`` Counter -- weighted average, no raw pixel re-read."""
+    counts = counts.astype(np.float64)
+    return float(np.sum(values.astype(np.float64) * counts) / np.sum(counts))
+
+
+def counter_percentile(values: np.ndarray, counts: np.ndarray, pct: float) -> float:
+    """
+    Exact *pct*-th percentile of the pixel-intensity distribution represented
+    by a ``(values, counts)`` Counter. Assumes *values* is sorted ascending
+    (true of :func:`numpy.unique`'s output, which :func:`compute_channel_counters`
+    always uses).
+    """
+    cum    = np.cumsum(counts.astype(np.float64))
+    target = pct / 100.0 * cum[-1]
+    idx    = min(int(np.searchsorted(cum, target)), len(values) - 1)
+    return float(values[idx])
+
+
+def rebin_counter(values: np.ndarray, counts: np.ndarray, bin_edges: np.ndarray) -> np.ndarray:
+    """
+    Re-bin an exact ``(values, counts)`` Counter into arbitrary *bin_edges*
+    (log-spaced, linear over a percentile-derived range, ...) -- exact
+    re-derivation from the Counter, no raw pixel re-read needed.
+    """
+    hist, _ = np.histogram(values, bins=bin_edges, weights=counts.astype(np.float64))
+    return hist
+
+
+def ntp_from_counter(values: np.ndarray, counts: np.ndarray, threshold: float) -> int:
+    """True-pixel count (# pixels with intensity >= *threshold*) from a ``(values, counts)`` Counter."""
+    return int(counts[values >= threshold].sum())
 
 
 def _summarize_ntp_profile(z_um: np.ndarray, ntp: np.ndarray, ntp_threshold: float) -> Dict:
     """
-    Shared by :func:`measure_tissue_ntp_profile` and
-    :func:`ntp_profile_from_histogram`: given every z's true-pixel count,
-    find the shallowest and deepest z with signal, and flag whether every z
-    in between also had signal.
+    Shared by :func:`ntp_profile_from_counters`: given every z's true-pixel
+    count, find the shallowest and deepest z with signal, and flag whether
+    every z in between also had signal.
 
     Real data showed tissue signal doesn't always start at the shallowest
     requested z -- some FOVs are blank at first and only start showing
@@ -434,130 +491,25 @@ def _summarize_ntp_profile(z_um: np.ndarray, ntp: np.ndarray, ntp_threshold: flo
     }
 
 
-def measure_tissue_ntp_profile(
-    image_path:      Path,
-    z_frame_indices: List[Tuple[int, float]],
-    threshold:       float,
-    ntp_threshold:   float,
-    frame_width:     Optional[int] = None,
-    frame_height:    Optional[int] = None,
-) -> Dict:
+def ntp_profile_from_counters(channel_counters: Dict, threshold: float, ntp_threshold: float) -> Dict:
     """
-    Read every z-plane in *z_frame_indices* for one FOV, counting true-pixels
-    (intensity >= *threshold*) directly from each raw frame -- no histogram
-    needed, since *threshold* is already fixed by the time this runs (e.g.
-    pooled and estimated across every FOV's reference frame beforehand).
-
-    Reads the WHOLE requested range rather than stopping at the first z that
-    fails *ntp_threshold*: tissue signal is not always monotonic with depth
-    in practice -- some FOVs start blank and only pick up signal partway
-    down, and a few turn off and back on more than once -- so the true first
-    and last z with signal can only be found by looking at every z. Still far
-    cheaper than a full per-file histogram: only this one channel's frames
-    are ever read (:func:`MERci.common.io.iter_image_frames`), not the whole
-    multi-color stack.
-
-    Parameters
-    ----------
-    image_path      : path to the FOV's image stack
-    z_frame_indices : ``[(frame_idx, z_um), ...]`` to scan -- frame_idx is
-                       the file's own (global, whole-stack) frame index
-    threshold       : intensity threshold a pixel must meet to count as
-                       "true tissue" (same units as the raw pixel values)
-    ntp_threshold   : a frame counts as "has tissue" while its true-pixel
-                       count (NTP) exceeds this
+    Derive a per-z true-pixel-count profile (z_first_um/z_last_um/is_contiguous,
+    see :func:`_summarize_ntp_profile`) purely from an already-computed
+    :func:`compute_channel_counters` result -- pure in-memory arithmetic
+    (:func:`ntp_from_counter` per z), no raw pixel or disk read at all, since
+    every z's exact per-intensity counts are already available.
 
     Returns
     -------
-    dict with keys:
-      z_um          : z (um) of every requested frame, in the given order
-      ntp           : true-pixel count for each of those frames
-      z_first_um    : shallowest z with NTP > ntp_threshold, or None if none did
-      z_last_um     : deepest z with NTP > ntp_threshold, or None if none did
-      is_contiguous : False if signal turned off and back on somewhere
-                       between z_first_um and z_last_um
+    dict with keys ``z_um``, ``ntp``, ``z_first_um``, ``z_last_um``, ``is_contiguous``.
     """
-    from MERci.common.io import iter_image_frames
-
-    z_frame_indices = list(z_frame_indices)
-    frame_indices   = [idx for idx, _ in z_frame_indices]
-    z_um            = np.asarray([z for _, z in z_frame_indices], dtype=np.float64)
-
-    ntp_read: List[int] = [
-        int(np.count_nonzero(frame >= threshold))
-        for _, frame in iter_image_frames(image_path, frame_indices,
-                                          frame_width=frame_width, frame_height=frame_height)
-    ]
-    ntp = np.asarray(ntp_read, dtype=np.int64)
-
-    return {"z_um": z_um, "ntp": ntp, **_summarize_ntp_profile(z_um, ntp, ntp_threshold)}
-
-
-def ntp_profile_from_histogram(
-    hist:            Dict,
-    z_frame_indices: List[Tuple[int, float]],
-    threshold:       float,
-    ntp_threshold:   float,
-) -> Dict:
-    """
-    Same full-range true-pixel-count scan as :func:`measure_tissue_ntp_profile`,
-    but sourced from an already-on-disk FULL per-frame histogram (e.g. written
-    by :func:`get_histogram`/:func:`analyze_file`) instead of raw pixels: once
-    a complete histogram already exists, extracting NTP per z from its saved
-    bins is pure in-memory arithmetic, so there's nothing left to save by
-    reading the stack at all.
-
-    ``hist["counts"]`` must be positional (row *i* is frame *i*) -- a FULL
-    histogram, not a :func:`get_histogram_for_frames` partial one.
-
-    Returns
-    -------
-    Same shape as :func:`measure_tissue_ntp_profile`'s return value.
-    """
-    bin_edges    = hist["bin_edges"]
-    passing_bins = bin_edges[:-1] >= threshold
-
-    z_frame_indices = list(z_frame_indices)
-    z_um = np.asarray([z for _, z in z_frame_indices], dtype=np.float64)
-    ntp  = np.asarray(
-        [int(hist["counts"][frame_idx][passing_bins].sum()) for frame_idx, _ in z_frame_indices],
+    z_um = channel_counters["z_um"]
+    ntp = np.asarray(
+        [ntp_from_counter(values, counts, threshold)
+         for values, counts in zip(channel_counters["values_per_z"], channel_counters["counts_per_z"])],
         dtype=np.int64,
     )
-
     return {"z_um": z_um, "ntp": ntp, **_summarize_ntp_profile(z_um, ntp, ntp_threshold)}
-
-
-def save_ntp_profile(path: Path, profile: Dict) -> None:
-    """Persist a :func:`measure_tissue_ntp_profile` result to a compressed .npz."""
-    path = Path(path).with_suffix(".npz")
-
-    def _nan_if_none(v: Optional[float]) -> float:
-        return np.nan if v is None else v
-
-    payload = {
-        "z_um":          np.asarray(profile["z_um"], dtype=np.float64),
-        "ntp":           np.asarray(profile["ntp"],  dtype=np.int64),
-        "z_first_um":    np.float64(_nan_if_none(profile["z_first_um"])),
-        "z_last_um":     np.float64(_nan_if_none(profile["z_last_um"])),
-        "is_contiguous": np.bool_(profile["is_contiguous"]),
-    }
-    _atomic_save(path, lambda tmp: np.savez_compressed(str(tmp), **payload))
-
-
-def load_ntp_profile(path: Path) -> Dict:
-    """Load a previously saved :func:`measure_tissue_ntp_profile` result."""
-    data = np.load(Path(path))
-
-    def _none_if_nan(v: float) -> Optional[float]:
-        return None if np.isnan(v) else v
-
-    return {
-        "z_um":          data["z_um"],
-        "ntp":           data["ntp"],
-        "z_first_um":    _none_if_nan(float(data["z_first_um"])),
-        "z_last_um":     _none_if_nan(float(data["z_last_um"])),
-        "is_contiguous": bool(data["is_contiguous"]),
-    }
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
