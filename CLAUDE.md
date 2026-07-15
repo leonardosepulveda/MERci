@@ -437,6 +437,26 @@ notebooks/
                                                    #   folder's size + creation date (disk_audit.py), and display
                                                    #   it sorted oldest-first and largest-first — to find whose
                                                    #   data to ask to be cleared off a shared microscope computer
+    measure_tissue_thickness.ipynb                 # per-FOV map of how deep (z, µm) real tissue signal
+                                                   #   extends, for one finished round (default: cells) — a
+                                                   #   variable-thickness sample wastes imaging time on
+                                                   #   z-planes with no tissue. Reuses each FOV's already-
+                                                   #   computed per-frame histogram (analysis.fov.get_histogram,
+                                                   #   the same routine 01_fov_scheduler.ipynb/
+                                                   #   07_cluster_submit_analysis.ipynb already run) if present,
+                                                   #   backfilling (sequentially, mirroring
+                                                   #   05_batch_sample_review.ipynb) only what's missing —
+                                                   #   true-pixel counts per z come directly off saved histogram
+                                                   #   bins, no raw pixel re-read. Binarization threshold is
+                                                   #   auto-estimated from a pooled reference-frame histogram by
+                                                   #   reusing acquisition.mosaic._estimate_bimodal_threshold's
+                                                   #   peak-finding verbatim (log10-wrapped, since this
+                                                   #   pipeline's saved histograms are linear-binned, unlike
+                                                   #   02_create_boundary_from_mosaic.ipynb's log-rebinned raw
+                                                   #   pixels). Saves a heatmap + histogram figure to a new
+                                                   #   analysis/figures/ subfolder (no prior convention existed
+                                                   #   for this) plus a results CSV. No SLURM needed — only
+                                                   #   reads/writes small histogram files unless backfilling.
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
