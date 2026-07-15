@@ -21,6 +21,7 @@ output/
 prompt_history/
 verbatim_history/
 prompt_rationales/
+SOMEDAY.md
 
 # Local, machine-specific Claude Code settings (e.g. additionalDirectories)
 .claude/settings.local.json

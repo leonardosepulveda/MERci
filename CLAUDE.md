@@ -774,6 +774,15 @@ multi-turn request). Omit `elapsed` if no submit epoch is available — never gu
 Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
 and lets all entries be scanned/grepped by metadata without reading every body.
 
+### Someday / backlog
+
+`SOMEDAY.md` (repo root, gitignored) holds work that's real but intentionally
+deferred -- e.g. a risk noticed in passing that hasn't actually caused a problem
+yet, or a task paused mid-way in favor of something more urgent. One dated entry
+per item, newest at the top. Not a replacement for `prompt_history/` -- when an
+entry is picked up, do the work as a normal logged request and delete the entry
+from `SOMEDAY.md` rather than leaving it to go stale.
+
 ### Optional: rationale docs for investigation-heavy tasks
 
 `prompt_history/`'s Summary is compressed prose with no code — good for a
