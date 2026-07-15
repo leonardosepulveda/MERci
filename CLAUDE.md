@@ -558,6 +558,31 @@ notebooks/
                                                    #   figures/ subfolder (no prior convention existed for this)
                                                    #   plus a results CSV. No SLURM needed — only reads/writes
                                                    #   small Counter cache files unless backfilling.
+                                                   #   Section 8 (what-if): given a per-FOV z cutoff
+                                                   #   (min(z_last_um + Z_MARGIN_UM, Z_MAX_TRIMMED_UM)),
+                                                   #   estimates how much less disk space/acquisition time
+                                                   #   the round would need if trimmed to that depth --
+                                                   #   reusing frame_table (section 3) and results_df
+                                                   #   (section 6) directly, no new image reads. Every
+                                                   #   frame_table color group whose z actually varies (a
+                                                   #   real focus sweep, including any blank/return-to-
+                                                   #   bead-z frames) is assumed to scale with the SAME
+                                                   #   per-FOV cutoff found for CHANNEL_NM; fixed (non-z-
+                                                   #   swept) frames are unaffected; an FOV with no detected
+                                                   #   signal is assumed to need 0 z-swept frames. Time
+                                                   #   savings use the round's HAL <exposure_time>
+                                                   #   (acquisition.configs.read_hal_exposure_time, same
+                                                   #   0.25s fallback as acquisition.dave.
+                                                   #   estimate_dave_experiment) plus an optional
+                                                   #   FRAME_OVERHEAD_S (stage/z-move, readout, ...,
+                                                   #   defaults to 0 like estimate_dave_experiment's own
+                                                   #   readout_overhead_s/per_movie_overhead_s, since none of
+                                                   #   this is measured anywhere in this pipeline).
+                                                   #   N_ROUNDS_LIKE_THIS extrapolates to the whole
+                                                   #   experiment -- defaults to 1 (this round only), NOT
+                                                   #   auto-derived from meta.n_rounds, since different
+                                                   #   rounds can have different color/z-sweep
+                                                   #   configurations. Saves a per-FOV trim CSV.
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
