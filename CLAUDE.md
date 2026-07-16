@@ -817,10 +817,26 @@ Commit and push as you go — do not leave finished work uncommitted.
 
 ## Remembering task history
 
-For **every user question/request**, log it to `prompt_history/` (a gitignored,
-local-only folder). This lets project context be reconstructed if the
-conversation history is lost. There are **two methods** depending on how the
-prompt arrives:
+This project keeps three complementary, local-only histories, all gitignored:
+
+1. **`verbatim_history/`** — *uncompressed*. The exact text Claude writes each
+   turn, appended automatically by a `Stop` hook (`.claude/hooks/
+   save_verbatim.ps1`, wired into `.claude/settings.json`). No action needed
+   from Claude — the harness captures it. One file per day,
+   `{YYYY-MM-DD}_verbatim.md`.
+2. **`prompt_history/`** — *compressed summary*. One file per request. The
+   append-only source of truth: records the verbatim prompt, plan, what was
+   done, and the dead-ends. **Never edit past entries** — their value is
+   provenance. Described in full below.
+3. **`FINDINGS.md`** — *current state*. Curated, deduplicated head: what is
+   true now, what was wrong, and the open next step. Read this first when
+   resuming.
+
+**Maintenance habit:** for **every user question/request**, log it to
+`prompt_history/` (below). When that entry changes a conclusion or project
+state, also update the relevant `FINDINGS.md` section. Keep `prompt_history/`
+append-only. `prompt_history/` itself has **two methods** depending on how
+the prompt arrives:
 
 ### Method 1 — user pre-writes the prompt as a file
 
@@ -875,6 +891,15 @@ multi-turn request). Omit `elapsed` if no submit epoch is available — never gu
 
 Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
 and lets all entries be scanned/grepped by metadata without reading every body.
+
+### FINDINGS.md — current state (tier 3)
+
+`FINDINGS.md` (repo root, gitignored) is the curated, deduplicated head of
+what's true about this project right now — not a log. Read it first when
+resuming work after a gap; update it whenever a `prompt_history/` entry
+changes a conclusion, fixes something that was wrong, or completes an open
+next step. Keep it short and current rather than exhaustive — `prompt_history/`
+is the append-only provenance trail; `FINDINGS.md` is just the live summary.
 
 ### Someday / backlog
 

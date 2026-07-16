@@ -11,6 +11,19 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"c:\\Users\\Leonardo\\Dropbox\\research\\analysis\\LineageTracing\\251225_LT027_saving_time\\MERci\\.claude\\hooks\\save_verbatim.ps1\"",
+            "timeout": 30,
+            "statusMessage": "Saving verbatim response"
+          }
+        ]
+      }
     ]
   }
 }
