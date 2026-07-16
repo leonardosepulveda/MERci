@@ -27,6 +27,8 @@ def create_mosaic(
     background: int = 0,
     pixels_per_unit: Optional[float] = None,
     flip_y: bool = False,
+    labels: Optional[Dict[int, str]] = None,
+    label_color: int = 255,
 ) -> np.ndarray:
     """
     Assemble a mosaic image from per-FOV thumbnails placed at stage coordinates.
@@ -50,12 +52,17 @@ def create_mosaic(
     pixels_per_unit : spatial scale; auto-estimated when ``None``
     flip_y          : if True, mirror the y-axis so that stage +y points up
                       in the image (depends on your microscope convention)
+    labels          : optional {fov_id: text} drawn in the top-left corner of
+                      that FOV's tile (e.g. a z value) using PIL's built-in
+                      default font -- no font file dependency. FOVs not in
+                      this dict (or omitted entirely) get no label.
+    label_color     : pixel value (0-255) for the label text
 
     Returns
     -------
     canvas : uint8 ndarray – the complete mosaic
     """
-    from PIL import Image
+    from PIL import Image, ImageDraw
     from skimage.transform import resize as sk_resize
 
     if not thumbnails:
@@ -106,7 +113,16 @@ def create_mosaic(
     # ── Save ──────────────────────────────────────────────────────────────────
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(canvas).save(str(output_path))
+    canvas_image = Image.fromarray(canvas)
+    if labels:
+        draw = ImageDraw.Draw(canvas_image)
+        for i, fov_id in enumerate(fov_ids):
+            if fov_id not in labels:
+                continue
+            x0, y0 = pixel_xs[i], pixel_ys[i]
+            draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
+        canvas = np.asarray(canvas_image)
+    canvas_image.save(str(output_path))
     log.info(
         "Mosaic saved: %s  (%d × %d px, %d FOVs)",
         output_path, canvas_w, canvas_h, len(fov_ids),

@@ -23,6 +23,11 @@ create_slurm_submit_script        — the sbatch script that runs ``merlin``,
     with every path relative to one ``$SAMPLE_DIR`` bash variable
 resolve_codebook_filename         — lib_name -> codebook filename (dispatch only)
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
+load_microscope_orientation      — read a microscope's flip_horizontal/flip_vertical/
+    transpose flags (MERlin's own defaults when absent, confirmed against
+    merlin.core.dataset.py, not assumed)
+apply_microscope_orientation     — apply those flags to a raw frame in MERlin's own
+    order (transpose, then flip_horizontal, then flip_vertical)
 MerlinAnalysisSpec / create_merlin_analysis_parameters — build MERlin's
     warp/optimize/decode/segment task-parameters JSON from a compact spec
     (which steps to include), instead of copying and hand-editing a prior
@@ -37,6 +42,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import yaml
 
 # ── Filename dispatch (ports of the old notebook's hardcoded if/elif chains) ───
@@ -116,6 +122,82 @@ def create_microscope_parameters_json(
     with open(output_path, "w", encoding="utf-8") as fh:
         json.dump(params, fh, indent=4)
     return output_path
+
+
+def load_microscope_orientation(microscope: str, microscope_dir: Path) -> Dict[str, bool]:
+    """
+    Read a microscope's ``flip_horizontal``/``flip_vertical``/``transpose``
+    flags from its MERlin microscope-parameters JSON (resolved via
+    :func:`resolve_microscope_parameters_filename`).
+
+    Defaults for an absent field match MERlin's own
+    (``merlin.core.dataset.Dataset._load_microscope_parameters``) exactly --
+    confirmed directly against that source, not assumed:
+    ``flip_horizontal=True``, ``flip_vertical=False``, ``transpose=True``.
+    A file with none of the three (e.g. ``MERFISH5.json``, which has only
+    ``microns_per_pixel``) is therefore NOT "no transform" -- it's MERlin's
+    full default orientation.
+
+    Parameters
+    ----------
+    microscope      : microscope id, e.g. ``"ST2"``
+    microscope_dir  : directory containing the microscope-parameters JSONs
+                      (``MERci/data/configs/merlin/microscope/``)
+
+    Returns
+    -------
+    dict with keys ``flip_horizontal``, ``flip_vertical``, ``transpose``
+    (all ``bool``), ready to pass as ``**kwargs`` to
+    :func:`apply_microscope_orientation`.
+    """
+    path = Path(microscope_dir) / resolve_microscope_parameters_filename(microscope)
+    params = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    return {
+        "flip_horizontal": params.get("flip_horizontal", True),
+        "flip_vertical":   params.get("flip_vertical", False),
+        "transpose":       params.get("transpose", True),
+    }
+
+
+def apply_microscope_orientation(
+    image:           np.ndarray,
+    flip_horizontal: bool = True,
+    flip_vertical:   bool = False,
+    transpose:       bool = True,
+) -> np.ndarray:
+    """
+    Re-orient a raw camera frame to match MERlin's own camera->stage
+    convention, in MERlin's own order (confirmed directly against
+    ``merlin.core.dataset.Dataset.load_image``, not assumed):
+    **transpose, then flip_horizontal (axis=1), then flip_vertical (axis=0)**
+    -- each step applied only if its flag is ``True``.
+
+    Use this (with :func:`load_microscope_orientation`'s output) anywhere a
+    raw frame needs to be displayed/assembled in the same orientation MERlin
+    itself decodes it in -- e.g. a diagnostic mosaic laid out by stage
+    position, which otherwise appears rotated/transposed relative to the
+    real tissue layout.
+
+    Parameters
+    ----------
+    image           : 2-D array, any dtype
+    flip_horizontal : mirror along axis 1 (columns)
+    flip_vertical   : mirror along axis 0 (rows)
+    transpose       : swap axes 0 and 1
+
+    Returns
+    -------
+    Re-oriented array (a view where possible; do not rely on it sharing
+    memory with *image*).
+    """
+    out = np.asarray(image)
+    if transpose:
+        out = np.transpose(out)
+    if flip_horizontal:
+        out = np.flip(out, axis=1)
+    if flip_vertical:
+        out = np.flip(out, axis=0)
+    return out
 
 
 # ── Codebook ─────────────────────────────────────────────────────────────────
