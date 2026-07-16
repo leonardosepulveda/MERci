@@ -122,6 +122,29 @@ def get_hal_frame_count(hal_config_path: Path) -> int:
     return int(el.text.strip())
 
 
+def resolve_hal_config_path(settings_dir: Path, hal_stem: str) -> Path:
+    """
+    Resolve a hal_config's path, checking *settings_dir* first (the usual
+    single-hal_config-per-round convention) and falling back to the sibling
+    ``multi_z/`` folder (where a variable-z-per-FOV round's tier hal_configs
+    -- and their co-located shutter files, kept together so HAL's own
+    ``<shutters>`` same-directory resolution keeps working -- are written
+    instead of flat ``settings/``, see notebook 05's own docstring).
+
+    Returns the first candidate that exists; the *settings_dir* candidate if
+    neither does (so a subsequent ``open()`` raises a normal, clear
+    ``FileNotFoundError`` rather than this function inventing one).
+    """
+    settings_dir = Path(settings_dir)
+    direct = settings_dir / (hal_stem + ".xml")
+    if direct.exists():
+        return direct
+    multi_z = settings_dir.parent / "multi_z" / (hal_stem + ".xml")
+    if multi_z.exists():
+        return multi_z
+    return direct
+
+
 def count_positions(positions_path: Path) -> int:
     """
     Count the FOV positions in a ``positions_*.txt`` file.
@@ -816,7 +839,7 @@ def create_dave_config(
         """Append one <movie> (resolving its HAL frame count) to *parent_loop*."""
         movie_name   = series_to_movie_name(str(row["series"]))
         hal_stem     = Path(str(row["hal_config"])).stem
-        hal_path     = settings_dir / (hal_stem + ".xml")
+        hal_path     = resolve_hal_config_path(settings_dir, hal_stem)
         try:
             n_frames = get_hal_frame_count(hal_path)
         except (FileNotFoundError, ValueError):
