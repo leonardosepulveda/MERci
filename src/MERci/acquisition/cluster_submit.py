@@ -29,8 +29,9 @@ log = logging.getLogger(__name__)
 
 # .../MERci/src/MERci/acquisition/cluster_submit.py -> .../MERci/src
 _MERCI_SRC = Path(__file__).resolve().parents[2]
-_CLI_ANALYZE_FOV        = _MERCI_SRC / "MERci" / "analysis" / "cli_analyze_fov.py"
-_CLI_BUILD_ROUND_MOSAIC = _MERCI_SRC / "MERci" / "analysis" / "cli_build_round_mosaic.py"
+_CLI_ANALYZE_FOV          = _MERCI_SRC / "MERci" / "analysis" / "cli_analyze_fov.py"
+_CLI_BUILD_ROUND_MOSAIC   = _MERCI_SRC / "MERci" / "analysis" / "cli_build_round_mosaic.py"
+_CLI_COMPUTE_TEXTURE_STATS = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -145,6 +146,48 @@ def build_round_mosaic_script(
             f"    --sample-dir {sample_dir} \\\n"
             f"    --round-id {round_id}\n"
         )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_texture_stats_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    frame_indices,
+    n_pending:          int,
+    output_path:        Path,
+    sigma:              float = 1.0,
+    array_concurrency:  int = 50,
+    mem:                str = "4gb",
+    time:               str = "00:30:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_texture",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs ``cli_compute_texture_stats.py``
+    once per pending FOV file listed in *manifest_path* -- the SLURM-array
+    counterpart to ``measure_tissue_thickness.ipynb`` section 14's own
+    sequential loop, for experiments where computing every FOV's texture
+    profile locally would take too long (each task re-reads one FOV's own
+    z-stack of full-resolution frames, unlike sections 4/11-13 which reuse
+    already-cached intensity Counters).
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    frame_indices_str = ",".join(str(i) for i in frame_indices)
+    body = (
+        f"python {_CLI_COMPUTE_TEXTURE_STATS} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir} \\\n"
+        f"    --frame-indices {frame_indices_str} \\\n"
+        f"    --sigma {sigma}\n"
+    )
     return _write_script(output_path, header + "\n" + body)
 
 
