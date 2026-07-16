@@ -473,34 +473,44 @@ def get_color_sequence_name(
 _VALID_KINDS = ("bits", "cells", "transit")
 
 
-def sequence_stem(kind: str, name: str) -> str:
+def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
     """
-    Return the shared ``{kind}-{name}`` stem for a round's filenames.
+    Return the shared ``{kind}-{name}`` stem for a round's filenames, or
+    ``{kind}-{tier}-{name}`` when *tier* is given.
 
     Parameters
     ----------
     kind : ``"bits"``, ``"cells"`` or ``"transit"``
     name : colour-sequence name from :func:`get_color_sequence_name`
            (underscore-joined, e.g. ``"blkf5_488f2_560f25_650f25_750f25"``)
+    tier : optional z-depth-tier label (e.g. ``"shallow"``, ``"deep"``) for a
+           variable-z-per-FOV experiment's per-tier hal_config/shutter/
+           frame-table set -- see notebook 05 in
+           ``lineage_tracing/merfish_multi_z/``. ``None`` (default)
+           reproduces the original ``{kind}-{name}`` stem exactly. Not
+           strictly required for uniqueness (a shorter tier's frame table
+           already yields a different colour-sequence *name*, since it has
+           fewer frames per colour), but makes the files legible to a human
+           picking the right one to load into HAL.
     """
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}.")
-    return f"{kind}-{name}"
+    return f"{kind}-{tier}-{name}" if tier else f"{kind}-{name}"
 
 
-def hal_config_filename(microscope: str, kind: str, name: str) -> str:
+def hal_config_filename(microscope: str, kind: str, name: str, tier: Optional[str] = None) -> str:
     """HAL config filename, e.g. ``hal-config-mf3-bits-blkf5_488f2_….xml``."""
-    return f"hal-config-{microscope.lower()}-{sequence_stem(kind, name)}.xml"
+    return f"hal-config-{microscope.lower()}-{sequence_stem(kind, name, tier=tier)}.xml"
 
 
-def shutter_filename(kind: str, name: str) -> str:
+def shutter_filename(kind: str, name: str, tier: Optional[str] = None) -> str:
     """Shutter filename, e.g. ``shutter-bits-blkf5_488f2_….xml``."""
-    return f"shutter-{sequence_stem(kind, name)}.xml"
+    return f"shutter-{sequence_stem(kind, name, tier=tier)}.xml"
 
 
-def frame_table_filename(kind: str, name: str) -> str:
+def frame_table_filename(kind: str, name: str, tier: Optional[str] = None) -> str:
     """Frame-table filename, e.g. ``frame-table-bits-blkf5_488f2_….csv``."""
-    return f"frame-table-{sequence_stem(kind, name)}.csv"
+    return f"frame-table-{sequence_stem(kind, name, tier=tier)}.csv"
 
 
 # ── Shutter XML ───────────────────────────────────────────────────────────────
