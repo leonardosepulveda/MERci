@@ -442,6 +442,7 @@ def create_slurm_submit_script(
     conda_env:                 str    = "merlin_cp4_env",
     conda_pkgs_dir:            str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/pkgs",
     conda_envs_path:           str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/envs",
+    allow_ragged_z_stacks:     bool   = False,
 ) -> Path:
     """
     Write the sbatch script that runs ``merlin`` for one experiment.
@@ -483,6 +484,15 @@ def create_slurm_submit_script(
                      these are written as a literal ``{sample_dir}/...`` path
     conda_pkgs_dir/conda_envs_path : lab-wide conda storage convention;
                      override if this changes
+    allow_ragged_z_stacks : passes ``--allow-ragged-z-stacks`` to ``merlin``
+                     -- a variable-z-per-FOV experiment's raw files
+                     legitimately have fewer frames than the deepest FOV's,
+                     which the CLI otherwise treats as a hard error. Requires
+                     a MERlin checkout with ragged-z-stack support (as of
+                     this writing, still in progress -- see
+                     ``prompt_history/2026_07_16_1015_variable_z_per_fov_
+                     storm_control_investigation.md``); ``False`` (default)
+                     leaves the generated script identical to before.
     """
     output_path = Path(output_path)
     if slurm_out_path is None:
@@ -491,6 +501,7 @@ def create_slurm_submit_script(
         slurm_err_path = f"merlin/slurm/err/{label}.err"
 
     sample_dir = sample_dir.rstrip("/")
+    ragged_flag = " \\\n       --allow-ragged-z-stacks" if allow_ragged_z_stacks else ""
 
     script = f"""#!/bin/bash
 #SBATCH -n 1
@@ -522,7 +533,7 @@ merlin -k "$SAMPLE_DIR/{parameters_file}" \\
        -m "$SAMPLE_DIR/{microscope_file}" \\
        -n 1000 \\
        -e {data_home} \\
-       -s "$SAMPLE_DIR/merlin" \\
+       -s "$SAMPLE_DIR/merlin"{ragged_flag} \\
        {folder_name}
 
 date +'Finished at %R.'
