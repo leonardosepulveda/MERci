@@ -391,6 +391,58 @@ notebooks/
                      #     DIFFERENT 05/07 notebooks (see below) — analyzed with fishtank, not
                      #     MERlin
                      #   (both four levels deep -> MERCI_DIR = ...parent.parent.parent.parent)
+      merfish_multi_z/ # variable-z-per-FOV variant of merfish/ (own 10-notebook sequence, see
+                     #   its own README.md and below — NOT part of the shared 8-notebook
+                     #   tumor/lineage_tracing template) — for tissue whose depth varies enough
+                     #   across the coverslip that imaging every FOV to one fixed z-depth wastes
+                     #   time/disk on thin regions. Images a full-depth DAPI (cells) round first,
+                     #   measures each FOV's real tissue depth from it, buckets FOVs into a few
+                     #   z-depth tiers (quantile binning), then images each bits round to only the
+                     #   depth its tier needs:
+                     #   01_create_hal_config_and_shutters.ipynb      # TRIMMED: cells + transit only (bits
+                     #                                                 #   deferred to 05 -- no single depth yet)
+                     #   02_create_boundary_from_mosaic.ipynb         # unchanged (optional)
+                     #   03_create_positions_from_boundaries.ipynb    # renumbered from merfish/'s 02
+                     #   04_measure_tissue_thickness.ipynb            # NEW (adapted from notebooks/misc/
+                     #                                                 #   measure_tissue_thickness.ipynb): run
+                     #                                                 #   after the cells round; exports a
+                     #                                                 #   per-FOV z table (metadata/z_per_fov_table.csv)
+                     #   05_create_hal_config_and_shutters_multi_z.ipynb # NEW: buckets FOVs into N_TIERS z-depth
+                     #                                                 #   tiers from notebook 04's z table; writes one
+                     #                                                 #   bits hal_config+shutter per tier into
+                     #                                                 #   SAMPLE_DIR/multi_z/ (combined folder --
+                     #                                                 #   HAL resolves <shutters> relative to its own
+                     #                                                 #   xml_directory, so tier hal_config+shutter
+                     #                                                 #   stay together rather than split into
+                     #                                                 #   separate hal_configs/ and shutters/ folders);
+                     #                                                 #   tags each positions-file FOV with its tier's
+                     #                                                 #   hal_config stem via a 3rd column
+                     #   06_create_round_info.ipynb                   # renumbered from merfish/'s 03; uses the
+                     #                                                 #   DEEPEST tier as the representative bits
+                     #                                                 #   hal_config; tags bits rows
+                     #                                                 #   tissue_thickness="multi" + z_lengths (every
+                     #                                                 #   tier's frame count, JSON-encoded ascending)
+                     #   07_create_dave_config.ipynb                  # renumbered from merfish/'s 04; no functional
+                     #                                                 #   changes -- create_dave_config already skips
+                     #                                                 #   the static per-movie <length>/<parameters>
+                     #                                                 #   for a tissue_thickness="multi" round (the
+                     #                                                 #   positions file's own 3rd column supplies the
+                     #                                                 #   real per-FOV values instead -- requires the
+                     #                                                 #   patched storm_control Dave in
+                     #                                                 #   ../../misc/dave_multi_z/, outside this repo)
+                     #   08_create_data_organization.ipynb            # renumbered from merfish/'s 05; picks the bits
+                     #                                                 #   frame table with the MOST frames among all
+                     #                                                 #   frame-table-bits-*.csv matches (the deepest
+                     #                                                 #   tier), so MERlin's declared z-range covers
+                     #                                                 #   every FOV
+                     #   09_create_experiment_info.ipynb              # renumbered from merfish/'s 06; bits hal_config
+                     #                                                 #   lookup (exposure time) checks both settings/
+                     #                                                 #   and multi_z/
+                     #   10_create_merlin_scripts.ipynb                # renumbered from merfish/'s 07; passes
+                     #                                                 #   --allow-ragged-z-stacks to the slurm submit
+                     #                                                 #   script whenever round_info.csv has any
+                     #                                                 #   tissue_thickness="multi" row
+                     #   (four levels deep -> MERCI_DIR = ...parent.parent.parent.parent, same as merfish/)
       # each of tumor/{epi,disk}/ and lineage_tracing/{merfish,lineage}/ contains:
       #   01_create_hal_config_and_shutters.ipynb     # imaging sequence, per-channel POWER, HAL/shutter for
       #                                                #   bits+cells, and a transit HAL config (blank frames)
@@ -628,6 +680,13 @@ order before starting the microscope. For `tumor` and `lineage_tracing` the eigh
 notebooks live one level deeper under an acquisition-type subfolder
 (`prepare_imaging/tumor/{epi,disk}/`, `prepare_imaging/lineage_tracing/{merfish,lineage}/`);
 run the set for the acquisition being prepared.
+
+`lineage_tracing/merfish_multi_z/` is a separate, **10-notebook** variant for a
+variable-z-per-FOV acquisition (imaging each FOV only as deep as its own tissue
+needs, instead of one fixed depth for every FOV) — see its own
+`notebooks/prepare_imaging/lineage_tracing/merfish_multi_z/README.md` and the
+package-layout entry above for the full per-notebook breakdown; the prose walkthrough
+below (01-07) describes the shared 8-notebook template only.
 
 **01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets each shutter `<event>`'s `<power>` (actual acquisition power, by frame colour) and the HAL `<default_power>` (channel-ordered via `power_dict_to_channel_list`). Auto-generates a compact colour name via `get_color_sequence_name` (underscore-joined tokens, e.g. `blkf5_488f2_560f25_650f25_750f25`). Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs.
 
