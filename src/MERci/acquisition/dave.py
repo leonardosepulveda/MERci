@@ -662,7 +662,19 @@ def create_dave_config(
     Parameters
     ----------
     round_info            : DataFrame with columns ``imaging_round``,
-                            ``series``, ``hal_config``
+                            ``series``, ``hal_config``, and optionally
+                            ``tissue_thickness`` (``"single"`` or ``"multi"``,
+                            absent = ``"single"``). A ``"multi"`` row's movie
+                            omits the static ``<length>``/``<parameters>``
+                            normally written from ``hal_config`` -- those
+                            fields are instead supplied per FOV by the
+                            positions file's own per-line hal_config column,
+                            via the patched Dave in ``dave_variable_z_patch/``
+                            (see ``_add_movie``'s comment for why a static
+                            value here would otherwise silently shadow it).
+                            ``hal_config`` for a "multi" row should still name
+                            a real file (e.g. the full/deepest variant) --
+                            it's simply not written into the movie template.
     positions_file        : path to ``positions_*.txt``; written into each
                             ``<loop_variable>/<file_path>``
     settings_dir          : directory containing the HAL config XML files
@@ -811,8 +823,20 @@ def create_dave_config(
             name_el.set("start", str(int(row["fov_start"])))
         if "fov_pad" in row.index and pd.notna(row.get("fov_pad")):
             name_el.set("pad", str(int(row["fov_pad"])))
-        ET.SubElement(movie, "length").text     = str(n_frames)
-        ET.SubElement(movie, "parameters").text = hal_stem
+        # A "multi" (variable-z-per-FOV) round must NOT get a static <length>/
+        # <parameters> here: nodeToDict's field extraction (storm_control's
+        # movieNodeToDict) resolves each tag via plain ElementTree.find(),
+        # which returns the FIRST match in document order. Since these two
+        # elements are written before <variable_entry>, a static value here
+        # would always shadow whatever the position itself supplies once
+        # expanded (via the positions file's per-line hal_config column and
+        # the patched Dave in dave_variable_z_patch/) -- silently discarding
+        # the whole point of per-FOV tiering. Absent tissue_thickness column
+        # (every "single" round, i.e. all of today's experiments) -> the
+        # normal, unaffected behaviour.
+        if row.get("tissue_thickness") != "multi":
+            ET.SubElement(movie, "length").text     = str(n_frames)
+            ET.SubElement(movie, "parameters").text = hal_stem
         cf = ET.SubElement(movie, "check_focus")
         ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
         ET.SubElement(cf, "focus_scan")
