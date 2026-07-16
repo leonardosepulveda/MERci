@@ -662,19 +662,31 @@ def create_dave_config(
     Parameters
     ----------
     round_info            : DataFrame with columns ``imaging_round``,
-                            ``series``, ``hal_config``, and optionally
-                            ``tissue_thickness`` (``"single"`` or ``"multi"``,
-                            absent = ``"single"``). A ``"multi"`` row's movie
-                            omits the static ``<length>``/``<parameters>``
-                            normally written from ``hal_config`` -- those
-                            fields are instead supplied per FOV by the
-                            positions file's own per-line hal_config column,
-                            via the patched Dave in ``dave_variable_z_patch/``
-                            (see ``_add_movie``'s comment for why a static
-                            value here would otherwise silently shadow it).
-                            ``hal_config`` for a "multi" row should still name
-                            a real file (e.g. the full/deepest variant) --
-                            it's simply not written into the movie template.
+                            ``series``, ``hal_config``, and optionally:
+
+                            * ``tissue_thickness`` (``"single"`` or
+                              ``"multi"``, absent = ``"single"``). A
+                              ``"multi"`` row's movie omits the static
+                              ``<length>``/``<parameters>`` normally written
+                              from ``hal_config`` -- those fields are instead
+                              supplied per FOV by the positions file's own
+                              per-line hal_config column, via the patched
+                              Dave in ``../misc/dave_multi_z/`` (see
+                              ``_add_movie``'s comment for why a static value
+                              here would otherwise silently shadow it).
+                              ``hal_config`` for a "multi" row should still
+                              name a real file (e.g. the full/deepest
+                              variant) -- it's simply not written into the
+                              movie template. When any row is "multi", the
+                              written recipe gets a leading XML comment
+                              flagging the positions-file requirement (see
+                              ``_write_dave_xml``'s ``leading_comment``).
+                            * ``z_lengths`` -- informational only (not read
+                              by this function): the round's possible frame
+                              counts, JSON-encoded ascending, e.g.
+                              ``"[10, 18, 25]"`` -- not a semicolon-joined
+                              string, so it round-trips with ``json.loads``
+                              directly.
     positions_file        : path to ``positions_*.txt``; written into each
                             ``<loop_variable>/<file_path>``
     settings_dir          : directory containing the HAL config XML files
@@ -986,7 +998,26 @@ def create_dave_config(
         for protocol in protocols:
             ET.SubElement(val, "valve_protocol").text = protocol
 
-    _write_dave_xml(root, Path(output_path))
+    # Flag a variable-z-per-FOV experiment directly in the saved file, so
+    # anyone opening the recipe (not just this function's caller) sees the
+    # positions-file requirement immediately -- easy to miss otherwise, since
+    # nothing else in the recipe itself hints that "multi" rounds need a 3rd
+    # column per position.
+    leading_comment = None
+    if "tissue_thickness" in round_info.columns and (round_info["tissue_thickness"] == "multi").any():
+        leading_comment = (
+            "VARIABLE-Z-PER-FOV EXPERIMENT.\n"
+            "The positions file(s) referenced below must carry a 3rd column\n"
+            "per line naming the HAL parameters set (hal_config filename, no\n"
+            ".xml extension) to use for that specific FOV, e.g.:\n"
+            "  1234.5,987.6,hal-config-st2-bits-shallow-750f10_650f10_560f10\n"
+            "A plain \"x,y\" line falls back to whatever HAL parameters are\n"
+            "currently active. Requires the patched Dave described in\n"
+            "misc/dave_multi_z/README.md (replaces storm_control/dave/\n"
+            "xml_generators/v2Generator.py) -- a stock Dave will silently\n"
+            "ignore the 3rd column and reuse whichever parameters were last set."
+        )
+    _write_dave_xml(root, Path(output_path), leading_comment=leading_comment)
 
     if print_estimate:
         # Frame size: explicit override wins; otherwise from the microscope (given
@@ -1380,14 +1411,30 @@ def format_experiment_estimate(est: ExperimentEstimate, per_round: bool = False)
 
 # ── XML writer ─────────────────────────────────────────────────────────────────
 
-def _write_dave_xml(root: ET.Element, output_path: Path) -> None:
-    """Serialize the recipe with indentation and CRLF line endings."""
+def _write_dave_xml(root: ET.Element, output_path: Path, leading_comment: Optional[str] = None) -> None:
+    """
+    Serialize the recipe with indentation and CRLF line endings.
+
+    Parameters
+    ----------
+    leading_comment : optional text inserted as an XML comment immediately
+        after the ``<?xml ... ?>`` declaration, before ``<recipe>`` -- each
+        line wrapped in its own ``<!-- ... -->`` so it reads cleanly even in
+        a plain text editor. ``None`` (default) writes the file exactly as
+        before.
+    """
     raw  = ET.tostring(root, encoding="utf-8")
     dom  = minidom.parseString(raw)
     text = dom.toprettyxml(indent="    ", encoding="ISO-8859-1").decode("ISO-8859-1")
 
     # Remove the extra blank line toprettyxml adds before every element
     text = re.sub(r"\n[ \t]*\n", "\n", text)
+
+    if leading_comment:
+        decl, _, rest = text.partition("\n")
+        comment_block = "\n".join(f"<!-- {line} -->" for line in leading_comment.splitlines())
+        text = f"{decl}\n{comment_block}\n{rest}"
+
     text = text.replace("\n", "\r\n")
 
     with open(output_path, "w", encoding="ISO-8859-1", newline="") as fh:
