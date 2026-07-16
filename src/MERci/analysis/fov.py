@@ -17,6 +17,9 @@ counter_mean/counter_percentile/rebin_counter/ntp_from_counter
                             – derive a mean / percentile / re-binned histogram /
                               true-pixel count from a (values, counts) Counter,
                               no raw pixel re-read needed
+two_class_separating_threshold – minimum-error threshold separating two
+                              already-labeled Counters (e.g. background vs.
+                              tissue frame), by direct misclassification count
 ntp_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
                               is_contiguous) purely from a compute_channel_counters() result
 load_stats                  – convenience: load a saved stats CSV
@@ -455,6 +458,51 @@ def rebin_counter(values: np.ndarray, counts: np.ndarray, bin_edges: np.ndarray)
     """
     hist, _ = np.histogram(values, bins=bin_edges, weights=counts.astype(np.float64))
     return hist
+
+
+def two_class_separating_threshold(
+    low_values:  np.ndarray, low_counts:  np.ndarray,
+    high_values: np.ndarray, high_counts: np.ndarray,
+) -> float:
+    """
+    Best intensity threshold separating two already-labeled pixel-intensity
+    Counters (e.g. a known-background frame vs. a known-tissue frame), rather
+    than hunting for a valley in one pooled/unlabeled histogram
+    (:func:`MERci.acquisition.mosaic._estimate_bimodal_threshold`).
+
+    Classifying every pixel with intensity > threshold as "high" and every
+    pixel <= threshold as "low", this returns the threshold minimizing total
+    misclassified pixels: pixels from *low_values* wrongly called high, plus
+    pixels from *high_values* wrongly called low. Equivalent to Otsu's
+    minimum-error criterion, but applied directly to two empirical
+    distributions with known class labels instead of fitting classes from a
+    single pooled histogram. Assumes both Counters cover the same number of
+    total pixels (true for two same-size camera frames), so no per-class
+    weighting is needed.
+
+    Parameters
+    ----------
+    low_values, low_counts   : Counter (sorted ascending values, matching
+                                pixel counts) for the LOW/background frame.
+    high_values, high_counts : Counter for the HIGH/tissue frame.
+
+    Returns
+    -------
+    threshold : float, the intensity value that minimizes total
+        misclassified pixels across both frames.
+    """
+    candidates = np.union1d(low_values, high_values)
+    # searchsorted(..., side="right") on a sorted-ascending Counter gives the
+    # count of values <= each candidate directly.
+    n_low_leq  = np.searchsorted(low_values,  candidates, side="right")
+    n_high_leq = np.searchsorted(high_values, candidates, side="right")
+    n_low_leq  = low_counts.astype(np.float64).cumsum()[n_low_leq - 1]  * (n_low_leq  > 0)
+    n_high_leq = high_counts.astype(np.float64).cumsum()[n_high_leq - 1] * (n_high_leq > 0)
+
+    total_low  = low_counts.sum()
+    n_low_gt   = total_low - n_low_leq
+    errors     = n_low_gt + n_high_leq   # false positives (low->high) + false negatives (high->low)
+    return float(candidates[int(np.argmin(errors))])
 
 
 def ntp_from_counter(values: np.ndarray, counts: np.ndarray, threshold: float) -> int:
