@@ -783,6 +783,17 @@ Camera geometry also follows from the microscope: `MFX` and `ST2` have 2304×230
 
 Acquisition type (imaging modality) is a separate, orthogonal property of the microscope — independent of the channel-mapping/camera-geometry groupings above. `MF2`, `MFX`, and `ST2` are spinning-disk confocal (`"disk"`); `MF3`, `MF4`, and `MF5` are epifluorescence (`"epi"`). `acquisition/configs.py` exposes `get_acquisition_type(microscope)` (mapping `_ACQUISITION_TYPE`), used by `prepare_imaging/05` to auto-fill the `acquisition_type` field of `experiment_info.yaml`.
 
+## Notebook coding guidelines
+
+Every notebook -- new or edited -- follows the architecture rules in
+[`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md) (repo root): separate
+calculation cells from display/plot cells, cache calculation results under
+`analysis/cache/<notebook_name>/`, skip recomputation when a valid cache
+already exists, report progress (n/total, elapsed, ETA) in every nontrivial
+calculation loop, and use explicit, legible plot font sizes. See
+`notebooks/misc/measure_tissue_thickness.ipynb` for the reference
+implementation.
+
 ## Running notebooks
 
 Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks (`reference`) are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`; the `tumor/{epi,disk}/` and `lineage_tracing/{merfish,lineage}/` notebooks are **four** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`. Do not hardcode absolute paths in notebooks.
