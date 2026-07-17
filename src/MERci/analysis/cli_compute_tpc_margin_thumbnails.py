@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-# MERci/analysis/cli_compute_ntp_margin_thumbnails.py
+# MERci/analysis/cli_compute_tpc_margin_thumbnails.py
 """
-Standalone SLURM-array-task entry point for the NTP-based z_last + margin
+Standalone SLURM-array-task entry point for the TPC-based z_last + margin
 sweep explored in ``notebooks/misc/measure_tissue_thickness.ipynb`` (section
 23) -- for ONE FOV, reads a single bounded window of frames (covering every
 candidate margin at once, same as that section's own local/sequential loop)
@@ -12,9 +12,9 @@ cell reads from.
 Not part of the public MERci import surface -- meant to be invoked directly
 as a script, one call per array task (one task per FOV):
 
-    python /path/to/SAMPLE_DIR/MERci/src/MERci/analysis/cli_compute_ntp_margin_thumbnails.py \\
-        --manifest /path/to/pending_ntp_margin_round003.csv \\
-        --output-dir /path/to/SAMPLE_DIR/analysis/cache/measure_tissue_thickness/ntp_margin_sweep/round003 \\
+    python /path/to/SAMPLE_DIR/MERci/src/MERci/analysis/cli_compute_tpc_margin_thumbnails.py \\
+        --manifest /path/to/pending_tpc_margin_round003.csv \\
+        --output-dir /path/to/SAMPLE_DIR/analysis/cache/measure_tissue_thickness/tpc_margin_sweep/round003 \\
         --frame-indices 12,13,14,... \\
         --z-um-values 6.5,7.0,7.5,... \\
         --margins 1,2,3,4,5,6,7,8,9,10 \\
@@ -40,7 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-# .../MERci/src/MERci/analysis/cli_compute_ntp_margin_thumbnails.py -> .../MERci/src
+# .../MERci/src/MERci/analysis/cli_compute_tpc_margin_thumbnails.py -> .../MERci/src
 _MERCI_SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_MERCI_SRC))
 
@@ -99,7 +99,7 @@ def main(argv=None) -> None:
             )
         task_id = int(task_id_env)
 
-    fov_id, fpath, z_last_um_ntp = _read_manifest_row(args.manifest, task_id)
+    fov_id, fpath, z_last_um_tpc = _read_manifest_row(args.manifest, task_id)
     frame_indices = [int(x) for x in args.frame_indices.split(",")]
     z_um_values   = np.array([float(x) for x in args.z_um_values.split(",")])
     margins       = [int(x) for x in args.margins.split(",")]
@@ -113,8 +113,8 @@ def main(argv=None) -> None:
 
     # Same bounded-window idea as the notebook's own local/sequential path:
     # one read spanning every margin candidate at once, not one re-read per margin.
-    pos_start   = int(np.argmin(np.abs(z_um_values - z_last_um_ntp)))
-    max_margin_target = min(z_last_um_ntp + max(margins), full_depth_um)
+    pos_start   = int(np.argmin(np.abs(z_um_values - z_last_um_tpc)))
+    max_margin_target = min(z_last_um_tpc + max(margins), full_depth_um)
     pos_end     = max(pos_start, int(np.argmin(np.abs(z_um_values - max_margin_target))))
     window_positions = list(range(pos_start, pos_end + 1))
     window_z_um      = z_um_values[pos_start:pos_end + 1]
@@ -131,7 +131,7 @@ def main(argv=None) -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for margin_um in margins:
-        z_target  = min(z_last_um_ntp + margin_um, full_depth_um)
+        z_target  = min(z_last_um_tpc + margin_um, full_depth_um)
         local_idx = int(np.argmin(np.abs(window_z_um - z_target)))
         pos       = pos_start + local_idx
         out_path  = args.output_dir / f"fov{fov_id:04d}_margin{margin_um}.npy"
