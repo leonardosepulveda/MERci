@@ -88,7 +88,7 @@ src/MERci/
                     #   eagerly, built on a lazy iter_dax_frames/iter_zarr_frames/iter_tiff_frames/
                     #   iter_image_frames counterpart that yields (frame_idx, frame) one at a time, so a
                     #   caller that might stop partway through frame_indices (e.g. a sequential scan with a
-                    #   per-frame stopping condition -- see analysis.fov.measure_tissue_ntp_profile) never
+                    #   per-frame stopping condition -- see analysis.fov.measure_tissue_tpc_profile) never
                     #   reads/decodes the frames after where it actually stopped. iter_tiff_frames uses
                     #   TiffFile.asarray(key=idx, series=None), NOT tf.pages[idx] -- a stack tifffile.imwrite
                     #   writes from one (n_frames, H, W) array is normally stored as a single IFD holding
@@ -270,12 +270,12 @@ src/MERci/
                     # threshold from ONE cached read instead of recomputing/re-reading pixels for each),
                     # save_channel_counters/load_channel_counters (persist/reload — ragged per-z arrays,
                     # stored as numpy object arrays, needing allow_pickle=True to read back),
-                    # counter_mean/counter_percentile/rebin_counter/ntp_from_counter (derive a mean /
+                    # counter_mean/counter_percentile/rebin_counter/tpc_from_counter (derive a mean /
                     # percentile / re-binned histogram over arbitrary bin_edges / true-pixel count from a
                     # (values, counts) Counter — pure arithmetic, no raw pixel re-read), 
-                    # ntp_profile_from_counters (per-z true-pixel-count profile purely from a
+                    # tpc_profile_from_counters (per-z true-pixel-count profile purely from a
                     # compute_channel_counters() result — no disk read at all once Counters are cached),
-                    # _summarize_ntp_profile (shared helper: given every z's true-pixel count, returns
+                    # _summarize_tpc_profile (shared helper: given every z's true-pixel count, returns
                     # z_first_um/z_last_um — shallowest/deepest z with signal, either None if none passed —
                     # and is_contiguous, False if signal turned off and back on somewhere in between; real
                     # data showed tissue signal isn't always monotonic with depth, so every z must be
@@ -407,7 +407,7 @@ notebooks/
                      #                                                 #   notebooks/misc/measure_tissue_
                      #                                                 #   thickness_test.ipynb (the full
                      #                                                 #   exploratory/R&D notebook: only the
-                     #                                                 #   NTP z_last calculation, a fixed
+                     #                                                 #   TPC z_last calculation, a fixed
                      #                                                 #   1um margin, a z_last-only heatmap,
                      #                                                 #   and theoretical-only time/data
                      #                                                 #   savings -- no texture-profile/
@@ -609,10 +609,10 @@ notebooks/
                                                    #   cutoff (analysis.fov.counter_percentile) — review both,
                                                    #   override THRESHOLD manually if the estimate looks wrong;
                                                    #   (2) once THRESHOLD is fixed, derive every FOV's true-
-                                                   #   pixel-count (NTP) profile directly from its cached
-                                                   #   Counter (analysis.fov.ntp_profile_from_counters /
-                                                   #   ntp_from_counter), reporting z_first_um/z_last_um (the
-                                                   #   shallowest/deepest z with NTP > NTP_THRESHOLD) and
+                                                   #   pixel-count (TPC) profile directly from its cached
+                                                   #   Counter (analysis.fov.tpc_profile_from_counters /
+                                                   #   tpc_from_counter), reporting z_first_um/z_last_um (the
+                                                   #   shallowest/deepest z with TPC > TPC_THRESHOLD) and
                                                    #   is_contiguous (False if signal turned off and back on
                                                    #   somewhere in between -- debris, folded tissue, noise; an
                                                    #   earlier version stopped scanning at the first z that

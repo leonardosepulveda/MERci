@@ -32,7 +32,7 @@ _MERCI_SRC = Path(__file__).resolve().parents[2]
 _CLI_ANALYZE_FOV            = _MERCI_SRC / "MERci" / "analysis" / "cli_analyze_fov.py"
 _CLI_BUILD_ROUND_MOSAIC     = _MERCI_SRC / "MERci" / "analysis" / "cli_build_round_mosaic.py"
 _CLI_COMPUTE_TEXTURE_STATS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
-_CLI_NTP_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_ntp_margin_thumbnails.py"
+_CLI_TPC_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_tpc_margin_thumbnails.py"
 _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_gif_frame_thumbnails.py"
 _CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
 
@@ -194,7 +194,7 @@ def build_texture_stats_array_script(
     return _write_script(output_path, header + "\n" + body)
 
 
-def build_ntp_margin_array_script(
+def build_tpc_margin_array_script(
     sample_dir:         Path,
     manifest_path:      Path,
     output_dir:         Path,
@@ -210,11 +210,11 @@ def build_ntp_margin_array_script(
     time:               str = "00:15:00",
     partition:          str = _DEFAULT_PARTITION,
     conda_env:          str = _DEFAULT_CONDA_ENV,
-    job_name:           str = "merci_ntp_margin",
+    job_name:           str = "merci_tpc_margin",
 ) -> Path:
     """
     Write an sbatch array-job script that runs
-    ``cli_compute_ntp_margin_thumbnails.py`` once per pending FOV listed in
+    ``cli_compute_tpc_margin_thumbnails.py`` once per pending FOV listed in
     *manifest_path* -- the SLURM-array counterpart to
     ``measure_tissue_thickness.ipynb`` section 23's own sequential loop,
     for experiments where reading every FOV's bounded margin-sweep window
@@ -236,7 +236,7 @@ def build_ntp_margin_array_script(
         f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
     )
     body = (
-        f"python {_CLI_NTP_MARGIN_THUMBNAILS} \\\n"
+        f"python {_CLI_TPC_MARGIN_THUMBNAILS} \\\n"
         f"    --manifest {manifest_path} \\\n"
         f"    --output-dir {output_dir} \\\n"
         f"    --frame-indices {frame_idx_str} \\\n"

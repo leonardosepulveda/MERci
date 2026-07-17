@@ -83,7 +83,7 @@ defaults until confirmed):
 - `01`: `MICROSCOPE`, `POWER`, `color_seq` for cells, z-range, `EXPOSURE_TIME`,
   `N_TRANSIT_BLANK`.
 - `03`: `TRANSIT_SPACING`, `SCAN_DIRECTION`.
-- `04`: `THRESHOLD` (tissue/background separator), `NTP_THRESHOLD`,
+- `04`: `THRESHOLD` (tissue/background separator), `TPC_THRESHOLD`,
   `Z_MARGIN_UM` — review the histograms/heatmaps before trusting the
   exported z table.
 - `05`: `N_TIERS`, `MICROSCOPE`, `POWER`, `color_seq` for bits, `EXPOSURE_TIME`

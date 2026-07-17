@@ -13,11 +13,11 @@ compute_channel_counters    – EXACT, bin-width-1 histogram ("Counter": sparse
                               (value, count) pairs via numpy.unique) of every
                               z-plane in a given channel's frame range
 save_channel_counters/load_channel_counters – persist/reload a compute_channel_counters() result
-counter_mean/counter_percentile/rebin_counter/ntp_from_counter
+counter_mean/counter_percentile/rebin_counter/tpc_from_counter
                             – derive a mean / percentile / re-binned histogram /
                               true-pixel count from a (values, counts) Counter,
                               no raw pixel re-read needed
-ntp_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
+tpc_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
                               is_contiguous) purely from a compute_channel_counters() result
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
@@ -368,7 +368,7 @@ def compute_channel_counters(
     linear-scale, an arbitrary ``[lo, hi]`` range, a percentile cutoff, a
     true-pixel count against any threshold -- can be derived later
     (:func:`rebin_counter`, :func:`counter_mean`, :func:`counter_percentile`,
-    :func:`ntp_from_counter`) without re-reading pixels or losing precision to
+    :func:`tpc_from_counter`) without re-reading pixels or losing precision to
     a fixed binning choice picked up front.
 
     Returns
@@ -457,14 +457,14 @@ def rebin_counter(values: np.ndarray, counts: np.ndarray, bin_edges: np.ndarray)
     return hist
 
 
-def ntp_from_counter(values: np.ndarray, counts: np.ndarray, threshold: float) -> int:
+def tpc_from_counter(values: np.ndarray, counts: np.ndarray, threshold: float) -> int:
     """True-pixel count (# pixels with intensity >= *threshold*) from a ``(values, counts)`` Counter."""
     return int(counts[values >= threshold].sum())
 
 
-def _summarize_ntp_profile(z_um: np.ndarray, ntp: np.ndarray, ntp_threshold: float) -> Dict:
+def _summarize_tpc_profile(z_um: np.ndarray, tpc: np.ndarray, tpc_threshold: float) -> Dict:
     """
-    Shared by :func:`ntp_profile_from_counters`: given every z's true-pixel
+    Shared by :func:`tpc_profile_from_counters`: given every z's true-pixel
     count, find the shallowest and deepest z with signal, and flag whether
     every z in between also had signal.
 
@@ -480,7 +480,7 @@ def _summarize_ntp_profile(z_um: np.ndarray, ntp: np.ndarray, ntp_threshold: flo
     dict with keys ``z_first_um``, ``z_last_um`` (``None`` if no z passed),
     ``is_contiguous`` (``True`` vacuously when no z passed).
     """
-    passing = ntp > ntp_threshold
+    passing = tpc > tpc_threshold
     if not passing.any():
         return {"z_first_um": None, "z_last_um": None, "is_contiguous": True}
     idx = np.flatnonzero(passing)
@@ -491,25 +491,25 @@ def _summarize_ntp_profile(z_um: np.ndarray, ntp: np.ndarray, ntp_threshold: flo
     }
 
 
-def ntp_profile_from_counters(channel_counters: Dict, threshold: float, ntp_threshold: float) -> Dict:
+def tpc_profile_from_counters(channel_counters: Dict, threshold: float, tpc_threshold: float) -> Dict:
     """
     Derive a per-z true-pixel-count profile (z_first_um/z_last_um/is_contiguous,
-    see :func:`_summarize_ntp_profile`) purely from an already-computed
+    see :func:`_summarize_tpc_profile`) purely from an already-computed
     :func:`compute_channel_counters` result -- pure in-memory arithmetic
-    (:func:`ntp_from_counter` per z), no raw pixel or disk read at all, since
+    (:func:`tpc_from_counter` per z), no raw pixel or disk read at all, since
     every z's exact per-intensity counts are already available.
 
     Returns
     -------
-    dict with keys ``z_um``, ``ntp``, ``z_first_um``, ``z_last_um``, ``is_contiguous``.
+    dict with keys ``z_um``, ``tpc``, ``z_first_um``, ``z_last_um``, ``is_contiguous``.
     """
     z_um = channel_counters["z_um"]
-    ntp = np.asarray(
-        [ntp_from_counter(values, counts, threshold)
+    tpc = np.asarray(
+        [tpc_from_counter(values, counts, threshold)
          for values, counts in zip(channel_counters["values_per_z"], channel_counters["counts_per_z"])],
         dtype=np.int64,
     )
-    return {"z_um": z_um, "ntp": ntp, **_summarize_ntp_profile(z_um, ntp, ntp_threshold)}
+    return {"z_um": z_um, "tpc": tpc, **_summarize_tpc_profile(z_um, tpc, tpc_threshold)}
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
