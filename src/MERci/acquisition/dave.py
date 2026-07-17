@@ -1455,7 +1455,14 @@ def _write_dave_xml(root: ET.Element, output_path: Path, leading_comment: Option
 
     if leading_comment:
         decl, _, rest = text.partition("\n")
-        comment_block = "\n".join(f"<!-- {line} -->" for line in leading_comment.splitlines())
+        # XML forbids "--" anywhere inside a comment's content (only the closing
+        # "-->" may contain it) -- this codebase's own prose convention uses "--"
+        # for asides (as leading_comment's own text does), so every line is
+        # sanitized here rather than trusting callers to avoid it. Collapsing
+        # any run of 2+ hyphens to one is a purely cosmetic change to the
+        # comment text, not a semantic one.
+        comment_lines = (re.sub(r"-{2,}", "-", line) for line in leading_comment.splitlines())
+        comment_block = "\n".join(f"<!-- {line} -->" for line in comment_lines)
         text = f"{decl}\n{comment_block}\n{rest}"
 
     text = text.replace("\n", "\r\n")
