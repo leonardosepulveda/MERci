@@ -29,9 +29,10 @@ log = logging.getLogger(__name__)
 
 # .../MERci/src/MERci/acquisition/cluster_submit.py -> .../MERci/src
 _MERCI_SRC = Path(__file__).resolve().parents[2]
-_CLI_ANALYZE_FOV          = _MERCI_SRC / "MERci" / "analysis" / "cli_analyze_fov.py"
-_CLI_BUILD_ROUND_MOSAIC   = _MERCI_SRC / "MERci" / "analysis" / "cli_build_round_mosaic.py"
-_CLI_COMPUTE_TEXTURE_STATS = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
+_CLI_ANALYZE_FOV            = _MERCI_SRC / "MERci" / "analysis" / "cli_analyze_fov.py"
+_CLI_BUILD_ROUND_MOSAIC     = _MERCI_SRC / "MERci" / "analysis" / "cli_build_round_mosaic.py"
+_CLI_COMPUTE_TEXTURE_STATS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
+_CLI_NTP_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_ntp_margin_thumbnails.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -187,6 +188,60 @@ def build_texture_stats_array_script(
         f"    --output-dir {output_dir} \\\n"
         f"    --frame-indices {frame_indices_str} \\\n"
         f"    --sigma {sigma}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_ntp_margin_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    frame_indices,
+    z_um_values,
+    margins,
+    thumbnail_size,
+    orientation:        dict,
+    n_pending:          int,
+    output_path:        Path,
+    array_concurrency:  int = 50,
+    mem:                str = "4gb",
+    time:               str = "00:15:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_ntp_margin",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_compute_ntp_margin_thumbnails.py`` once per pending FOV listed in
+    *manifest_path* -- the SLURM-array counterpart to
+    ``measure_tissue_thickness.ipynb`` section 23's own sequential loop,
+    for experiments where reading every FOV's bounded margin-sweep window
+    locally would take too long (each task still only reads its own FOV's
+    window once, covering every margin candidate).
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    frame_idx_str = ",".join(str(i) for i in frame_indices)
+    z_um_str      = ",".join(str(z) for z in z_um_values)
+    margins_str   = ",".join(str(m) for m in margins)
+    tw, th        = thumbnail_size
+    orientation_flags = " ".join(
+        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
+    )
+    body = (
+        f"python {_CLI_NTP_MARGIN_THUMBNAILS} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir} \\\n"
+        f"    --frame-indices {frame_idx_str} \\\n"
+        f"    --z-um-values {z_um_str} \\\n"
+        f"    --margins {margins_str} \\\n"
+        f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
+        f"    {orientation_flags}\n"
     )
     return _write_script(output_path, header + "\n" + body)
 
