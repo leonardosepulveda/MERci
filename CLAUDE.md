@@ -409,14 +409,35 @@ notebooks/
                      #                                                 #   exploratory/R&D notebook: only the
                      #                                                 #   TPC z_last calculation, a fixed
                      #                                                 #   1um margin, a z_last-only heatmap,
-                     #                                                 #   and theoretical-only time/data
-                     #                                                 #   savings -- no texture-profile/
-                     #                                                 #   mosaic/GIF diagnostics); run after
-                     #                                                 #   the cells round; exports a per-FOV
-                     #                                                 #   z table (metadata/z_per_fov_table.csv).
-                     #                                                 #   Section 4 (the heaviest read step)
-                     #                                                 #   has a USE_SLURM_ARRAY option, same
-                     #                                                 #   convention as the sections below
+                     #                                                 #   theoretical-only time/data savings,
+                     #                                                 #   and one verification mosaic (below)
+                     #                                                 #   -- no texture-profile/GIF diagnostics;
+                     #                                                 #   run after the cells round; exports a
+                     #                                                 #   per-FOV z table (metadata/
+                     #                                                 #   z_per_fov_table.csv). Section 4 (the
+                     #                                                 #   heaviest read step) has a
+                     #                                                 #   USE_SLURM_ARRAY option, same
+                     #                                                 #   convention as the sections below.
+                     #                                                 #   Z_MAX_TRIMMED_UM (the cap on
+                     #                                                 #   z_needed_um = z_last_um +
+                     #                                                 #   Z_MARGIN_UM) defaults to this round's
+                     #                                                 #   own actual max imaged z for
+                     #                                                 #   CHANNEL_NM -- the true physical
+                     #                                                 #   ceiling -- not z_last_um.max() +
+                     #                                                 #   Z_MARGIN_UM, which could otherwise
+                     #                                                 #   push a FOV's z_needed_um past a z
+                     #                                                 #   that was never actually imaged. A
+                     #                                                 #   verification mosaic renders each
+                     #                                                 #   FOV's actual frame at the largest
+                     #                                                 #   available z-step at or below its own
+                     #                                                 #   z_needed_um (floor, not nearest, so
+                     #                                                 #   the rendered/trimmed depth never
+                     #                                                 #   overshoots); FOVs with no detected
+                     #                                                 #   signal at all are still rendered (at
+                     #                                                 #   the round's deepest available z) and
+                     #                                                 #   flagged with a white border, since
+                     #                                                 #   notebook 05 assigns them the deepest
+                     #                                                 #   tier as a conservative default.
                      #   05_create_hal_config_and_shutters_multi_z.ipynb # NEW: buckets FOVs into N_TIERS z-depth
                      #                                                 #   tiers from notebook 04's z table; writes one
                      #                                                 #   bits hal_config+shutter per tier into
