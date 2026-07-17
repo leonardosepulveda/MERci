@@ -569,31 +569,68 @@ notebooks/
     extract_source_bead_frames.ipynb               # run at the source scope: write a compact per-FOV bead-only
                                                    #   .tiff (+ compact frame table) so only the bead frames move
                                                    #   to the NAS for align_fovs Part 2
-    calculate_stage_drift.ipynb                    # measure same-microscope stage drift since an already-imaged
-                                                   #   round (cells, hybs/H0X, ...) and correct the whole positions
-                                                   #   file for it. Part A: pick the reference round (lists every
-                                                   #   round in round_info.csv), take its first N_FOVS FOVs
-                                                   #   (default 3), and build a tiny bead-only "drift" round for
-                                                   #   just those positions -- a positions_*_drift.txt, a HAL
-                                                   #   config/shutter imaging the reference round's own bead colour
-                                                   #   (auto-detected, e.g. 488) + one blank frame at its own
-                                                   #   bead_z, and a minimal single-loop (no-fluidics) Dave recipe
-                                                   #   -- all written to SAMPLE_DIR/stage_drift/<reference round's
-                                                   #   own data_dir subpath>/ (e.g. stage_drift/cells/,
+    stage_drift_beads.ipynb / stage_drift_dapi.ipynb  # measure same-microscope stage drift
+                                                   #   since an already-imaged round (cells, hybs/H0X, ...) and
+                                                   #   correct the whole positions file for it. Two sibling
+                                                   #   notebooks, split because the registration channel choice is
+                                                   #   a real fork, not just a parameter default: `_beads` registers
+                                                   #   on the reference round's own auto-detected bead colour (e.g.
+                                                   #   488) at its own bead_z (`acquisition.alignment.
+                                                   #   select_bead_frame`); `_dapi` registers on an explicit
+                                                   #   REGISTRATION_COLOR_NM (default 405/DAPI) at a user-specified
+                                                   #   REGISTRATION_Z_UM instead, for when the bead channel proves
+                                                   #   too dim/unreliable even after hot-pixel removal. Both share:
+                                                   #   Part A -- pick the reference round (lists every round in
+                                                   #   round_info.csv; REFERENCE_FRAME_TABLE_PATH can point at a
+                                                   #   specific frame-table CSV instead of auto-resolving one from
+                                                   #   the round's hal_config, for when metadata/ has drifted out
+                                                   #   of sync with the real frame table used at acquisition time),
+                                                   #   take FOVs FIRST_FOV..FIRST_FOV+N_FOVS-1 (in the original
+                                                   #   experiment's global fov_id numbering; default 0..2) and
+                                                   #   build a tiny single-colour "drift" round for just those
+                                                   #   positions -- a positions_*_drift.txt, a HAL config/shutter,
+                                                   #   and a minimal single-loop (no-fluidics) Dave recipe -- all
+                                                   #   written to SAMPLE_DIR/stage_drift/<reference round's own
+                                                   #   data_dir subpath>/ (e.g. stage_drift/cells/,
                                                    #   stage_drift/hybs/H01/), a folder at the same level as
-                                                   #   MERci/. Run the Dave recipe on the microscope, then Part B:
-                                                   #   registers each new bead image onto its reference bead frame
-                                                   #   via skimage.registration.phase_cross_correlation
-                                                   #   (acquisition.alignment.phase_drift -- the same primitive
-                                                   #   fishtank's align_experiments uses; MERlin has no equivalent,
-                                                   #   reused rather than reimplemented), combines the per-FOV
-                                                   #   shifts into one translation (median, reporting spread as a
-                                                   #   QC check -- DRIFT_SIGN flags that the pixel->stage-um sign
-                                                   #   convention is unverified per microscope, same caveat as
+                                                   #   MERci/. The new round's series pattern/file numbering is
+                                                   #   built fresh from dave.fov_pad_width(N_FOVS) and LOCAL
+                                                   #   0-based indices (plus explicit fov_start/fov_pad row columns
+                                                   #   for the patched Dave, misc/dave_multi_z/) -- NOT the
+                                                   #   reference round's own (differently-sized) series pattern,
+                                                   #   since Dave numbers each loop's movies with a counter that
+                                                   #   resets to 0 and zero-pads only as wide as that loop's own
+                                                   #   position count (confirmed against storm_control's
+                                                   #   v2Generator.py, prompt_history/
+                                                   #   2026_07_08_1557_investigate_dave_fov_index_range.md) --
+                                                   #   reusing the original pad width silently predicted filenames
+                                                   #   Dave never actually wrote. Run the Dave recipe on the
+                                                   #   microscope, then Part B: registers each new frame onto its
+                                                   #   reference frame via skimage.registration.
+                                                   #   phase_cross_correlation (acquisition.alignment.phase_drift
+                                                   #   -- the same primitive fishtank's align_experiments uses;
+                                                   #   MERlin has no equivalent, reused rather than reimplemented)
+                                                   #   after acquisition.alignment.remove_hot_pixels (ported from a
+                                                   #   validated fix to the identical bug in this project's own
+                                                   #   fishtank fork -- a fixed hot/dead camera pixel, identical in
+                                                   #   every frame, dominates phase_cross_correlation when the real
+                                                   #   signal is dim and pins the recovered shift to exactly
+                                                   #   [0, 0]; local-median outlier removal catches isolated
+                                                   #   pixel-scale spikes but not a broader fixed pattern like
+                                                   #   vignetting), combines the per-FOV shifts into one
+                                                   #   translation (median, reporting spread as a QC check --
+                                                   #   DRIFT_SIGN flags that the pixel->stage-um sign convention is
+                                                   #   unverified per microscope, same caveat as
                                                    #   alignment.compute_fov_drifts's own sign_x/sign_y), and
                                                    #   applies it to EVERY FOV in the experiment's positions file
                                                    #   (not just the N sampled), writing a drift-corrected
-                                                   #   positions file for the next real imaging round. Adds a
+                                                   #   positions file for the next real imaging round. Each has its
+                                                   #   own section-8 diagnostic: `_beads` compares bead frames
+                                                   #   across cells + bits rounds (skipping any round with no
+                                                   #   auto-detectable bead colour, rather than crashing); `_dapi`
+                                                   #   instead shows the exact reference/new frame pair side by
+                                                   #   side (a cross-round comparison doesn't apply -- bits rounds
+                                                   #   typically carry no DAPI/tissue channel at all). Adds a
                                                    #   "drift" hal_config/shutter/frame-table kind (configs.py
                                                    #   _VALID_KINDS) alongside bits/cells/transit.
     verify_kilroy_protocol_consistency.ipynb       # verify a Kilroy config's protocols only reference defined
