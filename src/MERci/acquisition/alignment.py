@@ -36,6 +36,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.ndimage import median_filter
 from scipy.optimize import minimize
 from shapely.affinity import scale as _shp_scale, translate as _shp_translate
 from shapely.geometry import Polygon
@@ -453,6 +454,76 @@ def apply_orientation(img: np.ndarray, orient: str = "none") -> np.ndarray:
     raise ValueError(f"orient must be one of {_ORIENTATIONS}, got {orient!r}")
 
 
+def remove_hot_pixels(
+    img:         np.ndarray,
+    size:        int   = 3,
+    ratio:       float = 5.0,
+    sigma_floor: float = 5.0,
+) -> np.ndarray:
+    """
+    Replace isolated hot/dead camera pixels with their local median, before
+    registration (:func:`phase_drift`).
+
+    Hot/defective pixels sit at a FIXED detector position, so they are
+    identical in every frame and dominate ``phase_cross_correlation`` --
+    pinning the estimated drift to exactly ``[0, 0]`` whenever the real
+    fiducial (bead) signal is dim. They are isolated single-pixel spikes far
+    above the *local* median; a real bead spans several pixels (the PSF) and
+    so sits on a bright neighbourhood with a value close to its own local
+    median. That difference is what lets this drop hot pixels while leaving
+    beads untouched. Ported from a validated fix to the same bug in fishtank
+    (``jweissmanlab/fishtank``'s ``detect_spots_script.py``, which this
+    module's ``phase_drift`` already mirrors for its registration primitive) --
+    confirmed on real data there: the detector flags ~10 isolated hot pixels
+    per frame and zero real bead pixels, and drift recovered after removal
+    matches whether only the saturated hot pixel or all of them are removed.
+
+    Why not just clip at a fixed maximum (e.g. the dtype max)? A fixed cutoff
+    is detector-specific and only catches FULLY SATURATED pixels; a hot pixel
+    reading e.g. 12000 on a ~100 background is just as disruptive but slips
+    through. The local-median ratio test below is intensity-agnostic and
+    catches saturated and sub-saturation hot pixels alike, without flagging a
+    real (bright but spatially extended) bead.
+
+    Parameters
+    ----------
+    img         : 2-D registration image (a single bead/fiducial frame)
+    size        : side length (pixels) of the square window for the local
+                  median; 3 isolates single-pixel spikes -- a larger window
+                  also catches small clusters but risks eroding faint beads
+    ratio       : a pixel is flagged when its value exceeds ``ratio`` times its
+                  local median. Hot pixels sit on background, so this ratio is
+                  large (~10-600 observed); real bead cores sit on a bright
+                  neighbourhood, so theirs is ~1-2. 5.0 separates them.
+    sigma_floor : also require the excess over the local median to exceed
+                  ``sigma_floor`` times the background-noise standard
+                  deviation, so faint noise blips on near-zero background
+                  (where the ratio alone can be large) are not flagged. Units:
+                  noise sigma.
+
+    Returns
+    -------
+    Copy of *img* with hot pixels replaced by their local median (returned
+    unchanged, no copy, if none are flagged).
+    """
+    local_median = median_filter(img, size=size, mode="nearest").astype(np.float64)
+    excess = img.astype(np.float64) - local_median   # height of each pixel above its neighbours
+
+    # Robust background-noise scale from the spread of `excess`. MAD = median
+    # absolute deviation; unlike the plain std it is not inflated by the few
+    # hot pixels / bead edges we are hunting. 1.4826 = 1 / norm.ppf(0.75)
+    # converts a MAD to a Gaussian standard deviation.
+    mad = float(np.median(np.abs(excess - np.median(excess))))
+    noise_sigma = 1.4826 * mad
+
+    # Hot pixel = isolated spike (value >> local median) that also clears the noise floor.
+    hot = (img > ratio * np.maximum(local_median, 1.0)) & (excess > sigma_floor * noise_sigma)
+    if hot.any():
+        img = img.copy()
+        img[hot] = local_median[hot].astype(img.dtype)
+    return img
+
+
 def phase_drift(
     ref2d:           np.ndarray,
     mov2d:           np.ndarray,
@@ -482,6 +553,43 @@ def phase_drift(
     return np.asarray(shift, dtype=float), float(error)
 
 
+def _drift_one_pair(args: tuple) -> dict:
+    """
+    Picklable per-pair worker for :func:`compute_fov_drifts`'s
+    ``ProcessPoolExecutor`` -- takes a single positional tuple (rather than
+    the function's own keyword args) since ``Executor.map`` passes one
+    argument per call.
+    """
+    (fov_id, ref_path, mov_path, ref_frame, mov_frame, mov_orient,
+     upsample_factor, pixel_size_um, sign_x, sign_y, frame_width, frame_height) = args
+    from MERci.common.io import read_image
+
+    ref_stack = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
+    mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
+    try:
+        # remove_hot_pixels first: a fixed hot/dead detector pixel is identical
+        # in both frames and dominates phase_cross_correlation when the real
+        # bead signal is dim, pinning the estimate to [0, 0] (see its
+        # docstring) -- so both images get it before registration, not just
+        # the moving one, in case the reference frame carries its own.
+        shift, error = phase_drift(
+            remove_hot_pixels(ref_stack[ref_frame]),
+            remove_hot_pixels(apply_orientation(mov_stack[mov_frame], mov_orient)),
+            upsample_factor,
+        )
+    finally:
+        del ref_stack, mov_stack
+    dy, dx = float(shift[0]), float(shift[1])
+    return {
+        "fov":        int(fov_id),
+        "dy_px":      dy,
+        "dx_px":      dx,
+        "error":      error,
+        "drift_x_um": dx * pixel_size_um * sign_x,
+        "drift_y_um": dy * pixel_size_um * sign_y,
+    }
+
+
 def compute_fov_drifts(
     pairs:           Sequence[Tuple[int, "Path", "Path"]],
     ref_frame:       int,
@@ -494,6 +602,7 @@ def compute_fov_drifts(
     mov_orient:      str   = "none",
     frame_width:     Optional[int] = None,
     frame_height:    Optional[int] = None,
+    n_workers:       Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Measure per-FOV bead drift between paired source and target image files.
@@ -517,35 +626,30 @@ def compute_fov_drifts(
     notebook's quiver plot is for exactly this check). Defaults assume image +x→
     stage +x and image +y→stage +y.
 
+    Each pair reads two full image stacks and runs phase-cross-correlation --
+    both I/O- and CPU-bound -- so pairs are processed in parallel across a
+    ``ProcessPoolExecutor`` (*n_workers*; ``None`` uses its own default,
+    normally ``os.cpu_count()``).
+
     Returns
     -------
-    DataFrame with columns ``fov, dy_px, dx_px, error, drift_x_um, drift_y_um``.
+    DataFrame with columns ``fov, dy_px, dx_px, error, drift_x_um, drift_y_um``,
+    in the same order as *pairs*.
     """
-    from MERci.common.io import read_image
+    columns = ["fov", "dy_px", "dx_px", "error", "drift_x_um", "drift_y_um"]
+    pairs = list(pairs)
+    if not pairs:
+        return pd.DataFrame(columns=columns)
 
-    rows = []
-    for fov_id, ref_path, mov_path in pairs:
-        ref_stack = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
-        mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
-        try:
-            shift, error = phase_drift(
-                ref_stack[ref_frame],
-                apply_orientation(mov_stack[mov_frame], mov_orient),
-                upsample_factor,
-            )
-        finally:
-            del ref_stack, mov_stack
-        dy, dx = float(shift[0]), float(shift[1])
-        rows.append({
-            "fov":        int(fov_id),
-            "dy_px":      dy,
-            "dx_px":      dx,
-            "error":      error,
-            "drift_x_um": dx * pixel_size_um * sign_x,
-            "drift_y_um": dy * pixel_size_um * sign_y,
-        })
-    return pd.DataFrame(rows, columns=["fov", "dy_px", "dx_px", "error",
-                                       "drift_x_um", "drift_y_um"])
+    args_list = [
+        (fov_id, ref_path, mov_path, ref_frame, mov_frame, mov_orient,
+         upsample_factor, pixel_size_um, sign_x, sign_y, frame_width, frame_height)
+        for fov_id, ref_path, mov_path in pairs
+    ]
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        rows = list(pool.map(_drift_one_pair, args_list))
+    return pd.DataFrame(rows, columns=columns)
 
 
 # ── Bead-detection + point-set registration (modality-robust) ───────────────
@@ -624,6 +728,44 @@ def register_point_translation(
     return {"dy": float(dy), "dx": float(dx), "n_inliers": int(len(inl)), "score": float(score)}
 
 
+def _drift_one_pair_beads(args: tuple) -> dict:
+    """
+    Picklable per-pair worker for :func:`compute_fov_drifts_beads`'s
+    ``ProcessPoolExecutor`` -- same one-tuple-argument convention as
+    :func:`_drift_one_pair`.
+    """
+    (fov, ref_path, mov_path, mov_orient, min_dist_px, thresh_sigma, max_beads,
+     max_shift_px, bin_px, pixel_size_um, sign_x, sign_y, frame_width, frame_height) = args
+    from MERci.common.io import read_image
+
+    def _proj(stack):
+        a = np.asarray(stack)
+        return a.max(0) if a.ndim == 3 else a
+
+    ref = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
+    mov = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
+    try:
+        ref2d = _proj(ref)
+        mov2d = apply_orientation(_proj(mov), mov_orient)
+    finally:
+        del ref, mov
+    sp = detect_beads(ref2d, min_dist_px, thresh_sigma, max_beads)
+    tp = detect_beads(mov2d, min_dist_px, thresh_sigma, max_beads)
+    reg = register_point_translation(sp, tp, max_shift_px, bin_px)
+    dy, dx = reg["dy"], reg["dx"]
+    return {
+        "fov":        int(fov),
+        "dy_px":      dy,
+        "dx_px":      dx,
+        "n_src":      int(len(sp)),
+        "n_tgt":      int(len(tp)),
+        "n_inliers":  reg["n_inliers"],
+        "score":      reg["score"],
+        "drift_x_um": dx * pixel_size_um * sign_x if np.isfinite(dx) else np.nan,
+        "drift_y_um": dy * pixel_size_um * sign_y if np.isfinite(dy) else np.nan,
+    }
+
+
 def compute_fov_drifts_beads(
     pairs:         Sequence[Tuple[int, "Path", "Path"]],
     pixel_size_um: float,
@@ -639,6 +781,7 @@ def compute_fov_drifts_beads(
     frame_width:   Optional[int] = None,
     frame_height:  Optional[int] = None,
     progress_every: int  = 50,
+    n_workers:      Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Per-FOV bead drift by detection + point-set registration (modality-robust
@@ -649,41 +792,33 @@ def compute_fov_drifts_beads(
     the point sets with :func:`register_point_translation`, and converts the
     pixel shift to target stage µm.
 
-    Returns a DataFrame with columns ``fov, dy_px, dx_px, n_src, n_tgt,
-    n_inliers, score, drift_x_um, drift_y_um``. A low ``score`` means the bead
-    sets did not find a common shift (e.g. the two scopes imaged different beads).
+    Each pair reads two full stacks and runs bead detection + registration --
+    both I/O- and CPU-bound -- so pairs are processed in parallel across a
+    ``ProcessPoolExecutor`` (*n_workers*; ``None`` uses its own default,
+    normally ``os.cpu_count()``); *progress_every* still logs every N
+    completed pairs.
+
+    Returns a DataFrame (rows in the same order as *pairs*) with columns
+    ``fov, dy_px, dx_px, n_src, n_tgt, n_inliers, score, drift_x_um,
+    drift_y_um``. A low ``score`` means the bead sets did not find a common
+    shift (e.g. the two scopes imaged different beads).
     """
-    from MERci.common.io import read_image
+    columns = ["fov", "dy_px", "dx_px", "n_src", "n_tgt",
+               "n_inliers", "score", "drift_x_um", "drift_y_um"]
+    pairs = list(pairs)
+    if not pairs:
+        return pd.DataFrame(columns=columns)
 
-    def _proj(stack):
-        a = np.asarray(stack)
-        return a.max(0) if a.ndim == 3 else a
-
+    args_list = [
+        (fov, ref_path, mov_path, mov_orient, min_dist_px, thresh_sigma, max_beads,
+         max_shift_px, bin_px, pixel_size_um, sign_x, sign_y, frame_width, frame_height)
+        for fov, ref_path, mov_path in pairs
+    ]
+    from concurrent.futures import ProcessPoolExecutor
     rows = []
-    for k, (fov, ref_path, mov_path) in enumerate(pairs):
-        ref = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
-        mov = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
-        try:
-            ref2d = _proj(ref)
-            mov2d = apply_orientation(_proj(mov), mov_orient)
-        finally:
-            del ref, mov
-        sp = detect_beads(ref2d, min_dist_px, thresh_sigma, max_beads)
-        tp = detect_beads(mov2d, min_dist_px, thresh_sigma, max_beads)
-        reg = register_point_translation(sp, tp, max_shift_px, bin_px)
-        dy, dx = reg["dy"], reg["dx"]
-        rows.append({
-            "fov":        int(fov),
-            "dy_px":      dy,
-            "dx_px":      dx,
-            "n_src":      int(len(sp)),
-            "n_tgt":      int(len(tp)),
-            "n_inliers":  reg["n_inliers"],
-            "score":      reg["score"],
-            "drift_x_um": dx * pixel_size_um * sign_x if np.isfinite(dx) else np.nan,
-            "drift_y_um": dy * pixel_size_um * sign_y if np.isfinite(dy) else np.nan,
-        })
-        if progress_every and (k + 1) % progress_every == 0:
-            log.info("bead drift: %d/%d FOVs done", k + 1, len(pairs))
-    return pd.DataFrame(rows, columns=["fov", "dy_px", "dx_px", "n_src", "n_tgt",
-                                       "n_inliers", "score", "drift_x_um", "drift_y_um"])
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        for k, row in enumerate(pool.map(_drift_one_pair_beads, args_list)):
+            rows.append(row)
+            if progress_every and (k + 1) % progress_every == 0:
+                log.info("bead drift: %d/%d FOVs done", k + 1, len(pairs))
+    return pd.DataFrame(rows, columns=columns)
