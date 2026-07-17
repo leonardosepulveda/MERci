@@ -842,8 +842,17 @@ def create_dave_config(
         hal_path     = resolve_hal_config_path(settings_dir, hal_stem)
         try:
             n_frames = get_hal_frame_count(hal_path)
-        except (FileNotFoundError, ValueError):
+        except (FileNotFoundError, ValueError) as exc:
             n_frames = 0
+            # Previously silent: a movie written with <length>0</length> isn't just
+            # a cosmetic gap in estimate_dave_experiment's time/storage totals --
+            # it's a zero-frame movie in the REAL recipe Dave would run. Surface it
+            # immediately so a missing/misnamed hal_config is never mistaken for
+            # "0 s, 0 B this round" being a legitimate estimate.
+            print(f"[create_dave_config] WARNING: could not read <frames> from "
+                  f"{hal_path} ({exc}) -- movie {movie_name!r} written with "
+                  f"<length>0</length>. Check that round_info.csv's hal_config "
+                  f"column ({hal_stem!r}) matches a real file in {settings_dir}.")
 
         movie   = ET.SubElement(parent_loop, "movie")
         name_el = ET.SubElement(movie, "name")
