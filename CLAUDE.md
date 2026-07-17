@@ -435,9 +435,10 @@ notebooks/
                      #                                                 #   overshoots); FOVs with no detected
                      #                                                 #   signal at all are still rendered (at
                      #                                                 #   the round's deepest available z) and
-                     #                                                 #   flagged with a white border, since
-                     #                                                 #   notebook 05 assigns them the deepest
-                     #                                                 #   tier as a conservative default.
+                     #                                                 #   flagged with a white border, so this
+                     #                                                 #   mosaic can be used to confirm they are
+                     #                                                 #   real tissue-free (e.g. border) FOVs
+                     #                                                 #   before notebook 05 assigns them a tier.
                      #   05_create_hal_config_and_shutters_multi_z.ipynb # NEW: buckets FOVs into N_TIERS z-depth
                      #                                                 #   tiers from notebook 04's z table; writes one
                      #                                                 #   bits hal_config+shutter per tier into
