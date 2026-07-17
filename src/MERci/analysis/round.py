@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple  # noqa: F401 (Optional/List used in annotations)
+from typing import Dict, List, Optional, Set, Tuple  # noqa: F401 (Optional/List used in annotations)
 
 import numpy as np
 
@@ -29,6 +29,9 @@ def create_mosaic(
     flip_y: bool = False,
     labels: Optional[Dict[int, str]] = None,
     label_color: int = 255,
+    highlight_fov_ids: Optional[Set[int]] = None,
+    highlight_color: int = 255,
+    highlight_width: int = 3,
 ) -> np.ndarray:
     """
     Assemble a mosaic image from per-FOV thumbnails placed at stage coordinates.
@@ -57,10 +60,20 @@ def create_mosaic(
                       default font -- no font file dependency. FOVs not in
                       this dict (or omitted entirely) get no label.
     label_color     : pixel value (0-255) for the label text
+    highlight_fov_ids : optional set of FOV ids to draw a rectangle border
+                      around (e.g. to flag FOVs classified as a different
+                      category than the rest, for a visual sanity check).
+                      Stays single-channel grayscale like the rest of the
+                      mosaic (source data here is grayscale, not RGB) --
+                      the border is a pixel intensity, not a color.
+    highlight_color : pixel value (0-255) for the highlight border (default
+                      255 = white, for max contrast against typically dim
+                      background/tissue thumbnails)
+    highlight_width : border thickness in pixels
 
     Returns
     -------
-    canvas : uint8 ndarray – the complete mosaic
+    canvas : uint8 ndarray -- (H, W) grayscale
     """
     from PIL import Image, ImageDraw
     from skimage.transform import resize as sk_resize
@@ -114,13 +127,16 @@ def create_mosaic(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas_image = Image.fromarray(canvas)
-    if labels:
+    if labels or highlight_fov_ids:
         draw = ImageDraw.Draw(canvas_image)
         for i, fov_id in enumerate(fov_ids):
-            if fov_id not in labels:
-                continue
             x0, y0 = pixel_xs[i], pixel_ys[i]
-            draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
+            if highlight_fov_ids and fov_id in highlight_fov_ids:
+                x1 = min(x0 + tw, canvas_w) - 1
+                y1 = min(y0 + th, canvas_h) - 1
+                draw.rectangle([x0, y0, x1, y1], outline=highlight_color, width=highlight_width)
+            if labels and fov_id in labels:
+                draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
         canvas = np.asarray(canvas_image)
     canvas_image.save(str(output_path))
     log.info(
