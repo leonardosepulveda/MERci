@@ -463,14 +463,14 @@ def get_color_sequence_name(
 
 # ── Filename naming rule ────────────────────────────────────────────────────────
 # A single round's three artefacts (HAL config, shutter, frame table) share one
-# stem ``{kind}-{name}`` where *kind* is ``bits`` / ``cells`` / ``transit`` and
-# *name* is the underscore-joined colour-sequence name from
+# stem ``{kind}-{name}`` where *kind* is ``bits`` / ``cells`` / ``transit`` /
+# ``drift`` and *name* is the underscore-joined colour-sequence name from
 # ``get_color_sequence_name`` (e.g. ``blkf5_488f2_560f25_650f25_750f25``). Hyphens
 # delimit the structural prefix; underscores live only inside *name*. This keeps
 # the analysis-side resolver ``find_frame_table_for_hal_config`` a simple
 # ``shutter-`` -> ``frame-table-`` rewrite.
 
-_VALID_KINDS = ("bits", "cells", "transit")
+_VALID_KINDS = ("bits", "cells", "transit", "drift")
 
 
 def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
@@ -480,7 +480,8 @@ def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
 
     Parameters
     ----------
-    kind : ``"bits"``, ``"cells"`` or ``"transit"``
+    kind : ``"bits"``, ``"cells"``, ``"transit"``, or ``"drift"`` (a stage-
+           drift-check round -- see ``notebooks/misc/calculate_stage_drift.ipynb``)
     name : colour-sequence name from :func:`get_color_sequence_name`
            (underscore-joined, e.g. ``"blkf5_488f2_560f25_650f25_750f25"``)
     tier : optional z-depth-tier label (e.g. ``"shallow"``, ``"deep"``) for a

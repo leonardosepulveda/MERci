@@ -547,6 +547,33 @@ notebooks/
     extract_source_bead_frames.ipynb               # run at the source scope: write a compact per-FOV bead-only
                                                    #   .tiff (+ compact frame table) so only the bead frames move
                                                    #   to the NAS for align_fovs Part 2
+    calculate_stage_drift.ipynb                    # measure same-microscope stage drift since an already-imaged
+                                                   #   round (cells, hybs/H0X, ...) and correct the whole positions
+                                                   #   file for it. Part A: pick the reference round (lists every
+                                                   #   round in round_info.csv), take its first N_FOVS FOVs
+                                                   #   (default 3), and build a tiny bead-only "drift" round for
+                                                   #   just those positions -- a positions_*_drift.txt, a HAL
+                                                   #   config/shutter imaging the reference round's own bead colour
+                                                   #   (auto-detected, e.g. 488) + one blank frame at its own
+                                                   #   bead_z, and a minimal single-loop (no-fluidics) Dave recipe
+                                                   #   -- all written to SAMPLE_DIR/stage_drift/<reference round's
+                                                   #   own data_dir subpath>/ (e.g. stage_drift/cells/,
+                                                   #   stage_drift/hybs/H01/), a folder at the same level as
+                                                   #   MERci/. Run the Dave recipe on the microscope, then Part B:
+                                                   #   registers each new bead image onto its reference bead frame
+                                                   #   via skimage.registration.phase_cross_correlation
+                                                   #   (acquisition.alignment.phase_drift -- the same primitive
+                                                   #   fishtank's align_experiments uses; MERlin has no equivalent,
+                                                   #   reused rather than reimplemented), combines the per-FOV
+                                                   #   shifts into one translation (median, reporting spread as a
+                                                   #   QC check -- DRIFT_SIGN flags that the pixel->stage-um sign
+                                                   #   convention is unverified per microscope, same caveat as
+                                                   #   alignment.compute_fov_drifts's own sign_x/sign_y), and
+                                                   #   applies it to EVERY FOV in the experiment's positions file
+                                                   #   (not just the N sampled), writing a drift-corrected
+                                                   #   positions file for the next real imaging round. Adds a
+                                                   #   "drift" hal_config/shutter/frame-table kind (configs.py
+                                                   #   _VALID_KINDS) alongside bits/cells/transit.
     verify_kilroy_protocol_consistency.ipynb       # verify a Kilroy config's protocols only reference defined
                                                    #   valve/pump commands; fuzzy-suggest + (after confirm) rewrite
                                                    #   mismatches in place (backup to *.bak), via kilroy.py helpers
