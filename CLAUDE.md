@@ -652,6 +652,22 @@ notebooks/
                                                    #   cluster_submit.build_gif_frames_array_script) --
                                                    #   generalizes measure_tissue_thickness_test.ipynb's
                                                    #   own (cells-round/DAPI-only) GIF section
+    visualize_channel_zsweep.ipynb                 # standalone (no SAMPLE_DIR/round_info context needed,
+                                                   #   unlike create_mosaic_gif.ipynb above) diagnostic: given
+                                                   #   ONE image file (dax/tiff/zarr) + its frame table CSV,
+                                                   #   builds (1) a side-by-side animated GIF, one panel per
+                                                   #   channel, sweeping z from shallowest to deepest -- each
+                                                   #   channel's own frame chosen by floor (largest z <= the
+                                                   #   step, same convention as measure_tissue_thickness's
+                                                   #   floor_z_position), so a channel imaged at only a single z
+                                                   #   (e.g. a bead/DAPI reference frame) just repeats that one
+                                                   #   frame every step; contrast stretched PER CHANNEL (not one
+                                                   #   shared scale), since different lasers/dyes have very
+                                                   #   different intensity ranges; and (2) a mean-intensity-vs-z
+                                                   #   line plot, one line per channel. Frame reads cached under
+                                                   #   OUTPUT_DIR/cache/ (defaults next to the image file) --
+                                                   #   no USE_SLURM_ARRAY option, since a single file's frame
+                                                   #   count is small enough that one notebook kernel handles it
     measure_tissue_thickness_test.ipynb            # per-FOV map of where (z, µm) real tissue signal
                                                    #   starts and ends, for one finished round (default:
                                                    #   cells) — a variable-thickness sample wastes imaging
