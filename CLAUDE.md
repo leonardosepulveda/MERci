@@ -78,7 +78,7 @@ src/MERci/
                     # save_positions_array, discover_image_files, path_mtime (effective last-write mtime
                     # of a file OR a directory store -- max mtime of its contents, zarr-aware, since a
                     # directory's own mtime doesn't reliably update when a chunk file nested inside it is
-                    # written; used by misc/measure_tissue_thickness.ipynb to measure real inter-FOV
+                    # written; used by misc/measure_tissue_thickness_test.ipynb to measure real inter-FOV
                     # acquisition timing from file-write timestamps)
                     # + selective per-frame reading (only the requested frame_indices, real partial I/O
                     #   where the format allows it -- zarr fancy-indexing, dax direct byte-offset seeking,
@@ -264,7 +264,7 @@ src/MERci/
                     # io.iter_image_frames — still far fewer frames than the whole multi-color stack — and
                     # builds an EXACT, bin-width-1 histogram of each frame: a true Counter over observed
                     # pixel intensities, stored SPARSELY as (values, counts) pairs via numpy.unique rather
-                    # than a dense fixed-width array — used by misc/measure_tissue_thickness.ipynb, which
+                    # than a dense fixed-width array — used by misc/measure_tissue_thickness_test.ipynb, which
                     # needs every intensity value's exact count, not a lossy fixed-bin approximation, so it
                     # can derive a mean, a percentile, a re-binned view, and a true-pixel count for any
                     # threshold from ONE cached read instead of recomputing/re-reading pixels for each),
@@ -312,7 +312,7 @@ src/MERci/
                     #   purely a live display for a loop running right now, no persistence. Not used by
                     #   TransferScheduler (which already has its own bespoke, more detailed copy/verify-
                     #   split timing — see scheduler.py) — meant for notebooks that don't have that
-                    #   already, e.g. misc/measure_tissue_thickness.ipynb's histogram backfill loop.
+                    #   already, e.g. misc/measure_tissue_thickness_test.ipynb's histogram backfill loop.
   scheduler.py      # FOVScheduler (continuous, parallel process-pool), RoundScheduler, TransferScheduler
                     #   (round_robin_drives-only: transfers once a round is fully written, decoupled
                     #   from local analysis, ONE FOV AT A TIME, each verified (verify_method="hash"|"sample"|
@@ -403,10 +403,20 @@ notebooks/
                      #                                                 #   deferred to 05 -- no single depth yet)
                      #   02_create_boundary_from_mosaic.ipynb         # unchanged (optional)
                      #   03_create_positions_from_boundaries.ipynb    # renumbered from merfish/'s 02
-                     #   04_measure_tissue_thickness.ipynb            # NEW (adapted from notebooks/misc/
-                     #                                                 #   measure_tissue_thickness.ipynb): run
-                     #                                                 #   after the cells round; exports a
-                     #                                                 #   per-FOV z table (metadata/z_per_fov_table.csv)
+                     #   04_measure_tissue_thickness.ipynb            # NEW -- a lean, production subset of
+                     #                                                 #   notebooks/misc/measure_tissue_
+                     #                                                 #   thickness_test.ipynb (the full
+                     #                                                 #   exploratory/R&D notebook: only the
+                     #                                                 #   NTP z_last calculation, a fixed
+                     #                                                 #   1um margin, a z_last-only heatmap,
+                     #                                                 #   and theoretical-only time/data
+                     #                                                 #   savings -- no texture-profile/
+                     #                                                 #   mosaic/GIF diagnostics); run after
+                     #                                                 #   the cells round; exports a per-FOV
+                     #                                                 #   z table (metadata/z_per_fov_table.csv).
+                     #                                                 #   Section 4 (the heaviest read step)
+                     #                                                 #   has a USE_SLURM_ARRAY option, same
+                     #                                                 #   convention as the sections below
                      #   05_create_hal_config_and_shutters_multi_z.ipynb # NEW: buckets FOVs into N_TIERS z-depth
                      #                                                 #   tiers from notebook 04's z table; writes one
                      #                                                 #   bits hal_config+shutter per tier into
@@ -545,7 +555,18 @@ notebooks/
                                                    #   folder's size + creation date (disk_audit.py), and display
                                                    #   it sorted oldest-first and largest-first — to find whose
                                                    #   data to ask to be cleared off a shared microscope computer
-    measure_tissue_thickness.ipynb                 # per-FOV map of where (z, µm) real tissue signal
+    create_mosaic_gif.ipynb                        # animated GIF of one full mosaic (every FOV) per
+                                                   #   z-step, for a chosen round + channel -- watch
+                                                   #   image content change across the whole imaged
+                                                   #   depth. GIF_Z_STRIDE subsamples the z-grid (reading
+                                                   #   every FOV at every z-step is heavy, multi-hour-
+                                                   #   scale I/O); USE_SLURM_ARRAY submits the read as a
+                                                   #   SLURM array job instead of running sequentially
+                                                   #   (cli_compute_gif_frame_thumbnails.py +
+                                                   #   cluster_submit.build_gif_frames_array_script) --
+                                                   #   generalizes measure_tissue_thickness_test.ipynb's
+                                                   #   own (cells-round/DAPI-only) GIF section
+    measure_tissue_thickness_test.ipynb            # per-FOV map of where (z, µm) real tissue signal
                                                    #   starts and ends, for one finished round (default:
                                                    #   cells) — a variable-thickness sample wastes imaging
                                                    #   time on z-planes with no tissue, at EITHER end of the
@@ -850,7 +871,7 @@ calculation cells from display/plot cells, cache calculation results under
 `analysis/cache/<notebook_name>/`, skip recomputation when a valid cache
 already exists, report progress (n/total, elapsed, ETA) in every nontrivial
 calculation loop, and use explicit, legible plot font sizes. See
-`notebooks/misc/measure_tissue_thickness.ipynb` for the reference
+`notebooks/misc/measure_tissue_thickness_test.ipynb` for the reference
 implementation.
 
 ## Running notebooks

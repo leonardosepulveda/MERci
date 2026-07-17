@@ -34,6 +34,7 @@ _CLI_BUILD_ROUND_MOSAIC     = _MERCI_SRC / "MERci" / "analysis" / "cli_build_rou
 _CLI_COMPUTE_TEXTURE_STATS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
 _CLI_NTP_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_ntp_margin_thumbnails.py"
 _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_gif_frame_thumbnails.py"
+_CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -294,6 +295,47 @@ def build_gif_frames_array_script(
         f"    --frame-indices {frame_idx_str} \\\n"
         f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
         f"    {orientation_flags}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_channel_counters_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    frame_indices,
+    z_um_values,
+    n_pending:          int,
+    output_path:        Path,
+    array_concurrency:  int = 50,
+    mem:                str = "4gb",
+    time:               str = "00:20:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_channel_counters",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_compute_channel_counters.py`` once per pending FOV listed in
+    *manifest_path* -- the SLURM-array counterpart to
+    ``measure_tissue_thickness``-style notebooks' own section-4 sequential
+    loop (the heaviest read step: one full channel z-sweep per FOV).
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    frame_idx_str = ",".join(str(i) for i in frame_indices)
+    z_um_str      = ",".join(str(z) for z in z_um_values)
+    body = (
+        f"python {_CLI_CHANNEL_COUNTERS} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir} \\\n"
+        f"    --frame-indices {frame_idx_str} \\\n"
+        f"    --z-um-values {z_um_str}\n"
     )
     return _write_script(output_path, header + "\n" + body)
 
