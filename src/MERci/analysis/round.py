@@ -32,7 +32,8 @@ def create_mosaic(
     highlight_fov_ids: Optional[Set[int]] = None,
     highlight_color: int = 255,
     highlight_width: int = 3,
-) -> np.ndarray:
+    return_tile_bboxes: bool = False,
+):
     """
     Assemble a mosaic image from per-FOV thumbnails placed at stage coordinates.
 
@@ -70,10 +71,19 @@ def create_mosaic(
                       255 = white, for max contrast against typically dim
                       background/tissue thumbnails)
     highlight_width : border thickness in pixels
+    return_tile_bboxes : if True, also return {fov_id: (x0, y0, x1, y1)}
+                      pixel bounding boxes for every placed tile -- lets a
+                      caller draw its own overlay (e.g. a matplotlib
+                      ``Rectangle`` patch on top of an ``imshow`` of this
+                      canvas) instead of a border baked into the raster,
+                      without re-deriving the scale/offset math here.
 
     Returns
     -------
     canvas : uint8 ndarray -- (H, W) grayscale
+    tile_bboxes : {fov_id: (x0, y0, x1, y1)}, only when
+                  *return_tile_bboxes* is True (then the return value is the
+                  tuple ``(canvas, tile_bboxes)``)
     """
     from PIL import Image, ImageDraw
     from skimage.transform import resize as sk_resize
@@ -106,6 +116,7 @@ def create_mosaic(
     canvas   = np.full((canvas_h, canvas_w), background, dtype=np.uint8)
 
     # ── Place thumbnails ──────────────────────────────────────────────────────
+    tile_bboxes = {}
     for i, fov_id in enumerate(fov_ids):
         thumb = thumbnails[fov_id]
 
@@ -122,6 +133,7 @@ def create_mosaic(
         x1 = min(x0 + tw, canvas_w)
         y1 = min(y0 + th, canvas_h)
         canvas[y0:y1, x0:x1] = thumb[: y1 - y0, : x1 - x0]
+        tile_bboxes[fov_id] = (int(x0), int(y0), int(x1), int(y1))
 
     # ── Save ──────────────────────────────────────────────────────────────────
     output_path = Path(output_path)
@@ -143,6 +155,8 @@ def create_mosaic(
         "Mosaic saved: %s  (%d × %d px, %d FOVs)",
         output_path, canvas_w, canvas_h, len(fov_ids),
     )
+    if return_tile_bboxes:
+        return canvas, tile_bboxes
     return canvas
 
 
