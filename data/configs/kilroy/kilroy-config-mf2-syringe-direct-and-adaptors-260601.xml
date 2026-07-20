@@ -3,31 +3,31 @@
 
 <valve_commands>
 	
-	<valve_cmd name = "Readouts">
+	<valve_cmd name = "Set Readouts">
 		<valve_pos valve_ID = "1" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "3" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "4" port_ID = "4"></valve_pos>
     </valve_cmd>
-	<valve_cmd name = "SSC">
+	<valve_cmd name = "Set SSC">
 		<valve_pos valve_ID = "1" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "3" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "4" port_ID = "5"></valve_pos>
     </valve_cmd>
-    <valve_cmd name = "TCEP">
+    <valve_cmd name = "Set TCEP">
 		<valve_pos valve_ID = "1" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "3" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "4" port_ID = "6"></valve_pos>
     </valve_cmd>
-    <valve_cmd name = "Image Buffer">
+    <valve_cmd name = "Set Image">
 		<valve_pos valve_ID = "1" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "3" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "4" port_ID = "7"></valve_pos>
     </valve_cmd>
-	<valve_cmd name = "Wash Buffer">
+	<valve_cmd name = "Set Wash">
 		<valve_pos valve_ID = "1" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "2" port_ID = "1"></valve_pos>
 		<valve_pos valve_ID = "3" port_ID = "1"></valve_pos>
@@ -222,7 +222,7 @@
     </protocol>
 
 	<protocol name = "Hybridize Readouts">
-     	<valve duration = "5">Readouts</valve>
+     	<valve duration = "5">Set Readouts</valve>
     	<pump duration = "900">Flow 3 mL</pump>
      	<valve duration = "5">Set Wash</valve>
     	<pump duration = "450">Flow 3 mL</pump>
@@ -579,7 +579,7 @@
 		<valve duration = "5">Set SSC</valve>
 		<pump duration = "30">Flow 1 mL fast</pump>
 		
-		<valve duration = "5">Readouts</valve>
+		<valve duration = "5">Set Readouts</valve>
 		<pump duration = "30">Flow 1 mL fast</pump>
 		
 		<valve duration = "5">Set Wash</valve>
@@ -622,7 +622,7 @@
 		<valve duration = "5">Set SSC</valve>
 		<pump duration = "30">Flow 1 mL fast</pump>
 		
-		<valve duration = "5">Readouts</valve>
+		<valve duration = "5">Set Readouts</valve>
 		<pump duration = "30">Flow 1 mL fast</pump>
 		
 		<valve duration = "5">Set Wash</valve>
@@ -635,7 +635,7 @@
     
 	<protocol name = "Prime 5">
 		
-		<valve duration = "5">Readouts</valve>
+		<valve duration = "5">Set Readouts</valve>
 		<pump duration = "30">Flow 1 mL fast</pump>
 		
 		<valve duration = "5">Set SSC</valve>
@@ -725,7 +725,7 @@
 		<valve duration = "5">Set Hyb 24</valve>
 		<pump duration = "60">Flow 2 mL fast</pump>    
 		
-		<valve duration = "5">Readouts</valve>
+		<valve duration = "5">Set Readouts</valve>
 		<pump duration = "90">Flow 2 mL fast</pump>
 		
 		<valve duration = "5">Set SSC</valve>
@@ -743,7 +743,7 @@
     </protocol>
      
     <protocol name = "Cleanup 5">
-		<valve duration = "5">Readouts</valve>
+		<valve duration = "5">Set Readouts</valve>
 		<pump duration = "90">Flow 2 mL fast</pump>
 		
 		<valve duration = "5">Set TCEP</valve>
