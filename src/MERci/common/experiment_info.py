@@ -104,12 +104,12 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     ever a real possibility here. If ``SAMPLE_DIR.name`` is one of those
     tokens, treat it as the split layout; otherwise, flat.
 
-    This does NOT change what ``SAMPLE_DIR.name`` is used for elsewhere (the
-    per-notebook local file-naming convention -- ``positions_{name}.txt``,
-    ``dave-{mic}-{N}hybs-{name}.xml``, etc. -- stays exactly as each
-    notebook's ``SAMPLE_NAME = SAMPLE_DIR.name`` already computes it, so
-    already-generated real filenames are unaffected). Use this function only
-    where the TRUE top-level experiment id is actually needed: constructing
+    This does NOT change most per-notebook local file naming (``dave-{mic}-
+    {N}hybs-{name}.xml``, data-organization/merlin/fishtank script filenames,
+    etc. all still use the bare ``sample_name`` returned here). The one
+    exception is ``positions_*.txt``/``fov_layout_*.png`` filenames, which use
+    :func:`positions_file_tag` instead -- see that function for why. Use this
+    function where the TRUE top-level experiment id is needed: constructing
     cluster-facing paths (``DATA_HOME``/``MERLIN_HOME``/``FOLDER_NAME`` in
     notebook 06, ``resolve_cluster_sample_dir`` in notebook 07).
 
@@ -136,6 +136,35 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
             f"(resolved imaging_dir={imaging_dir!r}). Check MERCI_DIR's location."
         )
     return sample_name, imaging_dir
+
+
+def positions_file_tag(sample_name: str, imaging_dir: str) -> str:
+    """
+    Token for ``positions_*.txt``/``fov_layout_*.png`` filenames: ``sample_name``
+    alone in the flat layout, or ``"{sample_name}_{imaging_dir}"`` in the split
+    layout.
+
+    Two sibling split-layout acquisitions of the same sample (e.g.
+    ``tumor/epi`` + ``tumor/disk``, or ``lineage_tracing/merfish`` +
+    ``lineage_tracing/lineage``) resolve to the same ``sample_name`` via
+    :func:`resolve_sample_identity` -- without this tag, each acquisition's
+    notebook 02 would write an identically-named ``positions_{sample_name}.txt``
+    in its own ``positions/`` folder, which only avoids colliding because the
+    two folders happen to be different.
+
+    Parameters
+    ----------
+    sample_name : the true experiment id (``resolve_sample_identity``'s first
+        return value)
+    imaging_dir : the acquisition-type subfolder name, or ``""`` in the flat
+        layout (``resolve_sample_identity``'s second return value)
+
+    Returns
+    -------
+    str : the token to substitute for ``sample_name`` in a ``positions_*.txt``/
+    ``fov_layout_*.png`` filename.
+    """
+    return f"{sample_name}_{imaging_dir}" if imaging_dir else sample_name
 
 
 def save_experiment_info(info: ExperimentInfo, path: Path) -> None:
