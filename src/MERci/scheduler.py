@@ -14,9 +14,7 @@ ExperimentScheduler
 from __future__ import annotations
 
 import logging
-import threading
 import time
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -26,10 +24,7 @@ import pandas as pd
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
 from .common.io       import discover_image_files
-from .transfer        import (
-    transfer_round, mirror_tree, sync_files, rewrite_round_info_dirs,
-    transfer_fov, delete_source_tree,
-)
+from .transfer        import transfer_round, mirror_tree
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
 from .analysis.fov    import analyze_file
@@ -189,15 +184,11 @@ class FOVScheduler:
     across a pool of worker processes.
 
     Where it reads from is set by ``config.analysis_mode``:
-      * ``"same_drive"`` — read from ``config.data_dir`` (the acquisition drive).
+      * ``"same_drive"`` — read from ``config.data_dir`` (the acquisition drive,
+        or a NAS-mounted path when writing directly to a NAS).
       * ``"mirror_drive"`` — during fluidics, incrementally mirror ``data_dir`` to
         ``config.analysis_source_dir`` on a second drive, and read from that
         mirror, so analysis I/O never competes with the microscope's writes.
-      * ``"round_robin_drives"`` — read directly from every drive referenced in
-        ``round_info.csv`` (``config.all_data_roots``), skipping only whichever
-        round HAL is actively writing right now (``meta.actively_writing_round``),
-        so already-completed rounds on other drives analyse immediately with no
-        mirroring step.
 
     Typical usage (in a notebook cell)::
 
@@ -301,46 +292,20 @@ class FOVScheduler:
         """Build the (image_path, kwargs) pair passed to ``analyze_file``."""
         return fpath, build_fov_task_kwargs(fpath, self.config, self.tracker)
 
-    def _discovery_roots(self) -> List[Path]:
-        """
-        Directories to search for image files.
-
-        ``round_robin_drives`` mode spreads files across every drive named in
-        round_info.csv (``config.all_data_roots``) instead of one root; other
-        modes keep today's single-root behavior (``config.analysis_data_dir``).
-        """
-        if self.config.analysis_mode == "round_robin_drives":
-            return self.config.all_data_roots
-        return [self.config.analysis_data_dir]
-
     def _process_pending(self) -> int:
         """Discover and analyse all pending FOV files. Returns count processed.
 
-        Reads from ``config.analysis_data_dir`` (the mirror in mirror mode, or
-        every drive in ``round_robin_drives`` mode — see ``_discovery_roots``),
+        Reads from ``config.analysis_data_dir`` (the mirror in mirror mode),
         and dispatches one worker process per FOV file (each reads the file
         once and runs every analysis), bounded by ``config.resolved_n_workers``.
         """
-        all_files: List[Path] = []
-        for root in self._discovery_roots():
-            try:
-                all_files.extend(
-                    discover_image_files(root, self.config.image_suffix)
-                )
-            except OSError:
-                log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
-        all_files = sorted(set(all_files))
+        root = self.config.analysis_data_dir
+        try:
+            all_files = sorted(set(discover_image_files(root, self.config.image_suffix)))
+        except OSError:
+            log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
+            all_files = []
         pending = self.tracker.pending_fov_files(all_files)
-
-        # round_robin_drives: never analyse the round HAL is actively writing
-        # right now — its disk is contended; everything else proceeds as usual.
-        if self.config.analysis_mode == "round_robin_drives":
-            active_round = self.meta.actively_writing_round()
-            active_drive = (
-                self.meta.drive_of_round(active_round) if active_round is not None else None
-            )
-            if active_drive is not None:
-                pending = [f for f in pending if Path(f).drive.lower() != active_drive]
 
         # Restrict to the requested FOV subset when specified
         if self.config.fov_subset is not None:
@@ -421,9 +386,7 @@ class RoundScheduler:
 
         Mosaics are built continuously as soon as a round's FOVs are all done.
         Optional NAS transfers (``transfer_dest``) run only during fluidics
-        (when the microscope is idle) in ``same_drive``/``mirror_drive`` modes,
-        or continuously — skipping only the round on the currently-active drive
-        — in ``round_robin_drives`` mode (see ``_process_pending_transfers``).
+        (when the microscope is idle) — see ``_process_pending_transfers``.
         """
         iteration = 0
         while True:
@@ -471,34 +434,10 @@ class RoundScheduler:
         Start background transfers for any rounds that are done but not yet
         transferred.
 
-        ``round_robin_drives`` mode: each round's data lives on its own
-        physical drive (see ``acquisition.dave.create_round_info(data_drives=…)``),
-        so a completed round on an idle drive can transfer to ``transfer_dest``
-        (e.g. a NAS) continuously, even while HAL is still imaging a different
-        round on a different drive. Gated the same way FOVScheduler defers
-        analysis of the hot round: skip only the round whose drive matches
-        ``meta.actively_writing_round()``'s drive.
-
-        Other modes (``same_drive``/``mirror_drive``): unchanged — transfers
-        read from the single acquisition drive, so they only run once the
-        microscope goes idle (fluidics), and only while there's still enough
-        time left in the fluidics window (``transfer_min_time``).
+        Transfers read from the single acquisition drive, so they only run
+        once the microscope goes idle (fluidics), and only while there's
+        still enough time left in the fluidics window (``transfer_min_time``).
         """
-        if self.config.analysis_mode == "round_robin_drives":
-            active_round = self.meta.actively_writing_round()
-            active_drive = (
-                self.meta.drive_of_round(active_round) if active_round is not None else None
-            )
-            for rid in self.meta.valid_round_ids():
-                if (
-                    self.tracker.is_round_done(rid)
-                    and not self.tracker.is_round_transferred(rid)
-                    and rid not in self._transfers_in_progress
-                    and (active_drive is None or self.meta.drive_of_round(rid) != active_drive)
-                ):
-                    self._start_transfer_for_round(rid)
-            return
-
         if phase.is_imaging or phase.time_since_imaging is None:
             return
         time_remaining = self.config.t_max - (phase.time_since_imaging or 0)
@@ -557,377 +496,6 @@ class RoundScheduler:
 
     def _analyse_one_round(self, round_id: int) -> None:
         build_round_mosaics(round_id, self.config, self.meta, self.tracker)
-
-
-# ── Transfer Scheduler ────────────────────────────────────────────────────────
-
-class TransferScheduler:
-    """
-    Continuously transfers each round's raw data — plus the small metadata/
-    positions/settings files a cluster-side ``ExperimentMetadata.load()``
-    needs alongside it — to ``config.transfer_dest`` as soon as the round is
-    **fully written**, decoupled from any local QC analysis.
-
-    Unlike ``RoundScheduler``'s ``round_robin_drives`` transfer path (gated
-    on ``tracker.is_round_done``, i.e. mosaics already built locally), this
-    gates purely on ``metadata.round_fully_written`` (every expected raw
-    file for the round exists on disk) — so raw data can leave the
-    microscope computer immediately, with QC analysis moved entirely to a
-    SLURM cluster reading from wherever it lands (see
-    ``06_transfer_to_nas.ipynb`` / ``07_cluster_submit_analysis.ipynb``).
-
-    Transfers **one FOV at a time** (every associated file: the image store
-    plus same-stem sidecars — see ``transfer.fov_associated_paths``), each
-    independently copied and bit-for-bit verified (``transfer.verify_copy``)
-    before its own ``.fov_transferred`` sentinel is written — not one bulk
-    ``robocopy /E`` per round with no post-copy check. A round is marked
-    ``round_transferred`` only once every one of its FOVs has verified.
-    If ``delete_source_after_verify=True``, the round's entire source data
-    directory is deleted **once every FOV in it has verified** — never per
-    FOV, and never based on anything less than a full SHA-256 comparison
-    (see ``transfer.delete_source_tree``); this is irreversible, so it
-    defaults to ``False``.
-
-    Requires ``config.analysis_mode == "round_robin_drives"`` (the "which
-    drive is hot right now" signal this relies on) and ``config.transfer_dest``
-    to be set.
-
-    Call ``transfer_progress()`` at any time (e.g. from an ``on_tick``
-    callback) for a display-ready snapshot: FOVs arrived vs. total, the
-    measured average seconds/FOV from recently completed FOV transfers, and
-    ETAs for the in-progress rounds and for everything remaining.
-
-    ``sync_static_metadata()`` handles the small, unchanging-once-acquisition-
-    starts metadata/positions/settings files — call it **once**, not from the
-    tick loop (see ``06_transfer_to_nas.ipynb`` section 4); it is not called
-    automatically by ``run_loop``.
-
-    Typical usage (in a notebook cell)::
-
-        scheduler = TransferScheduler(config, meta, tracker)
-        scheduler.sync_static_metadata()   # once
-        scheduler.run_loop()               # continuous, per-round data only
-    """
-
-    def __init__(
-        self,
-        config:     ExperimentConfig,
-        metadata:   ExperimentMetadata,
-        tracker:    ProgressTracker,
-        sample_dir: Optional[Path] = None,
-        delete_source_after_verify: bool = False,
-        verify_method: str = "hash",
-        verify_sample_bytes: int = 4 * (1 << 20),
-    ) -> None:
-        if config.transfer_dest is None:
-            raise ValueError("TransferScheduler requires config.transfer_dest to be set.")
-        if verify_method not in ("hash", "sample", "size"):
-            raise ValueError(f"verify_method must be 'hash', 'sample', or 'size', got {verify_method!r}")
-        self.config     = config
-        self.meta       = metadata
-        self.tracker    = tracker
-        # Auxiliary files (round_info.csv, positions_*.txt, settings/*.xml) are
-        # synced preserving their path relative to sample_dir; defaults to
-        # data_dir's parent, true for every notebook's ExperimentConfig(data_dir=
-        # SAMPLE_DIR/"data", ...) convention, but overridable in case it isn't.
-        self.sample_dir = Path(sample_dir) if sample_dir is not None else Path(config.data_dir).parent
-        # Irreversible -- only ever deletes a round's source directory after
-        # EVERY FOV in it has an independently verified copy at transfer_dest
-        # (see _transfer_round_worker). Defaults to False.
-        self.delete_source_after_verify = delete_source_after_verify
-        # "hash": full SHA-256 of every file -- catches silent corruption anywhere
-        # in the file, but reads every byte twice (once at source, once at
-        # destination), which can dominate total transfer time over a slow
-        # network share (measured ~50 s/FOV vs ~1 s/FOV for "size" on the live
-        # 14504-FOV experiment this was built for). "sample": SHA-256 of just
-        # the first+last verify_sample_bytes of each file (whole file if
-        # smaller) -- bounded I/O regardless of file size, catches truncation
-        # with certainty and corruption within the sampled windows, but can
-        # miss corruption confined to a large file's untouched middle. "size":
-        # just file size + exact same file set -- fastest, catches
-        # truncation/incomplete copies (the realistic LAN failure mode) but
-        # not a same-size corruption. See transfer.verify_copy.
-        self.verify_method       = verify_method
-        self.verify_sample_bytes = verify_sample_bytes
-        self._transfers_in_progress: set = set()   # round_ids currently being transferred
-        # Seconds-per-FOV samples from the last 200 *completed* FOV transfers,
-        # used to estimate remaining time -- a deque so the average tracks
-        # recent network conditions rather than being dragged down by a slow
-        # transfer from hours ago. Per-FOV (not per-round) so the estimate
-        # updates immediately rather than waiting for an entire round to finish.
-        # Copy and verify time are tracked separately so a slow FOV can be
-        # diagnosed as copy-bound (e.g. network bandwidth) vs. verify-bound
-        # (e.g. "hash" re-reading everything) instead of only one combined number.
-        self._fov_copy_time_samples:   "deque[float]" = deque(maxlen=200)
-        self._fov_verify_time_samples: "deque[float]" = deque(maxlen=200)
-
-    def run_loop(
-        self,
-        on_tick: Optional[Callable[[dict], None]] = None,
-        max_iterations: Optional[int] = None,
-    ) -> None:
-        """
-        Run the transfer loop indefinitely (or for *max_iterations* ticks).
-
-        Each tick: start a background per-FOV transfer for any round that is
-        fully written, not yet transferred, not already mid-transfer, and not
-        on the currently actively-written (hot) drive. Does NOT sync static
-        metadata/positions/settings files -- call ``sync_static_metadata()``
-        once beforehand instead (see ``06_transfer_to_nas.ipynb`` section 4).
-        """
-        iteration = 0
-        while True:
-            n_started = self._process_pending_transfers()
-            if on_tick is not None:
-                on_tick({"iteration": iteration, "transfers_started": n_started})
-            log.info("[tick %d] started %d round transfer(s).", iteration, n_started)
-
-            iteration += 1
-            if max_iterations is not None and iteration >= max_iterations:
-                break
-
-            time.sleep(self.config.poll_interval)
-
-    def sync_static_metadata(self) -> None:
-        """
-        Sync the small files that DON'T change once acquisition starts --
-        ``round_bit_color_map.csv``, ``positions_*.txt``, ``settings/*.xml``
-        (verbatim), and ``round_info.csv`` (rewritten -- see
-        :func:`transfer.rewrite_round_info_dirs`) -- to ``config.transfer_dest``.
-
-        Call this **once** (e.g. a dedicated notebook cell), not from the
-        tick loop: unlike the per-round data these files don't grow or change
-        during acquisition, so re-syncing them every tick was pure overhead.
-        Safe to re-run any time (e.g. if you edit ``round_info.csv`` by hand).
-        """
-        paths: List[Path] = []
-        if self.config.metadata_dir is not None:
-            rbc = Path(self.config.metadata_dir) / "round_bit_color_map.csv"
-            if rbc.exists():
-                paths.append(rbc)
-        if self.config.positions_txt is not None:
-            paths.extend(sorted(Path(self.config.positions_txt).parent.glob("positions_*.txt")))
-        if self.config.settings_dir is not None and Path(self.config.settings_dir).exists():
-            paths.extend(sorted(Path(self.config.settings_dir).glob("*.xml")))
-        sync_files(paths, self.sample_dir, self.config.transfer_dest)
-
-        round_info_csv = Path(self.config.round_info_csv)
-        if round_info_csv.exists():
-            dest = Path(self.config.transfer_dest) / round_info_csv.relative_to(self.sample_dir)
-            rewrite_round_info_dirs(round_info_csv, dest)
-
-    def _process_pending_transfers(self) -> int:
-        active_round = self.meta.actively_writing_round()
-        active_drive = (
-            self.meta.drive_of_round(active_round) if active_round is not None else None
-        )
-
-        count = 0
-        for rid in self.meta.valid_round_ids():
-            if (
-                self.meta.round_fully_written(rid)
-                and not self.tracker.is_round_transferred(rid)
-                and rid not in self._transfers_in_progress
-                and (active_drive is None or self.meta.drive_of_round(rid) != active_drive)
-            ):
-                self._start_transfer_for_round(rid)
-                count += 1
-        return count
-
-    def _start_transfer_for_round(self, round_id: int) -> None:
-        """Launch a background thread that transfers round *round_id* one
-        FOV at a time (see ``_transfer_round_worker``)."""
-        self._transfers_in_progress.add(round_id)
-        t = threading.Thread(
-            target=self._transfer_round_worker, args=(round_id,),
-            daemon=True, name=f"transfer-round{round_id}",
-        )
-        t.start()
-
-    def _transfer_round_worker(self, round_id: int) -> None:
-        """
-        Copy and verify round *round_id*'s FOVs one at a time (skipping any
-        already ``.fov_transferred`` from a prior run), then -- only if every
-        single one verified -- mark the round transferred and, if
-        ``delete_source_after_verify``, delete its source directory.
-
-        Runs in a background thread; partial progress (both individual FOV
-        sentinels and per-FOV timing samples) is durable even if interrupted
-        mid-round -- the next call picks up exactly where it left off.
-        """
-        round_obj = self.meta.rounds.get(round_id)
-        if round_obj is None:
-            log.warning("Round %d: not found in metadata — skipping transfer.", round_id)
-            self._transfers_in_progress.discard(round_id)
-            return
-
-        dest_root = Path(self.config.transfer_dest)
-        all_verified = True
-        n_transferred_this_round = 0
-
-        for fov_id, image_paths in sorted(round_obj.fov_files.items()):
-            for image_path in image_paths:
-                if self.tracker.is_fov_transferred(image_path):
-                    continue
-                result = transfer_fov(
-                    image_path, dest_root,
-                    verify_method=self.verify_method, sample_bytes=self.verify_sample_bytes,
-                )
-                if result["verified"]:
-                    self.tracker.mark_fov_transferred(image_path)
-                    self._fov_copy_time_samples.append(result["copy_seconds"])
-                    self._fov_verify_time_samples.append(result["verify_seconds"])
-                    n_transferred_this_round += 1
-                else:
-                    all_verified = False
-                    log.error(
-                        "Round %d: FOV transfer failed to verify: %s — will retry next tick.",
-                        round_id, image_path,
-                    )
-
-        log.info(
-            "Round %d: transferred %d FOV(s) this pass.", round_id, n_transferred_this_round,
-        )
-
-        if all_verified:
-            self.tracker.mark_round_transferred(round_id)
-            log.info("Round %d marked transferred.", round_id)
-            if self.delete_source_after_verify:
-                for src_dir in source_dirs_for_round(round_id, self.meta):
-                    log.info("Round %d: deleting verified source directory %s", round_id, src_dir)
-                    delete_source_tree(src_dir)
-
-        self._transfers_in_progress.discard(round_id)
-
-    # ── Progress / ETA queries ────────────────────────────────────────────────
-
-    @property
-    def in_progress_rounds(self) -> List[int]:
-        """Round ids currently being copied to transfer_dest (background threads)."""
-        return sorted(self._transfers_in_progress)
-
-    def count_arrived_files(self, round_id: int) -> int:
-        """
-        Count of *round_id*'s expected raw files with a verified
-        ``.fov_transferred`` sentinel (see ``ProgressTracker.is_fov_transferred``)
-        -- a real completeness guarantee (full SHA-256 match), not just
-        "something exists at the destination path."
-        """
-        if self.tracker.is_round_transferred(round_id):
-            return len(self.meta.files_for_round(round_id))
-        return sum(
-            1 for f in self.meta.files_for_round(round_id)
-            if self.tracker.is_fov_transferred(f)
-        )
-
-    @property
-    def n_fov_rate_samples(self) -> int:
-        """How many completed-FOV timing samples the running averages below
-        are actually based on right now (capped at 200) -- distinct from the
-        deque's maxlen, so a display can say e.g. "mean over 6 transfers"
-        instead of a fixed "up to 200" that reads as if 200 already happened."""
-        return len(self._fov_copy_time_samples)
-
-    def average_copy_seconds_per_fov(self) -> Optional[float]:
-        """Mean copy-only seconds-per-FOV (excludes verification) from the
-        most recent completed transfers (up to the last 200), or ``None`` if
-        none have completed yet."""
-        if not self._fov_copy_time_samples:
-            return None
-        return sum(self._fov_copy_time_samples) / len(self._fov_copy_time_samples)
-
-    def average_verify_seconds_per_fov(self) -> Optional[float]:
-        """Mean verify-only seconds-per-FOV (excludes copying) from the most
-        recent completed transfers (up to the last 200), or ``None`` if none
-        have completed yet. With ``verify_method="hash"`` this reads every
-        file a second time and can dominate ``average_seconds_per_fov``."""
-        if not self._fov_verify_time_samples:
-            return None
-        return sum(self._fov_verify_time_samples) / len(self._fov_verify_time_samples)
-
-    def average_seconds_per_fov(self) -> Optional[float]:
-        """Mean total (copy + verify) seconds-per-FOV from the most recent
-        completed FOV transfers (up to the last 200), or ``None`` if none
-        have completed yet."""
-        copy_avg   = self.average_copy_seconds_per_fov()
-        verify_avg = self.average_verify_seconds_per_fov()
-        if copy_avg is None:
-            return None
-        return copy_avg + (verify_avg or 0.0)
-
-    def transfer_progress(self) -> dict:
-        """
-        Snapshot of transfer progress across the whole experiment, for
-        display in a notebook.
-
-        Returns a dict with:
-          fovs_arrived / fovs_total     : files landed at transfer_dest vs.
-                                          every expected raw file (existence-
-                                          based, see ``count_arrived_files``)
-          avg_seconds_per_fov           : see ``average_seconds_per_fov``;
-                                          ``None`` until a FOV has completed
-          avg_copy_seconds_per_fov /
-          avg_verify_seconds_per_fov    : the same average split into its
-                                          copy-only and verify-only halves
-                                          (see ``average_copy_seconds_per_fov``/
-                                          ``average_verify_seconds_per_fov``)
-                                          -- diagnoses whether a slow rate is
-                                          copy-bound (network) or verify-bound
-                                          (``verify_method="hash"`` rereading
-                                          everything)
-          n_rate_samples                : how many completed-FOV timing
-                                          samples the averages above are
-                                          actually based on right now (capped
-                                          at 200) -- NOT a claim that 200
-                                          have happened
-          in_progress_rounds            : round ids currently mid-transfer
-          in_progress_fovs_remaining    : files not yet arrived, summed over
-                                          ``in_progress_rounds``
-          eta_in_progress_s             : estimated seconds to finish
-                                          whatever's currently in flight, or
-                                          ``None`` without a rate yet
-          all_remaining_fovs            : every not-yet-arrived file across
-                                          ALL rounds (written or not)
-          eta_all_remaining_s           : estimated seconds to finish
-                                          transferring everything, ASSUMING
-                                          every round were already fully
-                                          written right now (i.e. this
-                                          estimates transfer time only, not
-                                          how long HAL still has to image)
-        """
-        round_ids  = self.meta.valid_round_ids()
-        arrived_by_round = {rid: self.count_arrived_files(rid) for rid in round_ids}
-        total_by_round   = {rid: len(self.meta.files_for_round(rid)) for rid in round_ids}
-
-        fovs_arrived = sum(arrived_by_round.values())
-        fovs_total   = sum(total_by_round.values())
-        avg_rate     = self.average_seconds_per_fov()
-
-        in_progress = self.in_progress_rounds
-        in_progress_remaining = sum(
-            total_by_round[rid] - arrived_by_round[rid] for rid in in_progress
-        )
-        eta_in_progress = (
-            in_progress_remaining * avg_rate
-            if avg_rate is not None and in_progress else None
-        )
-
-        all_remaining = fovs_total - fovs_arrived
-        eta_all = all_remaining * avg_rate if avg_rate is not None else None
-
-        return {
-            "fovs_arrived":               fovs_arrived,
-            "fovs_total":                 fovs_total,
-            "avg_seconds_per_fov":        avg_rate,
-            "avg_copy_seconds_per_fov":   self.average_copy_seconds_per_fov(),
-            "avg_verify_seconds_per_fov": self.average_verify_seconds_per_fov(),
-            "n_rate_samples":             self.n_fov_rate_samples,
-            "in_progress_rounds":         in_progress,
-            "in_progress_fovs_remaining": in_progress_remaining,
-            "eta_in_progress_s":          eta_in_progress,
-            "all_remaining_fovs":         all_remaining,
-            "eta_all_remaining_s":        eta_all,
-        }
 
 
 # ── Experiment Scheduler ──────────────────────────────────────────────────────

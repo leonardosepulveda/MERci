@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import pandas as pd
-
 # ── Fluidics t_max defaults (seconds) ─────────────────────────────────────────
 T_MAX_ADAPTOR = 6000.0   # 100 min — adaptor-based fluidics
 T_MAX_DIRECT  = 3000.0   # 50 min  — direct-readout fluidics
@@ -92,23 +90,17 @@ class ExperimentConfig:
 
     # ── Analysis scheduling ──────────────────────────────────────────────────────
     # Analysis now runs CONTINUOUSLY (during acquisition and fluidics), not only in
-    # the fluidics window.  Three modes control where it reads image data from:
+    # the fluidics window.  Two modes control where it reads image data from:
     #   "same_drive"  (mode B): analyse straight from data_dir on the acquisition
     #                  drive, during both phases. Simplest; analysis I/O shares the
-    #                  microscope drive (possible contention on slow HDDs).
+    #                  microscope drive (possible contention on slow HDDs). Also the
+    #                  mode to use when SAMPLE_DIR/data_dir itself is a NAS-mounted
+    #                  path (direct-to-NAS acquisition) — there is only one location,
+    #                  so no mirroring/round-robin step is needed.
     #   "mirror_drive" (mode A): during fluidics, incrementally mirror data_dir to
     #                  analysis_source_dir on a second drive; analyse continuously
     #                  from that mirror, so analysis I/O never touches the
     #                  acquisition drive while the microscope is writing.
-    #   "round_robin_drives": for experiments whose round_info.csv spreads hyb
-    #                  rounds round-robin across several physical drives (see
-    #                  acquisition.dave.create_round_info(data_drives=...)).
-    #                  Analysis reads directly from every drive referenced in
-    #                  round_info.csv (see all_data_roots below) and skips only
-    #                  the round HAL is actively writing right now (see
-    #                  ExperimentMetadata.actively_writing_round/drive_of_round),
-    #                  so already-completed rounds on other drives are analysed
-    #                  immediately without any mirroring step.
     analysis_mode:        str            = "same_drive"
     analysis_source_dir:  Optional[Path] = None   # mode A: second-drive mirror to analyse from
     n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → cpu_count - 2
@@ -136,27 +128,6 @@ class ExperimentConfig:
         return self.data_dir
 
     @property
-    def all_data_roots(self) -> List[Path]:
-        """
-        Every distinct data directory an image file could live under: the
-        top-level ``data_dir`` plus every directory named in
-        ``round_info_csv``'s ``data_dir`` (or legacy ``dir``) column.
-
-        Read directly from the CSV (rather than via ExperimentMetadata) so
-        this is usable from ``ExperimentStateMonitor``, which is constructed
-        from ``config`` alone. Used by ``round_robin_drives`` mode, where
-        image files are spread across several physical drives instead of
-        all sitting under one ``data_dir``.
-        """
-        roots = {self.data_dir}
-        if self.round_info_csv.exists():
-            df = pd.read_csv(self.round_info_csv)
-            col = "data_dir" if "data_dir" in df.columns else ("dir" if "dir" in df.columns else None)
-            if col is not None:
-                roots.update(Path(str(v)) for v in df[col].dropna())
-        return sorted(roots)
-
-    @property
     def resolved_n_workers(self) -> int:
         """Number of FOV worker processes to use (>= 1)."""
         if self.n_analysis_workers is not None:
@@ -182,10 +153,10 @@ class ExperimentConfig:
         if self.analysis_source_dir is not None:
             self.analysis_source_dir = Path(self.analysis_source_dir)
 
-        if self.analysis_mode not in ("same_drive", "mirror_drive", "round_robin_drives"):
+        if self.analysis_mode not in ("same_drive", "mirror_drive"):
             raise ValueError(
-                f"analysis_mode must be 'same_drive', 'mirror_drive', or "
-                f"'round_robin_drives', got {self.analysis_mode!r}"
+                f"analysis_mode must be 'same_drive' or 'mirror_drive', "
+                f"got {self.analysis_mode!r}"
             )
         if self.analysis_mode == "mirror_drive" and self.analysis_source_dir is None:
             raise ValueError(

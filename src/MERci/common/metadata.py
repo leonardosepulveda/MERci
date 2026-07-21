@@ -271,53 +271,13 @@ class ExperimentMetadata:
         """All round ids, sorted."""
         return sorted(self.rounds)
 
-    def drive_of_round(self, round_id: int) -> Optional[str]:
-        """
-        Return the drive/UNC root (e.g. ``"d:"``) of *round_id*'s ``data_dir``,
-        lower-cased, or ``None`` if the round has no ``data_dir`` (or isn't
-        recognised). Used to compare rounds for round-robin multi-drive setups.
-        """
-        for s in self.series_for_round(round_id):
-            if s.data_dir is not None:
-                drive = Path(s.data_dir).drive
-                if drive:
-                    return drive.lower()
-        return None
-
-    def actively_writing_round(self) -> Optional[int]:
-        """
-        Return the round id that HAL is most likely actively writing right
-        now, or ``None`` if no round is mid-write.
-
-        Heuristic: scan round ids from highest to lowest and return the first
-        one that has started (at least one expected file exists) but is not
-        yet complete (not every expected file exists) — rounds proceed
-        strictly in order, so this is the round straddling the write/not-yet-
-        written boundary. Returns ``None`` once the highest-started round is
-        fully on disk (e.g. mid-fluidics, between rounds) — deliberately NOT
-        "highest round with any file", which would keep wrongly reporting the
-        just-finished round as active for its entire following fluidics
-        window.
-        """
-        for rid in sorted(self.valid_round_ids(), reverse=True):
-            files = self.files_for_round(rid)
-            if not files:
-                continue
-            exists = [f.exists() for f in files]
-            if not any(exists):
-                continue
-            return rid if not all(exists) else None
-        return None
-
     def round_fully_written(self, round_id: int) -> bool:
         """
         True iff every expected raw image file for *round_id* already exists
         on disk -- purely "has HAL finished writing this round", with no
         dependency on any analysis sentinel (unlike
         :func:`MERci.progress.ProgressTracker.all_fovs_done_for_round`, which
-        additionally requires a ``.fov_done`` sentinel per file). Used to
-        decide when a round is safe to transfer off its drive even if no
-        local QC analysis has ever run against it.
+        additionally requires a ``.fov_done`` sentinel per file).
         """
         files = self.files_for_round(round_id)
         return bool(files) and all(f.exists() for f in files)
@@ -480,14 +440,10 @@ def _build_metadata(
         # to live in either the top-level ``data/`` or a ``data/cells`` subfolder,
         # so it gets both as fallbacks regardless of what round_info.csv recorded.
         #
-        # ``dir`` is normally an absolute, drive-specific path (round-robin
-        # rounds genuinely live on their own physical drive during
-        # acquisition, e.g. ``D:/.../data/hybs/H01``) -- resolved as-is. A
-        # transferred experiment's round_info.csv copy instead carries a
-        # *relative* ``data/...`` sub-path for these rounds (see
-        # ``transfer.rewrite_round_info_dirs``), meaningless on its own once
-        # consolidated onto one destination root; resolve that case relative
-        # to *this machine's own* SAMPLE_DIR (``data_dir``'s parent) instead.
+        # ``dir`` is normally an absolute path (e.g. ``D:/.../data/hybs/H01``)
+        # -- resolved as-is. A relative ``data/...`` sub-path (e.g. from a
+        # manually relocated experiment folder) is resolved relative to
+        # *this machine's own* SAMPLE_DIR (``data_dir``'s parent) instead.
         if s.data_dir is not None:
             primary = s.data_dir if s.data_dir.is_absolute() else (data_dir.parent / s.data_dir)
         else:
