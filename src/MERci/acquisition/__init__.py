@@ -29,6 +29,10 @@ from .positions import (
     load_boundary_polygon,
     create_transit_path,
     build_boundary_path,
+    optimize_grid_offset,
+    build_boundary_path_optimized,
+    GridOffsetCandidate,
+    GridOffsetResult,
 )
 from .display import print_frame_table, display_xml
 from .kilroy import (

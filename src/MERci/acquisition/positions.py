@@ -28,6 +28,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from shapely.geometry import Polygon, box as shapely_box
+from shapely.ops import unary_union
 
 log = logging.getLogger(__name__)
 
@@ -70,16 +71,18 @@ def create_grid_positions(
     boundary_polygon: Polygon,
     step_size:        float,
     direction:        str = "vertical",
+    offset:           Tuple[float, float] = (0.0, 0.0),
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build a regular 2-D grid centred on the midpoint of *boundary_polygon*'s
-    bounding box, large enough to cover its full bounding box.
+    bounding box (shifted by *offset*), large enough to cover its full
+    bounding box.
 
     One axis is forced ODD (guarantees a cell exactly at the boundary's
-    bounding-box midpoint) and the other EVEN, chosen from *direction* so
-    that :func:`generate_scanning_path` (called with the SAME *direction*)
-    starts and ends its boustrophedon snake in the same row/column, instead
-    of the opposite corner:
+    bounding-box midpoint when ``offset=(0, 0)``) and the other EVEN, chosen
+    from *direction* so that :func:`generate_scanning_path` (called with the
+    SAME *direction*) starts and ends its boustrophedon snake in the same
+    row/column, instead of the opposite corner:
 
     * ``"vertical"``   (snake column-by-column): columns (W) EVEN, rows (H)
       ODD -- the snake starts and ends in the same row.
@@ -94,8 +97,9 @@ def create_grid_positions(
     round. Forcing W even makes the first and last column have opposite
     parity/sub-direction instead, so both ends of the snake land in the
     same row -- a short return leg. (Symmetric reasoning applies to rows
-    when direction="horizontal".) Only the axis kept odd is guaranteed a
-    centred cell; the even axis trades that off for the short return.
+    when direction="horizontal".) This parity rule is a hard constraint,
+    unaffected by *offset* -- only where the grid's phase sits relative to
+    the polygon shifts, never which axis is forced odd/even.
 
     Parameters
     ----------
@@ -104,6 +108,14 @@ def create_grid_positions(
     direction        : ``"vertical"`` or ``"horizontal"`` -- must match the
                        *direction* passed to :func:`generate_scanning_path`
                        for the short-return property above to hold.
+    offset           : ``(dx, dy)`` shift applied to the bounding-box
+                       midpoint before building the grid (µm). ``(0, 0)``
+                       (default) reproduces the original centred behaviour
+                       exactly. Only offsets within one *step_size* period
+                       produce a distinct grid phase relative to the fixed
+                       polygon -- see :func:`optimize_grid_offset`, which
+                       searches this space to minimise wasted (non-tissue)
+                       imaged area, travel length, and FOV count.
 
     Returns
     -------
@@ -112,8 +124,8 @@ def create_grid_positions(
     ys   : 1-D y-coordinates (length H)
     """
     xmin, ymin, xmax, ymax = boundary_polygon.bounds
-    cx = (xmin + xmax) / 2.0
-    cy = (ymin + ymax) / 2.0
+    cx = (xmin + xmax) / 2.0 + offset[0]
+    cy = (ymin + ymax) / 2.0 + offset[1]
 
     if direction == "vertical":
         xs = _spaced_coords(cx, xmin, xmax, step_size, even=True)
@@ -824,3 +836,160 @@ def build_boundary_path(
     if return_side is not None and len(filtered) > 1:
         filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
     return filtered
+
+
+# ── Grid offset optimization ───────────────────────────────────────────────────
+
+@dataclass
+class GridOffsetCandidate:
+    """One evaluated grid phase and the metrics of the path it produces."""
+    offset:           Tuple[float, float]
+    n_fovs:           int
+    waste_area_um2:   float
+    total_length_um:  float
+    max_step_um:      float
+
+
+@dataclass
+class GridOffsetResult:
+    """Winner (by *priority*) plus every candidate evaluated, for inspection."""
+    coords:      np.ndarray
+    best:        GridOffsetCandidate
+    candidates:  List[GridOffsetCandidate]
+
+
+def optimize_grid_offset(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    direction:        str                 = "vertical",
+    return_side:      Optional[str]       = None,
+    n_samples:        int                 = 9,
+    priority:         Tuple[str, ...]     = ("waste_area_um2", "total_length_um", "n_fovs"),
+) -> GridOffsetResult:
+    """
+    Search the grid's phase (offset within one *step_size* period) for the
+    one that best minimises wasted (non-tissue) imaged area, scan travel
+    length, and FOV count -- without touching the hard parity constraint
+    :func:`create_grid_positions` already enforces for a short return leg.
+
+    Only the grid's *offset* varies across candidates; *step_size* and
+    *direction* stay fixed (per the parity rule they'd otherwise break), so
+    this is a phase search, not a redesign of the grid itself. Offsets a
+    full *step_size* apart reproduce the same lattice against a polygon
+    fixed in space, so ``[-step_size/2, step_size/2)`` in each axis covers
+    every distinct phase.
+
+    Parameters
+    ----------
+    boundary_polygon : the tissue boundary for this segment
+    hole_polygons    : exclusion polygons (applied to this boundary) -- also
+                       subtracted from the boundary when computing wasted
+                       area below, since a hole-covered pixel is just as
+                       much non-tissue as one outside the boundary entirely
+                       (unlike :func:`filter_scanning_path`, which only
+                       drops FOVs a hole *fully* contains -- a partially
+                       hole-overlapping FOV survives filtering, and its
+                       hole-covered area still counts as waste here)
+    step_size        : grid spacing (µm)
+    fov_size_um      : camera FOV side length (µm)
+    direction        : boustrophedon direction, forwarded to
+                       :func:`create_grid_positions`/:func:`generate_scanning_path`
+    return_side      : forwarded to :func:`close_scanning_path`, applied
+                       before each candidate's travel length is measured, so
+                       the reported length matches what the caller will
+                       actually use
+    n_samples        : candidate offsets per axis (``n_samples**2`` total
+                       evaluated) -- odd values include the un-shifted
+                       ``(0, 0)`` centred grid as one candidate
+    priority         : ``GridOffsetCandidate`` field names, most important
+                       first, used to lexicographically rank candidates
+                       (each minimised). Default matches the order the
+                       objectives are usually stated in: wasted area, then
+                       travel length, then FOV count.
+
+    Returns
+    -------
+    :class:`GridOffsetResult` -- ``coords`` is the winning candidate's
+    ``(M, 2)`` path (already closed if *return_side* was given, matching
+    :func:`build_boundary_path`'s contract); ``candidates`` holds every
+    evaluated offset's metrics, so a caller can inspect the actual spread
+    (e.g. to see whether the objectives move together or trade off against
+    each other on this particular boundary).
+    """
+    if hole_polygons:
+        effective_tissue = boundary_polygon.difference(unary_union(hole_polygons))
+    else:
+        effective_tissue = boundary_polygon
+
+    half   = fov_size_um / 2.0
+    offsets = np.linspace(-step_size / 2.0, step_size / 2.0, n_samples, endpoint=False)
+
+    candidates: List[GridOffsetCandidate] = []
+    for dx in offsets:
+        for dy in offsets:
+            grid, _, _ = create_grid_positions(
+                boundary_polygon, step_size, direction=direction, offset=(dx, dy),
+            )
+            path     = generate_scanning_path(grid, direction=direction)
+            filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+            if return_side is not None and len(filtered) > 1:
+                filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
+
+            waste_area_um2 = 0.0
+            for x, y in filtered:
+                fov_poly        = shapely_box(x - half, y - half, x + half, y + half)
+                tissue_overlap  = fov_poly.intersection(effective_tissue).area
+                waste_area_um2 += fov_poly.area - tissue_overlap
+
+            total_length_um, max_step_um = get_path_stats(filtered)
+            candidates.append(GridOffsetCandidate(
+                offset          = (float(dx), float(dy)),
+                n_fovs          = len(filtered),
+                waste_area_um2  = waste_area_um2,
+                total_length_um = total_length_um,
+                max_step_um     = max_step_um,
+            ))
+
+    def _sort_key(c: GridOffsetCandidate) -> Tuple[float, ...]:
+        return tuple(getattr(c, field) for field in priority)
+
+    candidates.sort(key=_sort_key)
+    best = candidates[0]
+
+    grid, _, _ = create_grid_positions(
+        boundary_polygon, step_size, direction=direction, offset=best.offset,
+    )
+    path     = generate_scanning_path(grid, direction=direction)
+    filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+    if return_side is not None and len(filtered) > 1:
+        filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
+
+    return GridOffsetResult(coords=filtered, best=best, candidates=candidates)
+
+
+def build_boundary_path_optimized(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    direction:        str             = "vertical",
+    return_side:      Optional[str]   = None,
+    n_samples:        int             = 9,
+    priority:         Tuple[str, ...] = ("waste_area_um2", "total_length_um", "n_fovs"),
+) -> np.ndarray:
+    """
+    Drop-in replacement for :func:`build_boundary_path` that additionally
+    searches the grid's phase via :func:`optimize_grid_offset` -- same
+    ``(M, 2)`` coordinate array contract, offset search parameters only.
+
+    Use :func:`optimize_grid_offset` directly instead when the per-candidate
+    diagnostic metrics are needed (e.g. to print/plot the evaluated spread).
+    """
+    result = optimize_grid_offset(
+        boundary_polygon, hole_polygons, step_size, fov_size_um,
+        direction=direction, return_side=return_side,
+        n_samples=n_samples, priority=priority,
+    )
+    return result.coords
