@@ -12,18 +12,21 @@ This makes the file easy to inspect and edit before starting an experiment.
 
 Experiment structure
 --------------------
-Round 1 (imaging): cells acquisition for all FOVs (no preceding fluidics)
-Fluidics Round 02: Hybridize/Adaptor 1 → [Readouts] → Buffer   ← NO cleave (first hyb)
-Round 2 (imaging): bits #1 acquisition for all FOVs
-Fluidics Round 03: Cleave → Hybridize/Adaptor 2 → [Readouts] → Buffer
+Round 1 (imaging): "Cells Imaging" -- cells acquisition for all FOVs (no preceding fluidics)
+"Hyb 01 Fluidics": Hybridize/Adaptor 1 → [Readouts] → Buffer   ← NO cleave (first hyb)
+Round 2 (imaging): "Hyb 01 Imaging" -- bits #1 acquisition for all FOVs
+"Hyb 02 Fluidics": Cleave → Hybridize/Adaptor 2 → [Readouts] → Buffer
 …
-Round N+1 (imaging): bits #N acquisition
-[Optional] Fluidics Final: Cleave only
+Round N+1 (imaging): "Hyb N Imaging" -- bits #N acquisition
+[Optional] "Fluidics Final": Cleave only
 
-Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
-precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb index
-(1…N), not the imaging-round number, and the first hyb omits the cleave step
-(see ``create_dave_config(first_hyb_no_cleave=...)``).
+Loops are named "Cells Imaging" (round 1), "Hyb NN Imaging"/"Hyb NN Fluidics"
+(bits rounds, NN = bit/hyb index), or "Fluidics Final" (the optional closing
+cleave) -- never the raw imaging_round number, so a leading cells round never
+shifts what the label means. A fluidics loop is named by the hyb index of the
+imaging round it PRECEDES (e.g. "Hyb 01 Fluidics" precedes "Hyb 01 Imaging").
+The hyb-protocol number tracks this same bit/hyb index (1…N), and the first
+hyb omits the cleave step (see ``create_dave_config(first_hyb_no_cleave=...)``).
 
 The concrete Kilroy protocol names written into the recipe are resolved from the
 Kilroy config passed as ``create_dave_config(kilroy_config=...)`` (see
@@ -509,9 +512,9 @@ def create_dave_config(
       ``positions_dir`` is given (the multi-boundary layout from
       ``create_round_info_multitissue``). Because a Dave loop iterates exactly one
       positions file, each segment (boundary or transit) becomes its **own**
-      ``<loop>`` — named ``"Imaging Round NN - <segment>"`` — with its own movie
-      and HAL config, in ``round_info`` row order. Fluidics loops still sit
-      between rounds (after a round's last segment loop).
+      ``<loop>`` — named ``"<Cells Imaging|Hyb NN Imaging> - <segment>"`` — with
+      its own movie and HAL config, in ``round_info`` row order. Fluidics loops
+      still sit between rounds (after a round's last segment loop).
 
     **One ``<loop_variable>`` per loop, always — even when several rounds
     point at the same positions file.** Dave's real ``v2Generator``
@@ -523,7 +526,7 @@ def create_dave_config(
     against the storm_control source; an earlier attempt to declare one
     shared loop_variable per segment/positions-file, referenced by name from
     each round's movie, loaded fine in MERci's own reader but made real Dave
-    raise ``ValueError: 'Imaging Round NN' is not in list``). So every round
+    raise ``ValueError: 'Hyb NN Imaging' is not in list``). So every round
     (and, in per-segment mode, every round×segment) still gets its own
     identically-named ``<loop_variable>``, duplicating the same ``file_path``
     across as many declarations as there are rounds/segments that use it.
@@ -536,10 +539,11 @@ def create_dave_config(
       (``dave_fov_offset_patch``); stock Dave ignores the attributes and the shared
       names would collide.
 
-    Fluidics loops are named by the NEXT imaging round (e.g. "Fluidics Round 02"
-    precedes "Imaging Round 02").  The hyb-protocol number tracks the bit/hyb
-    index (the count of bits rounds reached so far), not the imaging-round
-    number, so a leading cells round does not shift the Kilroy protocol names.
+    Fluidics loops are named by the hyb index of the NEXT imaging round (e.g.
+    "Hyb 01 Fluidics" precedes "Hyb 01 Imaging").  The hyb-protocol number
+    tracks that same bit/hyb index (the count of bits rounds reached so far),
+    not the imaging-round number, so a leading cells round does not shift the
+    Kilroy protocol names or the hyb numbering.
     The last imaging round has no trailing fluidics unless
     ``include_final_cleave=True``.
 
@@ -673,6 +677,20 @@ def create_dave_config(
     bits_round_ids   = [rid for rid in round_ids if _round_has_bits(rid)]
     first_bits_round = bits_round_ids[0] if bits_round_ids else None
 
+    def _hyb_idx(round_id: int) -> int:
+        """Bit/hyb index (1-based) of imaging round *round_id* -- offset so a
+        leading cells round never shifts it (round *first_bits_round* -> 1)."""
+        if first_bits_round is not None and round_id >= first_bits_round:
+            return round_id - first_bits_round + 1
+        return round_id
+
+    def _imaging_label(round_id: int) -> str:
+        """Base loop label for imaging round *round_id*: the fixed \"Cells
+        Imaging\" for the (single) non-bits round, else \"Hyb NN Imaging\"."""
+        if round_id in bits_round_ids:
+            return f"Hyb {_hyb_idx(round_id):02d} Imaging"
+        return "Cells Imaging"
+
     root = ET.Element("recipe")
     seq  = ET.SubElement(root, "command_sequence")
 
@@ -769,7 +787,11 @@ def create_dave_config(
         precede_dir = None   # save dir for the imaging round this fluidics precedes
         if not is_last:
             next_round = round_id + 1
-            fl_name    = f"Fluidics Round {next_round:02d}"
+            # Hyb number tracks the bit/hyb index of the NEXT imaging round (not
+            # the raw imaging_round number), so a leading cells round shifts
+            # neither the Kilroy protocol numbers nor the loop's own name.
+            hyb_idx = _hyb_idx(next_round)
+            fl_name = f"Hyb {hyb_idx:02d} Fluidics"
 
             # The directory for the upcoming imaging round (from round_info.data_dir)
             # is set BEFORE its fluidics block, so a <change_directory> precedes every
@@ -780,13 +802,6 @@ def create_dave_config(
                 next_rows = round_info[round_info["imaging_round"] == next_round]
                 if len(next_rows):
                     precede_dir = next_rows.iloc[0].get("data_dir")
-
-            # Hyb number tracks the bit/hyb index of the NEXT imaging round, so a
-            # leading cells round does not shift the Kilroy protocol numbers.
-            if first_bits_round is not None and next_round >= first_bits_round:
-                hyb_idx = next_round - first_bits_round + 1
-            else:
-                hyb_idx = next_round   # no cells offset detected; legacy numbering
 
             # The fluidics that precedes the FIRST bits round omits the cleave.
             is_first_hyb = (first_bits_round is not None and next_round == first_bits_round)
@@ -870,7 +885,7 @@ def create_dave_config(
             # before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
-                lname = f"Imaging Round {round_id:02d} - {seg}"
+                lname = f"{_imaging_label(round_id)} - {seg}"
                 _add_change_directory(row.get("data_dir"))
                 loop  = ET.SubElement(seq, "loop")
                 loop.set("name", lname)
@@ -883,7 +898,7 @@ def create_dave_config(
             # every round points at the same positions file -- see the
             # segment_mode branch above for why Dave requires this per-loop
             # declaration rather than one shared across rounds.
-            img_name = f"Imaging Round {round_id:02d}"
+            img_name = _imaging_label(round_id)
             _add_change_directory(rows.iloc[0].get("data_dir") if has_data_dir else None)
             img_loop = ET.SubElement(seq, "loop")
             img_loop.set("name", img_name)
@@ -894,11 +909,18 @@ def create_dave_config(
         _add_fluidics(round_id, is_last)
 
     # ── Loop variables ─────────────────────────────────────────────────────────
+    # Grouped under two labeled comments so the two kinds of loop_variable
+    # (position files vs. fluidics protocol lists) are easy to tell apart when
+    # reading the raw XML.
+    if imaging_loop_vars:
+        root.append(ET.Comment(" POSITION VARIABLES "))
     for lname, pos_path in imaging_loop_vars:
         lv = ET.SubElement(root, "loop_variable")
         lv.set("name", lname)
         ET.SubElement(lv, "file_path").text = pos_path
 
+    if fluidics_loop_vars:
+        root.append(ET.Comment(" FLUIDICS VARIABLES "))
     for lname, protocols in fluidics_loop_vars:
         lv = ET.SubElement(root, "loop_variable")
         lv.set("name", lname)
@@ -957,14 +979,15 @@ def annotate_dave_with_round_info(
     Insert XML comments into an existing Dave recipe XML describing which bits
     are imaged in each round.
 
-    For round 1: comment is placed before the ``<loop name="Imaging Round 01">``
+    For round 1: comment is placed before the ``<loop name="Cells Imaging">``
     block.  For rounds 2+: comment is placed before the corresponding
-    ``<loop name="Fluidics Round NN">`` block (which precedes that imaging
-    round).  A blank line is inserted before each comment for readability.
+    ``<loop name="Hyb NN Fluidics">`` block (which precedes that imaging
+    round; hyb index NN = imaging-round index − 1).  A blank line is inserted
+    before each comment for readability.
 
     In the default cells-first layout, imaging round 1 is the cells acquisition
     (no bits), so it normally has no entry here; the bits comments attach to the
-    ``Fluidics Round NN`` loops for rounds 2…N+1.  The ``round_1indexed`` values
+    ``Hyb NN Fluidics`` loops for rounds 2…N+1.  The ``round_1indexed`` values
     passed in must therefore be **imaging-round** indices (bits start at 2), not
     bit/hyb indices — see ``notebooks/prepare_imaging/04``.
 
@@ -999,20 +1022,26 @@ def annotate_dave_with_round_info(
         def _append_comment(n: int) -> None:
             if n not in round_comments:
                 return
+            # n is an imaging-round index (see docstring); relabel to match
+            # the loop naming it sits next to -- "Cells" for round 1, else
+            # the hyb index (n - 1, since round 1 is always cells).
+            label = "Cells" if n == 1 else f"Hyb {n - 1:02d}"
             new_lines.append("")
-            new_lines.append(f"{indent}<!-- Round {n}:")
+            new_lines.append(f"{indent}<!-- {label}:")
             for s in round_comments[n]:
                 new_lines.append(f"{indent}        {s}")
             new_lines.append(f"{indent}-->")
 
-        # Round 1: insert before "Imaging Round 01" loop
-        if stripped == '<loop name="Imaging Round 01">':
+        # Round 1: insert before "Cells Imaging" loop
+        if stripped == '<loop name="Cells Imaging">':
             _append_comment(1)
         else:
-            # Rounds 2+: insert before the corresponding "Fluidics Round NN" loop
-            m = re.match(r'^<loop name="Fluidics Round (\d+)">', stripped)
+            # Rounds 2+: insert before the corresponding "Hyb NN Fluidics" loop
+            # -- hyb index NN corresponds to imaging-round index NN + 1, since
+            # round 1 is always cells.
+            m = re.match(r'^<loop name="Hyb (\d+) Fluidics">', stripped)
             if m:
-                _append_comment(int(m.group(1)))
+                _append_comment(int(m.group(1)) + 1)
 
         new_lines.append(line)
 
@@ -1038,13 +1067,14 @@ class ExperimentEstimate:
     total_bytes     : total raw image size (Σ frames × bytes_per_frame over every
                       FOV-movie)
     n_fov_movies    : number of per-FOV movies acquired across the whole experiment
-    per_round       : list of ``{"round", "label", "imaging_s", "fluidics_s",
-                      "bytes", "movies", "series"}`` dicts, numbered rounds in
-                      order followed by any non-numbered row (e.g. the closing
-                      "Fluidics Final" step, labeled by its own loop name
-                      rather than a fabricated round number). ``series`` is
-                      the list of distinct movie names (e.g. ``"hal-st2_01"``)
-                      imaged in that round.
+    per_round       : list of ``{"hyb", "label", "imaging_s", "fluidics_s",
+                      "bytes", "movies", "series"}`` dicts -- "Cells Imaging"
+                      first, then hyb-numbered rows (``"hyb"`` = bit/hyb
+                      index) in order, then any other non-numbered row (e.g.
+                      the closing "Fluidics Final" step, labeled by its own
+                      loop name rather than a fabricated hyb number).
+                      ``series`` is the list of distinct movie names (e.g.
+                      ``"hal-st2_01"``) imaged in that round.
     assumptions     : human-readable list of the numbers assumed (frame size, frame
                       time source, …)
     warnings        : anything that made the estimate approximate (missing positions
@@ -1178,21 +1208,25 @@ def estimate_dave_experiment(
     n_movies     = 0
     per_round: Dict[object, dict] = {}
 
-    def _round_no(lname: str) -> Optional[int]:
-        m = re.search(r"Round (\d+)", lname)
+    def _hyb_no(lname: str) -> Optional[int]:
+        """Hyb index from a loop name like "Hyb 01 Imaging"/"Hyb 01 Fluidics"
+        (ignoring any trailing " - <segment>" suffix), or None for "Cells
+        Imaging"/"Fluidics Final" (and their segment-mode variants), which
+        have no hyb number to group by."""
+        m = re.search(r"Hyb (\d+)", lname)
         return int(m.group(1)) if m else None
 
     for loop in seq.findall("loop"):
         lname  = loop.get("name", "")
-        rno    = _round_no(lname)
-        # Loops without a numbered round in their name (e.g. the closing
-        # "Fluidics Final" cleave-only step) get their own row keyed and
+        hno    = _hyb_no(lname)
+        # Loops without a hyb number in their name ("Cells Imaging", "Fluidics
+        # Final", and their segment-mode variants) get their own row keyed and
         # labeled by their real name, instead of being silently folded into a
-        # fabricated "Round 00" -- which not only mislabeled the step but
-        # sorted it to the front of the report even though it runs LAST.
-        key    = rno if rno is not None else lname
+        # fabricated "Hyb 00" -- which not only mislabeled the step but could
+        # sort it out of its true position in the report.
+        key    = hno if hno is not None else lname
         rec    = per_round.setdefault(
-            key, {"round": rno, "label": (f"Round {rno:02d}" if rno is not None else lname),
+            key, {"hyb": hno, "label": (f"Hyb {hno:02d}" if hno is not None else lname),
                   "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0, "series": []})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
@@ -1200,7 +1234,7 @@ def estimate_dave_experiment(
             # name="...">, not necessarily the parent <loop>'s own name: since
             # positions loop_variables are shared across every round visiting
             # the same segment (see create_dave_config), a loop named e.g.
-            # "Imaging Round 02" can reference a loop_variable named "B1" or
+            # "Hyb 01 Imaging" can reference a loop_variable named "B1" or
             # "Positions". Every movie within one loop references the same
             # variable, so the first movie's is enough.
             ve_el    = movies[0].find("variable_entry")
@@ -1254,11 +1288,17 @@ def estimate_dave_experiment(
         fluidics_time_s = fluidics_time,
         total_bytes     = total_bytes,
         n_fov_movies    = n_movies,
-        # Numbered rounds sorted numerically first; any non-numbered row (e.g.
-        # "Fluidics Final") sorted after, in the order it was first seen --
-        # `sorted` is stable, so ties among non-int keys keep dict insertion order.
+        # "Cells Imaging" (and its segment-mode "Cells Imaging - <segment>"
+        # variants) first (round 1 always runs first), then hyb-numbered rows
+        # ascending, then any other non-numbered row (e.g. "Fluidics Final")
+        # last, in the order it was first seen -- `sorted` is stable, so ties
+        # within a tier keep dict insertion order.
         per_round       = [per_round[k] for k in
-                           sorted(per_round, key=lambda k: (0, k) if isinstance(k, int) else (1, 0))],
+                           sorted(per_round, key=lambda k: (
+                               (1, k) if isinstance(k, int) else
+                               (0, 0) if str(k).startswith("Cells") else
+                               (2, 0)
+                           ))],
         assumptions     = assumptions,
         warnings        = warnings_list,
     )
@@ -1337,6 +1377,11 @@ def _write_dave_xml(root: ET.Element, output_path: Path, leading_comment: Option
 
     # Remove the extra blank line toprettyxml adds before every element
     text = re.sub(r"\n[ \t]*\n", "\n", text)
+
+    # Restore one blank line after the POSITION/FLUIDICS VARIABLES section
+    # comments (create_dave_config), for readability -- the strip above would
+    # otherwise flatten them along with every other element.
+    text = re.sub(r"(<!-- (?:POSITION|FLUIDICS) VARIABLES -->\n)", r"\1\n", text)
 
     if leading_comment:
         decl, _, rest = text.partition("\n")
