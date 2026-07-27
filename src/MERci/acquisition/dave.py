@@ -969,6 +969,163 @@ def create_dave_config(
     return None
 
 
+# ── Focus-lock test recipe ───────────────────────────────────────────────────
+
+def create_focus_test_dave_config(
+    positions_file:   Path,
+    output_path:      Path,
+    num_focus_checks: int = 50,
+    focus_scan:       bool = True,
+    n_test_frames:    int = 0,
+    hal_config:       Optional[str] = None,
+    settings_dir:     Optional[Path] = None,
+    data_dir:         Optional[Path] = None,
+    create_data_dir:  bool = True,
+    movie_name:       str = "focustest",
+) -> int:
+    """
+    Write a lightweight Dave recipe that visits every FOV in *positions_file*
+    and checks focus lock only -- no fluidics -- to catch a bad focus lock
+    across the whole coverslip before committing to the full multi-hour
+    acquisition.
+
+    **No movie by default (``n_test_frames=0``).** Each FOV's ``<movie>``
+    carries only ``<name>``/``<check_focus>`` -- no ``<length>``/
+    ``<parameters>``. Dave's real ``v2Generator``
+    (``XMLRecipeParser.convertToDaveXMLPrimitives``) expands a ``<movie>``
+    into one action per a FIXED list (DAMoveStage, ..., DACheckFocus, ...,
+    DASetParameters, ..., DATakeMovie), and each action's own ``createETree``
+    silently returns ``None`` (omitting that step) when the fields it needs
+    aren't present -- confirmed directly against the real stock source
+    (``storm_control/dave/daveActions.py``): ``DASetParameters.createETree``
+    requires a ``parameters`` field, and ``DATakeMovie.createETree`` requires
+    both ``name`` AND ``length`` (with ``length > 0``). Omitting
+    ``<length>``/``<parameters>`` therefore yields a branch with ONLY
+    DAMoveStage + DACheckFocus -- no image is ever taken, no HAL parameters
+    changed. This needs no patch to Dave/HAL; it works with stock Dave as-is
+    (verified directly by running the real, unmodified ``v2Generator``
+    against a generated recipe of each kind -- see this repo's
+    ``prompt_history`` for the verification script).
+
+    **No persisted per-FOV pass/fail file is possible in this mode.** HAL's
+    focus-lock reply (``focus_status``) only reaches Dave live over TCP; Dave
+    shows a failure in its own transient, in-memory warnings list (confirmed
+    directly against ``storm_control/dave/dave.py``'s ``handleWarning`` --
+    it only calls ``self.ui.currentWarnings.addWarning``, a GUI widget,
+    nothing disk-backed) but never writes it to a file. The ONLY on-disk
+    record of per-frame focus-lock quality HAL produces is the ``.off``
+    sidecar (``good-offset`` column -- already read by
+    :mod:`MERci.analysis.stage_z` for ``stage-z``), and that file is only
+    opened once an actual movie's frames start arriving
+    (``storm_control/hal4000/focusLock/lockControl.py``'s
+    ``handleNewFrame``) -- so a zero-frame check-only FOV leaves no trace
+    file at all.
+
+    **Set ``n_test_frames > 0`` for a real per-FOV record.** This adds
+    ``<length>``/``<parameters>`` (from ``hal_config``, required in this
+    mode) and ``<overwrite>True</overwrite>`` to every movie, so HAL takes a
+    real (but short) movie per FOV -- ``n_test_frames`` is sent to HAL as the
+    actual frame count (``DATakeMovie``'s ``length`` field, not just a
+    Dave-side estimate), so this genuinely limits real acquisition time --
+    and writes its normal ``.off`` sidecar, whose ``good-offset`` column can
+    then be read back per FOV with
+    :func:`MERci.analysis.stage_z.focus_lock_summary_for_fov`. Trade-off:
+    real (small) disk usage/time per FOV, and the destination directory must
+    exist (``data_dir``/``create_data_dir``, same requirement
+    :func:`create_dave_config` has for every other movie).
+
+    Parameters
+    ----------
+    positions_file   : positions_*.txt to visit (same format as the main recipe)
+    output_path      : where to write the recipe XML
+    num_focus_checks : ``<num_focus_checks>`` for every FOV's ``<check_focus>``
+    focus_scan       : if True, ``<focus_scan/>`` is included (scan for focus
+                       if not already locked); if False, only checks the
+                       current lock state without scanning
+    n_test_frames    : ``0`` (default) = check-focus only, no movie, no file
+                       (see above). ``>0`` = also take a real movie of this
+                       many frames per FOV (requires ``hal_config``),
+                       producing a real per-FOV ``.off`` sidecar.
+    hal_config       : HAL config filename (with or without ``.xml``) to use
+                       for the movie's ``<parameters>`` when
+                       ``n_test_frames > 0`` -- required in that case,
+                       ignored when ``n_test_frames == 0`` (no image is
+                       taken, so no HAL parameters are needed)
+    settings_dir     : if given (and ``n_test_frames > 0``), used to verify
+                       *hal_config* actually exists before writing the
+                       recipe, via the same lookup :func:`create_dave_config`
+                       uses (checks the ``multi_z/`` sibling too)
+    data_dir         : if given (and ``n_test_frames > 0``), a
+                       ``<change_directory>`` is emitted before the loop so
+                       the short test movies land here rather than wherever
+                       HAL's directory was last set; ignored when
+                       ``n_test_frames == 0`` (nothing is written to disk)
+    create_data_dir  : if True (default), create *data_dir* when given (HAL
+                       requires the directory to exist)
+    movie_name       : base movie name (e.g. ``"hal-mf3-focustest"``);
+                       ``increment="Yes"`` numbers it per FOV exactly like a
+                       real acquisition movie
+
+    Returns
+    -------
+    int : number of FOVs visited (from *positions_file*)
+    """
+    if n_test_frames > 0 and not hal_config:
+        raise ValueError(
+            "hal_config is required when n_test_frames > 0 -- HAL needs real "
+            "parameters to take a movie, even a 1-frame one."
+        )
+
+    hal_stem = None
+    if n_test_frames > 0:
+        hal_stem = Path(hal_config).stem
+        if settings_dir is not None:
+            hal_path = resolve_hal_config_path(settings_dir, hal_stem)
+            if not hal_path.exists():
+                raise FileNotFoundError(
+                    f"hal_config {hal_stem!r} not found in {settings_dir} "
+                    f"(or its multi_z/ sibling) -- check the filename."
+                )
+
+    n_fovs = count_positions(positions_file)
+    if n_fovs == 0:
+        raise ValueError(f"No FOVs found in {positions_file}.")
+
+    root = ET.Element("recipe")
+    seq  = ET.SubElement(root, "command_sequence")
+
+    if n_test_frames > 0 and data_dir is not None:
+        ET.SubElement(seq, "change_directory").text = str(data_dir)
+        if create_data_dir:
+            Path(data_dir).mkdir(parents=True, exist_ok=True)
+
+    loop = ET.SubElement(seq, "loop")
+    loop.set("name", "Focus Test")
+
+    movie   = ET.SubElement(loop, "movie")
+    name_el = ET.SubElement(movie, "name")
+    name_el.set("increment", "Yes")
+    name_el.text = movie_name
+    if n_test_frames > 0:
+        ET.SubElement(movie, "length").text     = str(n_test_frames)
+        ET.SubElement(movie, "parameters").text = hal_stem
+    cf = ET.SubElement(movie, "check_focus")
+    ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
+    if focus_scan:
+        ET.SubElement(cf, "focus_scan")
+    if n_test_frames > 0:
+        ET.SubElement(movie, "overwrite").text = "True"
+    ve = ET.SubElement(movie, "variable_entry")
+    ve.set("name", "Focus Test")
+
+    lv = ET.SubElement(root, "loop_variable")
+    lv.set("name", "Focus Test")
+    ET.SubElement(lv, "file_path").text = str(positions_file)
+
+    _write_dave_xml(root, Path(output_path))
+    return n_fovs
+
+
 # ── Dave annotation ────────────────────────────────────────────────────────────
 
 def annotate_dave_with_round_info(

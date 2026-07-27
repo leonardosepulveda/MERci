@@ -5,12 +5,16 @@ Stage-z drift QC.
 Every acquired movie writes a HAL ``.off`` focus-lock log alongside its image
 file (same directory, same stem — the same sidecar convention as ``.inf``,
 see ``common.io.get_dax_shape``): a whitespace-delimited table, one row per
-frame, with a ``stage-z`` column recording the hardware-reported stage
-height. The focus lock is expected to hold ``stage-z`` constant for a whole
-FOV's stack; this module summarizes that column per FOV (so a notebook can
-check how much it actually drifts over the course of a long acquisition)
-and caches the result on disk, so a multi-thousand-FOV experiment's
-``.off`` files are each read only once, ever.
+frame, columns ``frame offset power stage-z good-offset``. The focus lock is
+expected to hold ``stage-z`` constant for a whole FOV's stack; this module
+summarizes that column per FOV (so a notebook can check how much it
+actually drifts over the course of a long acquisition) and caches the
+result on disk, so a multi-thousand-FOV experiment's ``.off`` files are each
+read only once, ever. It also summarizes ``good-offset`` (HAL's own
+per-frame focus-lock-quality flag) via ``summarize_focus_lock``/
+``focus_lock_summary_for_fov``, e.g. for reading back results from
+``MERci.acquisition.dave.create_focus_test_dave_config``'s optional
+per-FOV test movies.
 """
 from __future__ import annotations
 
@@ -67,6 +71,37 @@ def stage_z_summary_for_fov(image_path: Path) -> Optional[dict]:
     if not off_path.exists():
         return None
     return summarize_stage_z(read_off_file(off_path))
+
+
+def summarize_focus_lock(off_df: pd.DataFrame) -> dict:
+    """
+    Summarize the ``good-offset`` column of one FOV's ``.off`` table -- HAL's
+    own per-frame "was the focus lock good at this instant" flag (see
+    ``storm_control/hal4000/focusLock/lockControl.py``'s ``handleNewFrame``,
+    which writes it as ``is_good`` alongside ``stage-z``). Only meaningful
+    for a movie that actually took at least one frame -- a pure
+    check-focus-only test FOV (see
+    :func:`MERci.acquisition.dave.create_focus_test_dave_config`) writes no
+    ``.off`` file at all, since HAL only opens it once real frames arrive.
+    """
+    good = off_df["good-offset"].astype(bool)
+    return {
+        "n_frames":     int(len(good)),
+        "n_bad_frames": int((~good).sum()),
+        "all_good":     bool(good.all()),
+    }
+
+
+def focus_lock_summary_for_fov(image_path: Path) -> Optional[dict]:
+    """
+    Read *image_path*'s ``.off`` sidecar and summarize its ``good-offset``
+    column, or ``None`` if the sidecar doesn't exist (no movie was ever
+    taken here -- e.g. a check-focus-only test FOV, or one not yet run).
+    """
+    off_path = off_path_for(image_path)
+    if not off_path.exists():
+        return None
+    return summarize_focus_lock(read_off_file(off_path))
 
 
 def load_stage_z_cache(cache_path: Path) -> pd.DataFrame:
