@@ -208,34 +208,6 @@ def _normalise_colour_key(color) -> Optional[int]:
     return int(round(float(color)))
 
 
-def resolve_power(color, power: Optional[Mapping], default_power: float) -> float:
-    """
-    Look up the laser power for a frame of wavelength *color*.
-
-    Parameters
-    ----------
-    color         : frame colour (nm); ``NaN``/``None`` for a blank frame
-    power         : mapping ``{wavelength_nm: power}`` (keys may be int or float),
-                    or ``None`` to always use *default_power*
-    default_power : power used for blank frames and for any colour absent from
-                    *power*
-
-    Returns
-    -------
-    float
-        The per-colour power, or *default_power* when there is no match.
-    """
-    if power is None:
-        return float(default_power)
-    key = _normalise_colour_key(color)
-    if key is None:
-        return float(default_power)
-    for k, v in power.items():
-        if _normalise_colour_key(k) == key:
-            return float(v)
-    return float(default_power)
-
-
 def power_dict_to_channel_list(
     power:         Mapping,
     microscope:    str   = "MF3",
@@ -519,24 +491,29 @@ def frame_table_filename(kind: str, name: str, tier: Optional[str] = None) -> st
 def create_shutter_file(
     frame_table:   pd.DataFrame,
     output_path:   Path,
-    oversampling:  int             = 1,
-    default_power: float           = 1.0,
-    power:         Optional[Mapping] = None,
+    oversampling:  int   = 1,
+    default_power: float = 1.0,
 ) -> None:
     """
     Write a HAL shutter XML file from *frame_table*.
+
+    Every ``<event>``'s ``<power>`` is *default_power* (1.000 by default),
+    regardless of frame colour. This value is a full-modulation flag relative
+    to whatever the HAL config's own ``<default_power>`` sets for that
+    channel (see :func:`power_dict_to_channel_list`), not an independent
+    absolute laser power -- the two are not equivalent, and setting the same
+    real per-colour intensity in both places (an earlier version of this
+    function accepted a ``power={nm: power}`` mapping here, mirroring
+    ``power_dict_to_channel_list``) silently double-applies the intensity
+    scaling on real hardware. Per-colour power belongs ONLY in the HAL
+    config's ``<default_power>``.
 
     Parameters
     ----------
     frame_table   : DataFrame produced by :func:`get_frame_table`
     output_path   : destination path; written with Windows (CRLF) line endings
     oversampling  : value for the ``<oversampling>`` XML element
-    default_power : laser power for any colour not named in *power* (and the
-                    value used for every event when *power* is ``None``)
-    power         : optional mapping ``{wavelength_nm: power}`` giving a
-                    per-colour laser power. Each ``<event>``'s ``<power>`` is set
-                    from its frame colour; colours absent from the mapping fall
-                    back to *default_power*. Keys may be int or float.
+    default_power : laser power written for every ``<event>`` (see above)
     """
     df   = frame_table.sort_index()
     root = ET.Element("repeat")
@@ -557,11 +534,9 @@ def create_shutter_file(
             root.append(ET.Comment(_z_comment(z, color)))
             last_z = z
 
-        event_power = resolve_power(color, power, default_power)
-
         event = ET.SubElement(root, "event")
         ET.SubElement(event, "channel").text = str(int(channel))
-        ET.SubElement(event, "power").text   = f"{event_power:.3f}"
+        ET.SubElement(event, "power").text   = f"{float(default_power):.3f}"
         ET.SubElement(event, "on").text      = f"{float(frame):.1f}"
         ET.SubElement(event, "off").text     = f"{float(frame + 1):.1f}"
 

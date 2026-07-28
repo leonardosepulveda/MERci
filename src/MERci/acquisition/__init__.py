@@ -12,7 +12,6 @@ from .configs import (
     format_z_offsets_from_frame_table,
     reconstruct_frame_table,
     read_shutter_reference,
-    resolve_power,
     power_dict_to_channel_list,
 )
 from .positions import (
