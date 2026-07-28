@@ -24,7 +24,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from shapely.geometry import Polygon, box as shapely_box
@@ -419,6 +419,85 @@ def get_path_stats(coords: np.ndarray) -> Tuple[float, float]:
         return 0.0, 0.0
     dists = np.linalg.norm(np.diff(coords, axis=0), axis=1)
     return float(dists.sum()), float(dists.max())
+
+
+# ── Exterior-FOV detection ────────────────────────────────────────────────────
+
+def find_exterior_fovs(
+    positions:          Dict[int, Tuple[float, float]],
+    step_size:           float,
+    connectivity:        str   = "8",
+    tolerance_fraction:  float = 0.25,
+) -> Set[int]:
+    """
+    Find FOVs on the exterior of an imaged FOV grid -- the true outer
+    perimeter of the imaged footprint, AND the inner boundary of any holes --
+    i.e. any FOV with at least one grid-adjacent neighbour position that is
+    NOT actually imaged.
+
+    Queries real stage coordinates directly via a KD-tree rather than
+    snapping every position onto one shared integer ``(row, col)`` grid
+    index (as the private :func:`_grid_indices` above does): each tissue
+    boundary/piece in a multi-boundary layout gets its own FOV grid centred
+    on that piece's own bounding-box midpoint (see
+    :func:`create_grid_positions`), so different pieces' grids are not in
+    general phase-aligned with each other. A single shared grid-index snap
+    would risk misjudging adjacency exactly at a tissue-piece boundary;
+    testing "is there a real FOV near this exact candidate neighbour
+    position" is correct regardless of any other piece's grid phase, hole
+    geometry, or nearby transit-point irregularity -- so multi-tissue/hole
+    layouts are handled for free, with no per-tissue-piece logic needed.
+
+    Parameters
+    ----------
+    positions          : {fov_id: (x, y)} stage coordinates (µm) of the FOVs
+                         to test -- scope this to one round's own real
+                         imaged FOVs (not the raw experiment-wide
+                         positions.txt), so transit-only FOVs (blank frames)
+                         never enter the result.
+    step_size          : grid step size (µm), e.g. ``ExperimentConfig.step_size_um``
+    connectivity       : "4" (N/S/E/W neighbours only) or "8" (+ diagonals).
+                         "8" (default) also catches FOVs at diagonal-only
+                         tissue notches / concave corners / hole-island
+                         corners that "4" would miss.
+    tolerance_fraction : match tolerance for "is a neighbour actually
+                         present", as a fraction of step_size -- absorbs
+                         small positioning jitter without over-matching to a
+                         FOV that is really one grid cell further away.
+
+    Returns
+    -------
+    Set of FOV ids that are exterior (their FFC-estimation candidates).
+    """
+    from scipy.spatial import KDTree
+
+    if connectivity not in ("4", "8"):
+        raise ValueError(f"connectivity must be '4' or '8', got {connectivity!r}")
+
+    fov_ids = list(positions.keys())
+    coords  = np.array([positions[f] for f in fov_ids], dtype=float)
+    if len(fov_ids) == 0:
+        return set()
+
+    tree = KDTree(coords)
+    tol  = tolerance_fraction * step_size
+
+    offsets = [(step_size, 0.0), (-step_size, 0.0), (0.0, step_size), (0.0, -step_size)]
+    if connectivity == "8":
+        offsets += [
+            (step_size, step_size), (step_size, -step_size),
+            (-step_size, step_size), (-step_size, -step_size),
+        ]
+
+    exterior: Set[int] = set()
+    for fov_id, (x, y) in zip(fov_ids, coords):
+        for dx, dy in offsets:
+            dist, _ = tree.query([x + dx, y + dy])
+            if dist > tol:
+                exterior.add(fov_id)
+                break
+
+    return exterior
 
 
 # ── Multi-tissue / multi-boundary discovery ─────────────────────────────────────

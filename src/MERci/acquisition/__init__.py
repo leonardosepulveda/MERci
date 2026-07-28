@@ -15,6 +15,8 @@ from .configs import (
     power_dict_to_channel_list,
     find_mosaic_helper_configs,
     copy_mosaic_helper_configs,
+    get_color_frame_indices,
+    get_all_color_frame_indices,
 )
 from .positions import (
     create_grid_positions,
@@ -23,6 +25,7 @@ from .positions import (
     filter_scanning_path,
     close_scanning_path,
     get_path_stats,
+    find_exterior_fovs,
     BoundarySpec,
     discover_boundary_files,
     has_boundary_files,

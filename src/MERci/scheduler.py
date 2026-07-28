@@ -28,7 +28,11 @@ from .transfer        import transfer_round, mirror_tree
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
 from .analysis.fov    import analyze_file
-from .analysis.round  import create_mosaic, load_thumbnails_for_round
+from .analysis.round  import (
+    create_mosaic, load_thumbnails_for_round,
+    create_mosaic_ffc, load_raw_frames_for_round,
+)
+from .analysis import ffc as ffc_mod
 from .acquisition.configs import (
     read_hal_flip_vertical,
     find_frame_table_for_hal_config,
@@ -135,29 +139,63 @@ def build_round_mosaics(
     any_mosaic_built = False
 
     for color, frame_idx in color_indices.items():
-        thumbnails, positions = load_thumbnails_for_round(
-            round_id=round_id,
-            metadata=metadata,
-            thumbnails_dir=thumbnails_dir,
-            frame_idx=frame_idx,
-            fov_subset=config.fov_subset,
-        )
-        if not thumbnails:
-            log.warning(
-                "No thumbnails for round %d color %s frame %d; skipping.",
-                round_id, color, frame_idx,
-            )
-            continue
-
         out_path = tracker.mosaic_path(round_id, color)
-        create_mosaic(
-            thumbnails=thumbnails,
-            positions=positions,
-            output_path=out_path,
-            thumbnail_size=config.thumbnail_size,
-            padding=config.mosaic_padding,
-            flip_y=flip_y,
-        )
+
+        if config.mosaic_ffc_enabled and color is not None:
+            ffc_field = None
+            ffc_path = ffc_mod.compute_and_cache_ffc(config, metadata, tracker, color)
+            if ffc_path is not None:
+                ffc_field, _ = ffc_mod.load_ffc_field(ffc_path)
+
+            raw_frames, positions = load_raw_frames_for_round(
+                round_id=round_id,
+                metadata=metadata,
+                frame_idx=frame_idx,
+                fov_subset=config.fov_subset,
+                frame_width=config.frame_width,
+                frame_height=config.frame_height,
+            )
+            if not raw_frames:
+                log.warning(
+                    "No raw frames for round %d color %s frame %d; skipping.",
+                    round_id, color, frame_idx,
+                )
+                continue
+
+            create_mosaic_ffc(
+                raw_frames=raw_frames,
+                positions=positions,
+                output_path=out_path,
+                ffc_field=ffc_field,
+                crop_px=ffc_mod.compute_mosaic_crop_px(config),
+                thumbnail_size=config.thumbnail_size,
+                padding=config.mosaic_padding,
+                flip_y=flip_y,
+                percentile_clip=config.mosaic_contrast_percentile_clip,
+            )
+        else:
+            thumbnails, positions = load_thumbnails_for_round(
+                round_id=round_id,
+                metadata=metadata,
+                thumbnails_dir=thumbnails_dir,
+                frame_idx=frame_idx,
+                fov_subset=config.fov_subset,
+            )
+            if not thumbnails:
+                log.warning(
+                    "No thumbnails for round %d color %s frame %d; skipping.",
+                    round_id, color, frame_idx,
+                )
+                continue
+
+            create_mosaic(
+                thumbnails=thumbnails,
+                positions=positions,
+                output_path=out_path,
+                thumbnail_size=config.thumbnail_size,
+                padding=config.mosaic_padding,
+                flip_y=flip_y,
+            )
         any_mosaic_built = True
 
     if any_mosaic_built:

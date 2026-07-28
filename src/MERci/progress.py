@@ -26,6 +26,11 @@ cli_build_round_mosaic.py / 07_cluster_submit_analysis.ipynb):
 These hold the submitted SLURM job id as their (small) text content, not just
 an empty touch -- so a later run can check ``sacct`` to see whether that job
 is still PENDING/RUNNING before deciding whether to resubmit.
+
+Flat-field-correction (FFC) done, per color (computed once per experiment,
+not per round -- see analysis/ffc.py):
+    <analysis_dir>/done/ffc_<color>nm.ffc_done
+    <analysis_dir>/ffc/ffc_<color>nm.npz    (the cached field itself)
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ _ROUND_DONE_SUFFIX             = ".round_done"
 _ROUND_TRANSFERRED_SUFFIX      = ".round_transferred"
 _FOV_SUBMITTED_SUFFIX          = ".fov_submitted"
 _ROUND_MOSAIC_SUBMITTED_SUFFIX = ".round_mosaic_submitted"
+_FFC_DONE_SUFFIX                = ".ffc_done"
 
 
 def _read_job_id(sentinel: Path) -> Optional[int]:
@@ -66,8 +72,10 @@ class ProgressTracker:
         self.stats_dir      = self.analysis_dir / "stats"
         self.histograms_dir = self.analysis_dir / "histograms"
         self.mosaics_dir    = self.analysis_dir / "mosaics"
+        self.ffc_dir        = self.analysis_dir / "ffc"
         self.done_dir       = self.analysis_dir / "done"
         self.done_dir.mkdir(parents=True, exist_ok=True)
+        self.ffc_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Deterministic path helpers ────────────────────────────────────────────
 
@@ -99,6 +107,12 @@ class ProgressTracker:
 
     def round_mosaic_submitted_sentinel(self, round_id: int) -> Path:
         return self.done_dir / f"round_{round_id:03d}{_ROUND_MOSAIC_SUBMITTED_SUFFIX}"
+
+    def ffc_field_path(self, color: float) -> Path:
+        return self.ffc_dir / f"ffc_{int(color)}nm.npz"
+
+    def ffc_done_sentinel(self, color: float) -> Path:
+        return self.done_dir / f"ffc_{int(color)}nm{_FFC_DONE_SUFFIX}"
 
     # ── Status queries ────────────────────────────────────────────────────────
 
@@ -138,6 +152,11 @@ class ProgressTracker:
 
     def is_histogram_done(self, dax_path: Path) -> bool:
         return self.histogram_path(dax_path).exists()
+
+    def is_ffc_done(self, color: float) -> bool:
+        """True if the FFC field for this color has already been computed
+        and cached (once per experiment, not per round)."""
+        return self.ffc_done_sentinel(color).exists()
 
     def all_fovs_done_for_round(
         self,
@@ -228,6 +247,13 @@ class ProgressTracker:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(str(job_id))
         log.info("Round %d: mosaic build submitted as job %s.", round_id, job_id)
+
+    def mark_ffc_done(self, color: float) -> None:
+        """Create the FFC-done sentinel for this color (idempotent)."""
+        p = self.ffc_done_sentinel(color)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        log.info("FFC field for %snm marked done.", color)
 
     # ── Summary ───────────────────────────────────────────────────────────────
 

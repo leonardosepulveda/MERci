@@ -771,6 +771,41 @@ def get_color_frame_indices(
     return result
 
 
+def get_all_color_frame_indices(
+    frame_table: pd.DataFrame,
+    color:       float,
+    bead_z:      float = 0.0,
+) -> List[int]:
+    """
+    Return every frame index for *color* in *frame_table* (every z-plane),
+    not just the single middle-z one :func:`get_color_frame_indices` returns.
+
+    Used by flat-field-correction sample selection when treating a single
+    FOV's own full z-stack as multiple independent illumination samples of
+    the same channel (vignetting is a property of the optics, not of z).
+
+    Parameters
+    ----------
+    frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
+                  integer index equal to the camera frame number
+    color       : excitation wavelength (nm) to match
+    bead_z      : z value used for fiducial (bead) frames; those rows are
+                  excluded
+
+    Returns
+    -------
+    Frame indices for *color*, in ascending z order.
+    """
+    df = frame_table.copy()
+    df["frame_idx"] = df.index
+
+    data = df[(df["z"] != bead_z) & (df["color"] == color)].copy()
+    if data.empty:
+        return []
+
+    return data.sort_values("z")["frame_idx"].astype(int).tolist()
+
+
 # ── Frame table reconstruction (inverse of get_frame_table) ──────────────────
 
 def read_shutter_reference(hal_config_path: Path) -> str:

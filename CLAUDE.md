@@ -129,12 +129,26 @@ src/MERci/
                     #   microscope with none available),
                     # naming rule: sequence_stem + hal_config_filename / shutter_filename / frame_table_filename
                     # (stem = "{kind}-{name}", kind in bits/cells/transit; hyphens delimit the prefix)
-                    # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
+                    # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices,
+                    #   get_all_color_frame_indices (every z-frame index for one color, not just the
+                    #   single mid-z one get_color_frame_indices returns -- used by analysis/ffc.py's
+                    #   "single_fov_all_frames" FFC sample-selection strategy, since vignetting doesn't
+                    #   depend on z)
                     # + reconstruct_frame_table (inverse: hal+shutter XML -> frame table) and its parsers
                     #   read_shutter_reference, parse_z_offsets, parse_shutter_events
     positions.py    # create_grid_positions, generate_scanning_path, filter_scanning_path, close_scanning_path,
                     # load_hole_polygons (also reassembles hole{n}_island{m}.txt companions -- see mosaic.py --
-                    #   into interior rings of that hole's Polygon, via Polygon(coords, holes=[...])), get_path_stats
+                    #   into interior rings of that hole's Polygon, via Polygon(coords, holes=[...])), get_path_stats,
+                    # find_exterior_fovs (FOVs on the exterior of an imaged FOV grid -- the true outer
+                    #   perimeter AND any hole's inner boundary -- used by analysis/ffc.py's
+                    #   "exterior_grid" FFC sample-selection strategy. Queries real stage coordinates
+                    #   directly via a KD-tree rather than snapping onto one shared integer grid index
+                    #   (the private _grid_indices below): each tissue boundary/piece gets its OWN FOV
+                    #   grid centred on that piece's own bounding-box midpoint (create_grid_positions),
+                    #   so different pieces' grids are not in general phase-aligned -- a shared-grid-index
+                    #   snap would misjudge adjacency exactly at a tissue-piece boundary; real-coordinate
+                    #   KD-tree queries are correct regardless of any other piece's phase, so multi-tissue/
+                    #   hole layouts are handled with no per-tissue-piece logic needed)
                     # + multi-tissue: discover_boundary_files (auto multi/single/legacy), load_boundary_polygon,
                     #   create_transit_path (A->B, ~2x step), build_boundary_path (per-boundary pipeline), BoundarySpec,
                     #   has_boundary_files / resolve_boundary_dir (fall back to data/positions/examples when empty)
@@ -280,7 +294,46 @@ src/MERci/
                     # and is_contiguous, False if signal turned off and back on somewhere in between; real
                     # data showed tissue signal isn't always monotonic with depth, so every z must be
                     # counted rather than stopping at the first failure) — FOV-level analysis
-    round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic
+    round.py        # create_mosaic, load_thumbnails_for_round — round-level mosaic from
+                    #   pre-made per-FOV thumbnails (no flat-field correction, independent
+                    #   per-tile contrast); create_mosaic_ffc, load_raw_frames_for_round —
+                    #   flat-field-corrected sibling pipeline (see ffc.py) that reads RAW
+                    #   per-FOV frames, divides out a per-pixel FFC field, crops the FOV's
+                    #   overlap border, and applies ONE shared contrast stretch across the
+                    #   whole assembled canvas instead of per-tile; kept as separate
+                    #   functions (not a flag on create_mosaic) since existing callers of
+                    #   create_mosaic rely on its {fov_id: uint8 array} contract unchanged.
+                    #   Both share _layout_tiles (private) for identical tile placement.
+    ffc.py          # Flat-field correction (FFC) for round mosaics (analysis/round.py's
+                    #   create_mosaic_ffc consumes its output; does NOT touch the per-FOV
+                    #   analyze_file/create_thumbnail pipeline). Computed once per
+                    #   experiment per color (vignetting is a fixed optical property, not
+                    #   per-round), cached via ProgressTracker's ffc_field_path/is_ffc_done/
+                    #   mark_ffc_done. compute_and_cache_ffc(config, metadata, tracker,
+                    #   color) is the entry point scheduler.build_round_mosaics calls
+                    #   inline (idempotent -- cheap after the first call, since by the time
+                    #   a round's mosaics are built every raw file FFC needs is already
+                    #   guaranteed on disk, per ProgressTracker.all_fovs_done_for_round --
+                    #   no separate SLURM job/array script needed). Three interchangeable
+                    #   FOV/frame selection strategies feed one shared
+                    #   compute_ffc_field_for_color(samples: List[(path, frame_idx)], ...)
+                    #   (config.ffc_fov_selection_strategy): "exterior_grid" (default --
+                    #   select_ffc_exterior_fovs, via acquisition.positions.
+                    #   find_exterior_fovs), "emptiest_stats" (select_emptiest_fovs, ranks
+                    #   FOVs by already-computed analysis/stats/*.csv mean+std -- no new
+                    #   raw reads just to pick candidates), "single_fov_all_frames" (one
+                    #   near-empty FOV's every z-frame of a color, via
+                    #   select_all_frames_of_fov + acquisition.configs.
+                    #   get_all_color_frame_indices -- vignetting doesn't depend on z).
+                    #   Which strategy/minimum-sample-count is best is an open empirical
+                    #   question investigated by notebooks/misc/
+                    #   investigate_ffc_sample_size.ipynb, not decided in this module.
+                    #   Also: apply_ffc, save_ffc_field/load_ffc_field (.npz cache),
+                    #   compute_mosaic_crop_px(config) (generic overlap-border crop width
+                    #   from image_size_px/non_overlap_fraction, not a hardcoded pixel
+                    #   count), resolve_ffc_reference_round (per-color, since different
+                    #   rounds can use different colors -- e.g. a cells round's 405 vs. a
+                    #   bits round's 750/650/560).
     stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
                     #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
                     #   delimited, one row per frame, column ``stage-z``), summarize_stage_z (first/
@@ -595,6 +648,22 @@ notebooks/
                                                    #   OUTPUT_DIR/cache/ (defaults next to the image file) --
                                                    #   no USE_SLURM_ARRAY option, since a single file's frame
                                                    #   count is small enough that one notebook kernel handles it
+    investigate_ffc_sample_size.ipynb              # how many FOVs/frames does flat-field correction
+                                                   #   (analysis/ffc.py) actually need to converge? Builds a
+                                                   #   reference FFC field from every grid-exterior FOV of a
+                                                   #   chosen round/color, then compares it (median/p95 percent
+                                                   #   difference) against fields built from increasing N of
+                                                   #   the emptiest-by-stats FOVs (one frame each), and
+                                                   #   separately against fields built from an increasing
+                                                   #   number of z-frames of a single near-empty FOV --
+                                                   #   answering whether many partially-filled exterior FOVs or
+                                                   #   one near-empty FOV's full z-stack converges faster, and
+                                                   #   with how few samples. Plots both convergence curves and
+                                                   #   reports the smallest sample count under a tolerance;
+                                                   #   findings feed a manual choice of
+                                                   #   ExperimentConfig.ffc_fov_selection_strategy/
+                                                   #   ffc_min_samples' production defaults -- not automated by
+                                                   #   the notebook itself.
     measure_tissue_thickness_test.ipynb            # per-FOV map of where (z, µm) real tissue signal
                                                    #   starts and ends, for one finished round (default:
                                                    #   cells) — a variable-thickness sample wastes imaging
@@ -826,6 +895,7 @@ lineage acquisition's own positions file of the same name.
 - `analysis_mode` — `"same_drive"` (default, mode B: analyse from `data_dir` — also the mode to use when `data_dir` is itself a NAS-mounted path, since there is only one location to read from) or `"mirror_drive"` (mode A: mirror `data_dir` → `analysis_source_dir` during fluidics and analyse from that second-drive copy). Analysis runs **continuously** in both modes (not only during fluidics).
 - `analysis_source_dir` — second-drive mirror directory; **required** when `analysis_mode="mirror_drive"`
 - `n_analysis_workers` — FOV process-pool size; `None` = `cpu_count − 2` (`config.resolved_n_workers`). Each worker holds one image stack (~200 MB) in RAM.
+- `mosaic_ffc_enabled` — flat-field-corrected round mosaics (default `True`); see `analysis/ffc.py`. `ffc_fov_selection_strategy` (`"exterior_grid"` default / `"emptiest_stats"` / `"single_fov_all_frames"`), `ffc_connectivity`, `ffc_neighbor_tolerance`, `ffc_smooth_sigma_px`, `ffc_normalize_percentile`, `ffc_min_value`, `ffc_min_samples`, `ffc_emptiest_n_fovs`, and `mosaic_contrast_percentile_clip` (the one shared whole-canvas contrast stretch) tune it.
 
 `ExperimentMetadata` (loaded via `ExperimentMetadata.load(round_info_csv, positions_txt, data_dir)`) cross-references round IDs, FOV IDs, series patterns, and expected file paths. When a `dir`/`data_dir` column is present in `round_info.csv`, per-round file paths are resolved from that directory instead of the top-level `data_dir` — and that column's value can be **either** an absolute path **or** a path relative to *this machine's own* `data_dir`'s parent (e.g. `data/hybs/H01` — for a manually relocated experiment folder). Each series carries an ordered list of **candidate directories** (`SeriesInfo.candidate_dirs`); `resolve_path(fov, suffix)` returns the first candidate that exists on disk. If none of the exact-width-guessed candidates exist, it falls back to a **width-agnostic directory scan** (`SeriesInfo._scan_dir_for_fov`, cached per directory so 1000+ per-FOV lookups against one round only pay for one scan): `fov_from_stem` was already built from `\d+` (never a fixed digit count — see `_pattern_to_regex`), just previously only used in the reverse (path → FOV id) direction; this reuses it forward too, so a `round_info.csv` whose `series` pattern's zero-pad width has gone stale (e.g. positions.txt regenerated with more FOVs, needing more digits, after round_info.csv was already written) still finds the real files instead of silently reporting them all missing. Only once that scan also comes up empty does it fall back to the primary candidate (e.g. before acquisition, when the FOV genuinely doesn't exist yet). The **cells round** is treated as a bona fide imaging round (typically `imaging_round=1`) and its files are accepted in **either** `data/cells/` or the top-level `data/`, regardless of which the `data_dir` column records — so `all_fovs_done_for_round`, mosaics, and transfers all find the cells data wherever HAL actually wrote it.
 
@@ -840,10 +910,11 @@ lineage acquisition's own positions file of the same name.
 - `round_<r>.round_done` — mosaic(s) built for round r
 - `round_<r>.round_transferred` — raw data for round r copied to `transfer_dest`
 - `round_<r>.fov_submitted` / `round_<r>.round_mosaic_submitted` — cluster-side SLURM submission bookkeeping (hold the submitted job id as text, not just an empty touch — see "Moving QC analysis to a SLURM cluster" below)
+- `ffc_<color>nm.ffc_done` — flat-field-correction field computed and cached for that color (once per experiment, not per round — see `analysis/ffc.py`)
 
 Multiple notebooks can run concurrently — no shared state.
 
-`FOVScheduler.run_loop()` runs **continuously** (acquisition + fluidics): each tick it (in mirror mode) refreshes the second-drive mirror while idle, discovers stable image files (zarr/dax/tiff) under `config.analysis_data_dir`, and analyses pending files **in parallel across a process pool** (`config.resolved_n_workers`). Each worker runs the top-level `analysis.fov.analyze_file`, which reads the stack once and writes thumbnails (PNG) + per-frame stats (CSV) + histograms (`.npz`) + the FOV sentinel. With `n_analysis_workers=1` it runs serially in-process. Respects `fov_subset`; call `.close()` (done automatically when `run_loop` exits) to shut the pool down. `RoundScheduler.run_loop()` also runs continuously, assembling **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optional background transfers via `transfer.transfer_round` happen only during the fluidics window. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete. `FOVScheduler._build_task`/`RoundScheduler._analyse_one_round`'s path/kwarg-construction logic is factored out into module-level `build_fov_task_kwargs`/`build_round_mosaics`/`resolve_round_flip_y`/`resolve_round_color_frame_indices`/`source_dirs_for_round` functions in `scheduler.py` — both the schedulers and the cluster-side CLI scripts below call these, so local and cluster analysis can never disagree about where outputs land.
+`FOVScheduler.run_loop()` runs **continuously** (acquisition + fluidics): each tick it (in mirror mode) refreshes the second-drive mirror while idle, discovers stable image files (zarr/dax/tiff) under `config.analysis_data_dir`, and analyses pending files **in parallel across a process pool** (`config.resolved_n_workers`). Each worker runs the top-level `analysis.fov.analyze_file`, which reads the stack once and writes thumbnails (PNG) + per-frame stats (CSV) + histograms (`.npz`) + the FOV sentinel. With `n_analysis_workers=1` it runs serially in-process. Respects `fov_subset`; call `.close()` (done automatically when `run_loop` exits) to shut the pool down. `RoundScheduler.run_loop()` also runs continuously, assembling **one mosaic per imaging color** (`round_{r:03d}_{color}nm_mosaic.png`) once all FOV sentinels exist; auto-resolves `flip_y` from the HAL config; optional background transfers via `transfer.transfer_round` happen only during the fluidics window. When `config.mosaic_ffc_enabled` (default `True`), `build_round_mosaics` builds flat-field-corrected mosaics instead: it ensures that color's FFC field is cached (`analysis.ffc.compute_and_cache_ffc` — a no-op after the first round, since the field is computed once per experiment per color and reused), reads every FOV's raw frame directly (`analysis.round.load_raw_frames_for_round`), and assembles the mosaic via `analysis.round.create_mosaic_ffc` (divides out the FFC field, crops each FOV's overlap border, applies one shared contrast stretch across the whole canvas) instead of `create_mosaic`'s independent-per-tile-contrast pre-made thumbnails. See `analysis/ffc.py`'s package-layout entry above for the full design. `ExperimentScheduler.wait_and_run()` calls a user callback after all rounds complete. `FOVScheduler._build_task`/`RoundScheduler._analyse_one_round`'s path/kwarg-construction logic is factored out into module-level `build_fov_task_kwargs`/`build_round_mosaics`/`resolve_round_flip_y`/`resolve_round_color_frame_indices`/`source_dirs_for_round` functions in `scheduler.py` — both the schedulers and the cluster-side CLI scripts below call these, so local and cluster analysis can never disagree about where outputs land.
 
 **Moving QC analysis to a SLURM cluster.** `01_fov_scheduler.ipynb`/`02_round_scheduler.ipynb` remain fully supported for running QC locally on the microscope computer, but analysis can instead run entirely on a SLURM cluster, freeing the microscope computer:
 

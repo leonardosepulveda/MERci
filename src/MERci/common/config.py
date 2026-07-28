@@ -84,6 +84,23 @@ class ExperimentConfig:
     mosaic_flip_y:              Optional[bool]               = None   # None = auto from HAL config
     fov_subset:                 Optional[List[int]]          = None   # None = all FOVs
 
+    # ── Flat-field correction (FFC) for round mosaics ──────────────────────────
+    # Divides each raw FOV frame by a per-channel, per-pixel illumination/vignette
+    # profile before assembling a round mosaic, then applies one shared contrast
+    # stretch across the whole assembled canvas instead of per-tile -- see
+    # analysis/ffc.py. Computed once per experiment per color and cached; does
+    # NOT affect the per-FOV analyze_file/create_thumbnail pipeline.
+    mosaic_ffc_enabled:              bool                = True
+    mosaic_contrast_percentile_clip: Tuple[float, float] = (1.0, 99.0)
+    ffc_fov_selection_strategy:      str                 = "exterior_grid"  # "exterior_grid" | "emptiest_stats" | "single_fov_all_frames"
+    ffc_connectivity:                str                 = "8"    # "4" or "8" -- only used by "exterior_grid"
+    ffc_neighbor_tolerance:          float                = 0.25   # fraction of step_size_um
+    ffc_smooth_sigma_px:             float                = 50.0
+    ffc_normalize_percentile:        float                = 99.99
+    ffc_min_value:                   float                = 0.10   # floor clip before division
+    ffc_min_samples:                 int                  = 8      # below this, skip FFC for that color/round (warn, don't fail)
+    ffc_emptiest_n_fovs:             int                  = 10      # candidate count for "emptiest_stats" strategy
+
     # ── Data transfer ──────────────────────────────────────────────────────────
     transfer_dest:      Optional[Path]  = None    # network destination root; None = no transfer
     transfer_min_time:  float           = 600.0   # min seconds remaining in fluidics window to start transfer
@@ -169,5 +186,5 @@ class ExperimentConfig:
                 T_MAX_ADAPTOR if self.fluidics_type == "adaptor" else T_MAX_DIRECT
             )
 
-        for sub in ("thumbnails", "stats", "histograms", "mosaics", "done", "logs"):
+        for sub in ("thumbnails", "stats", "histograms", "mosaics", "done", "logs", "ffc"):
             (self.analysis_dir / sub).mkdir(parents=True, exist_ok=True)
