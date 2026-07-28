@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<settings>
+  <!-- camera settings -->
+  <camera1 is_new="False">
+    <colortable type="string">ramp.ctbl</colortable>
+    <cycle_value type="float">0.5</cycle_value>
+    <exposure_time type="float">0.5</exposure_time>
+    <exposure_value type="float">0.5</exposure_value>
+    <external_trigger type="int">0</external_trigger>
+    <flip_horizontal type="boolean">False</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <scalemax type="int">4096</scalemax>
+    <scalemin type="int">0</scalemin>
+    <transpose type="boolean">False</transpose>
+    <x_bin type="int">1</x_bin>
+    <x_end type="int">2047</x_end>
+    <x_pixels type="int">2048</x_pixels>
+    <x_start type="int">0</x_start>
+    <y_bin type="int">1</y_bin>
+    <y_end type="int">2047</y_end>
+    <y_pixels type="int">2048</y_pixels>
+    <y_start type="int">0</y_start>
+  </camera1>
+
+
+  <!-- film settings -->
+  <film>
+    <filename type="string">hal-config-60x-mosaic</filename>
+    <acq_mode type="string">fixed_length</acq_mode>
+    <frames type="int">2</frames>
+    <logfile type="string">F:\image_log.txt</logfile>
+    <filetype type="string">.dax</filetype>
+    <auto_increment type="boolean">False</auto_increment>
+    <auto_shutters type="boolean">True</auto_shutters>
+    <directory type="string">C:\Data\test</directory>
+    <extension type="string"/>
+    <want_bell type="boolean">True</want_bell>
+    <want_big_endian type="boolean">False</want_big_endian>
+  </film>
+  
+  <!-- illumination settings -->
+  <illumination>
+  	<shutters type="string">shutter-config-mf3-405.xml</shutters>
+  </illumination>
+
+  <mosaic validate="False">
+    <flip_horizontal type="boolean">True</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <obj1 type="custom">60x,0.108,0.0,0.0</obj1>
+    <obj2 type="custom">10x,0.64,0.0,0.0</obj2>
+	  <obj3 type="custom">4x,4.0,0.0,0.0</obj3>
+    <objective type="string">obj1</objective>
+    <transpose type="boolean">True</transpose>
+  </mosaic>
+  
+  <stage is_new="False">
+    <flip_axis type="boolean">False</flip_axis>
+    <large_step_size type="float">25.0</large_step_size>
+    <small_step_size type="float">5.0</small_step_size>
+    <stage_speed type="float">10000.0</stage_speed>
+    <x_sign type="int">1</x_sign>
+    <y_sign type="int">1</y_sign>
+  </stage>
+
+
+</settings>

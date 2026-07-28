@@ -13,6 +13,8 @@ from .configs import (
     reconstruct_frame_table,
     read_shutter_reference,
     power_dict_to_channel_list,
+    find_mosaic_helper_configs,
+    copy_mosaic_helper_configs,
 )
 from .positions import (
     create_grid_positions,

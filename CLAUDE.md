@@ -122,6 +122,11 @@ src/MERci/
                     # create_hal_config, format_z_offsets_from_frame_table,
                     # power_dict_to_channel_list (the ONLY place per-colour power applies: colour->power,
                     #   channel-ordered HAL default_power),
+                    # find_mosaic_helper_configs / copy_mosaic_helper_configs (hand-crafted per-microscope
+                    #   10x/60x mosaic-tool setup configs, kept in data/configs/hal/mosaic_helper/ -- a
+                    #   dedicated subfolder so they're never picked up by the HAL-template auto-detection
+                    #   glob above; copy_mosaic_helper_configs returns an empty list, not an error, for a
+                    #   microscope with none available),
                     # naming rule: sequence_stem + hal_config_filename / shutter_filename / frame_table_filename
                     # (stem = "{kind}-{name}", kind in bits/cells/transit; hyphens delimit the prefix)
                     # + read_hal_flip_vertical, find_frame_table_for_hal_config, get_color_frame_indices
@@ -695,6 +700,12 @@ notebooks/
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
+      mosaic_helper/ # hand-crafted per-microscope 10x/60x mosaic-tool setup configs (HAL + shutter
+                     #   XML, e.g. hal-config-mf3-10x-mosaic-405.xml, shutter-config-mf3-405.xml) —
+                     #   a dedicated subfolder so they're never matched by the HAL-template
+                     #   auto-detection glob in prepare_imaging/01 (hal-config-*.xml directly under
+                     #   data/configs/hal/); not every microscope has these, copy_mosaic_helper_configs
+                     #   returns an empty list rather than erroring when none exist
     kilroy/         # kilroy-config-*-{mic}-*-{YYMMDD}.xml — Kilroy configs (one or more per microscope)
     merlin/         # shared MERlin reference files, copied from R:\Software\merfish-parameters\
                     #   (2026-active files only; see prepare_imaging/07 + merlin_config.py):
@@ -733,7 +744,7 @@ needs, instead of one fixed depth for every FOV) — see its own
 package-layout entry above for the full per-notebook breakdown; the prose walkthrough
 below (01-07) describes the shared 8-notebook template only.
 
-**01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets the HAL config's `<default_power>` list (channel-ordered via `power_dict_to_channel_list`) — the actual acquisition power. Every shutter `<event>`'s own `<power>` is always a fixed `POWER_DEFAULT` (1.000 by default), regardless of frame colour: it is a full-modulation flag relative to `<default_power>`, not an independent absolute power, so writing the same real per-colour intensity into both places double-applies the scaling on real hardware (a bug this notebook had for a while — introduced in commit `39b9b58`, fixed by reverting `create_shutter_file` to always write a fixed power). Auto-generates a compact colour name via `get_color_sequence_name` (underscore-joined tokens, e.g. `blkf5_488f2_560f25_650f25_750f25`). Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs.
+**01** (`prepare_imaging/<variant>/01_create_hal_config_and_shutters.ipynb`): defines the imaging sequence as a *frame table* (one row per camera frame, columns `color`, `channel`, `z`) using `get_frame_table`. Supports `scan_mode="interleaved"` (all colors per z-plane, AOTF) or `scan_mode="sequential"` (full z-sweep per color, boustrophedon, physical shutters). The objective's return to `bead_z` after the stack is controlled by `z_return_mode`: `"progressive"` (default) steps down with blank frames in increments of `return_step` (5 µm default); `"instant"` jumps straight back (the previous behaviour). A per-channel `POWER = {nm: power}` dict sets the HAL config's `<default_power>` list (channel-ordered via `power_dict_to_channel_list`) — the actual acquisition power. Every shutter `<event>`'s own `<power>` is always a fixed `POWER_DEFAULT` (1.000 by default), regardless of frame colour: it is a full-modulation flag relative to `<default_power>`, not an independent absolute power, so writing the same real per-colour intensity into both places double-applies the scaling on real hardware (a bug this notebook had for a while — introduced in commit `39b9b58`, fixed by reverting `create_shutter_file` to always write a fixed power). Auto-generates a compact colour name via `get_color_sequence_name` (underscore-joined tokens, e.g. `blkf5_488f2_560f25_650f25_750f25`). Sets `<filetype>` (`.zarr` default, or `.dax`/`.tiff`) and `<exposure_time>` in the HAL config. Also writes a **transit** HAL config/shutter (`get_transit_frame_table`, `N_TRANSIT_BLANK` blank frames at bead z) for the between-boundary transit FOVs. Finally, copies any hand-crafted **mosaic-helper** HAL/shutter configs available for `MICROSCOPE` (`copy_mosaic_helper_configs`, reading `MERci/data/configs/hal/mosaic_helper/`) into `settings/` alongside the configs above -- these are pre-made 10x/60x low/high-mag setup files for running the Steve mosaic tool, not generated by MERci; a microscope with none available just prints that they're missing, not an error.
 
 **Naming rule.** Each round's three artefacts share a stem `{kind}-{name}` (kind = `bits`/`cells`/`transit`), built by the `configs` helpers `hal_config_filename` / `shutter_filename` / `frame_table_filename`. Hyphens delimit the structural prefix; underscores live only inside `{name}`. So for the bits round with `{name}=blkf5_488f2_560f25_650f25_750f25`:
 - `SAMPLE_DIR/settings/hal-config-{mic}-bits-{name}.xml` — patched from `data/configs/hal/hal-config-{mic}.xml`
