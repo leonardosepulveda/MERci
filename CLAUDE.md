@@ -336,13 +336,27 @@ src/MERci/
                     #   bits round's 750/650/560).
     stage_z.py      # stage-z drift QC: off_path_for/read_off_file (HAL's per-movie ``.off``
                     #   focus-lock sidecar — same directory/stem convention as ``.inf``, whitespace-
-                    #   delimited, one row per frame, column ``stage-z``), summarize_stage_z (first/
-                    #   min/max + all_same, since the focus lock should hold stage-z constant for a
-                    #   whole stack), update_stage_z_cache (extends an on-disk CSV cache with only
+                    #   delimited, one row per frame, column ``stage-z``); read_off_file_if_ready
+                    #   (safe wrapper -- HAL creates the ``.off`` file before writing any/a complete
+                    #   last row, so a reader running DURING acquisition can see it empty or
+                    #   truncated; returns None instead of raising in that case, identical to "not
+                    #   written yet" -- stage_z_summary_for_fov/focus_lock_summary_for_fov and
+                    #   04_create_dave_config.ipynb's focus-lock-test read-back cell all go through
+                    #   this rather than calling read_off_file directly, so a still-being-written
+                    #   file never crashes a many-FOV loop), summarize_stage_z (first/min/max +
+                    #   all_same, since the focus lock should hold stage-z constant for a whole
+                    #   stack), update_stage_z_cache (extends an on-disk CSV cache with only
                     #   not-yet-read (round, FOV, series) combinations, so a many-thousand-FOV
-                    #   experiment's ``.off`` files are each read at most once), round_label/
-                    #   assign_x_positions (continuous cells→hyb01→hyb02→... FOV ordering for
-                    #   plotting drift over the whole acquisition) — see notebooks/analysis/08
+                    #   experiment's ``.off`` files are each read at most once; coerces the cached
+                    #   ``all_same`` column back to real bool dtype via _coerce_bool_column on both
+                    #   load and save -- a bool column doesn't reliably survive a to_csv/read_csv
+                    #   round-trip, and ``~`` on a non-bool column does bitwise, not logical,
+                    #   negation, silently corrupting a ``cache[~cache["all_same"]]``-style filter
+                    #   into a KeyError rather than a wrong answer), round_label/assign_x_positions
+                    #   (``x = fov_id`` -- every round overlays at the SAME x position rather than
+                    #   laid out back-to-back, so round-to-round drift at a given FOV shows as a
+                    #   vertical offset between per-round lines, not a left-to-right shift) — see
+                    #   notebooks/analysis/08
     spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
                           # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
     cli_analyze_fov.py       # standalone SLURM-array-task script (not imported by anything else in
@@ -533,12 +547,16 @@ notebooks/
                                                    #   cluster-QC alternative for projects that would rather move
                                                    #   analysis off the microscope computer entirely
     08_stage_z_drift.ipynb                         # one-shot QC: reads each FOV's ``.off`` focus-lock
-                                                   #   sidecar's stage-z column (analysis/stage_z.py),
+                                                   #   sidecar's stage-z column (analysis/stage_z.py,
+                                                   #   tolerating a sidecar HAL has created but not finished
+                                                   #   writing yet -- safe to run DURING acquisition),
                                                    #   caching results to analysis/stage_z_summary.csv so
                                                    #   re-runs only read newly-written ``.off`` files, then
-                                                   #   scatter-plots the first-frame stage-z value across a
-                                                   #   continuous cells→hyb01→hyb02→... FOV order to visualise
-                                                   #   drift over the whole acquisition
+                                                   #   plots the first-frame stage-z value as one line per
+                                                   #   round, all overlaid at the SAME x position (``fov_id``)
+                                                   #   rather than laid out back-to-back, so drift at a given
+                                                   #   FOV across rounds reads as a vertical spread between
+                                                   #   differently-colored lines
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
