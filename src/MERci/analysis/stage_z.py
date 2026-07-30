@@ -212,11 +212,22 @@ def update_stage_z_cache(config, meta, cache_path: Path) -> pd.DataFrame:
 
 
 def round_label(meta, round_id: int) -> str:
-    """``"cells"`` if *round_id*'s series are the cells round, else ``"hyb{round_id:02d}"``."""
-    series = meta.series_for_round(round_id)
-    if any((s.imaging_type or "").strip().lower() == "cells" for s in series):
+    """``"cells"`` if *round_id*'s series are the cells round, else
+    ``"hyb{N:02d}"`` where ``N`` is this round's 1-based rank among all
+    non-cells rounds -- NOT the raw ``round_id``. ``imaging_round`` numbering
+    reserves round 1 for cells (rounds 2..N_HYBS+1 are the hyb rounds), so
+    ``round_id=2`` is the FIRST real hyb round and must map to ``"hyb01"``,
+    matching the real ``H01``/``H02``/... data folders -- using ``round_id``
+    directly mislabels every hyb round one too high (e.g. ``"hyb02"`` for the
+    round that actually wrote to ``H01``)."""
+    def _is_cells(rid: int) -> bool:
+        return any((s.imaging_type or "").strip().lower() == "cells"
+                   for s in meta.series_for_round(rid))
+
+    if _is_cells(round_id):
         return "cells"
-    return f"hyb{round_id:02d}"
+    hyb_round_ids = [rid for rid in meta.valid_round_ids() if not _is_cells(rid)]
+    return f"hyb{hyb_round_ids.index(round_id) + 1:02d}"
 
 
 def assign_x_positions(cache: pd.DataFrame) -> pd.DataFrame:
