@@ -40,12 +40,24 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .alignment import phase_drift, remove_hot_pixels
+from .alignment import apply_orientation, phase_drift, remove_hot_pixels
 from .positions import find_grid_neighbor
 
 log = logging.getLogger(__name__)
 
 _DIRECTIONS = ("right", "left", "up", "down")
+
+# Every orientation apply_orientation() accepts -- the candidate pool
+# detect_image_orientation() searches over. Whether a camera's raw frame rows/
+# columns line up with physical stage x/y (and which way) is NOT standardised
+# across microscopes/mounting -- confirmed directly on a real MF3 dataset that
+# the naive assumption (row=y, col=x, no flip) produces wildly wrong, physically
+# implausible registrations (tens to hundreds of pixels, when true camera
+# rotation should shift an adjacent FOV by at most a few pixels), while
+# "transpose" produced small, consistent shifts across multiple independent
+# correspondence pairs and all four directions. Never assume "none" is correct
+# for a new microscope -- run detect_image_orientation() first.
+_IMAGE_ORIENTATIONS = ("none", "fliplr", "flipud", "transpose", "rot90", "rot180", "rot270")
 
 
 @dataclass
@@ -118,17 +130,31 @@ def register_neighbor_pair(
     direction:        str,
     overlap_fraction: float,
     pixel_size_um:    float,
-    upsample_factor:  int = 10,
+    upsample_factor:    int = 10,
+    image_orientation:  str = "none",
 ) -> Tuple[Tuple[float, float], float]:
     """
     Measure the neighbour's TRUE position relative to the anchor, from the
     real pixel shift needed to align their overlapping border crop.
+
+    Parameters
+    ----------
+    image_orientation : one of :data:`_IMAGE_ORIENTATIONS`, applied to BOTH
+                  images (via :func:`MERci.acquisition.alignment.
+                  apply_orientation`) before cropping/registering -- corrects
+                  for this camera's raw-frame row/column axes not lining up
+                  with physical stage x/y the way ``crop_overlap`` assumes
+                  (row=y, col=x, no flip). Camera/mounting-specific and NOT
+                  safe to assume "none" -- see :func:`detect_image_orientation`.
 
     Returns
     -------
     (measured_neighbor_xy, error) -- the neighbour's measured true (x, y)
     stage position (µm), and the registration's normalised RMS error.
     """
+    if image_orientation != "none":
+        anchor_img   = apply_orientation(anchor_img, image_orientation)
+        neighbor_img = apply_orientation(neighbor_img, image_orientation)
     a_crop, n_crop = crop_overlap(anchor_img, neighbor_img, direction, overlap_fraction)
     shift, error = phase_drift(
         remove_hot_pixels(a_crop), remove_hot_pixels(n_crop), upsample_factor
@@ -153,6 +179,7 @@ def sample_neighbor_correspondences(
     directions:         Tuple[str, ...] = _DIRECTIONS,
     tolerance_fraction: float = 0.25,
     upsample_factor:    int = 10,
+    image_orientation:  str = "none",
     seed:               Optional[int] = 0,
     progress_callback:  Optional[Callable[[int, int], None]] = None,
 ) -> List[NeighborCorrespondence]:
@@ -177,6 +204,10 @@ def sample_neighbor_correspondences(
     n_anchors   : how many anchor FOVs to sample (default 10)
     directions  : which 4-connected directions to test per anchor (default
                   all four)
+    image_orientation : passed through to :func:`register_neighbor_pair` --
+                  see :func:`detect_image_orientation` to determine the
+                  right value for a given microscope before trusting any
+                  correspondence this function returns.
     seed        : RNG seed for anchor sampling (deterministic by default;
                   ``None`` for a fresh random sample each call)
     progress_callback : optional ``callback(done, total)`` for a live
@@ -219,12 +250,92 @@ def sample_neighbor_correspondences(
                 anchor_img, neighbor_img,
                 positions[anchor_fov], positions[neighbor_fov],
                 direction, overlap_fraction, pixel_size_um, upsample_factor,
+                image_orientation,
             )
             correspondences.append(NeighborCorrespondence(
                 anchor_fov=anchor_fov, neighbor_fov=neighbor_fov, direction=direction,
                 nominal_xy=positions[neighbor_fov], measured_xy=measured_xy, error=error,
             ))
     return correspondences
+
+
+def detect_image_orientation(
+    fov_ids:            List[int],
+    positions:          Dict[int, Tuple[float, float]],
+    load_frame:         Callable[[int], np.ndarray],
+    step_size_um:       float,
+    pixel_size_um:      float,
+    overlap_fraction:   float,
+    n_trial_anchors:    int = 3,
+    tolerance_fraction: float = 0.25,
+    upsample_factor:    int = 10,
+    seed:               Optional[int] = 0,
+) -> Tuple[str, "pd.DataFrame"]:
+    """
+    Determine which :data:`_IMAGE_ORIENTATIONS` value actually matches this
+    camera's real row/column-vs-stage-x/y convention, by trying each one on a
+    small trial set and keeping whichever gives the SMALLEST median
+    registered-shift magnitude.
+
+    Why this is a reasonable criterion: real camera-vs-stage rotation is
+    small (typically well under a degree), so two genuinely 4-connected-
+    adjacent FOVs should need only a few pixels of correction at most. Tried
+    directly on a real MF3 dataset: the (wrong) default assumption
+    ("none") produced correspondences ranging from ~6 to ~110 um -- a smooth,
+    unbroken spread with no small-and-good cluster to separate out by
+    thresholding -- while "transpose" gave small (1-5 um), consistent shifts
+    across every direction and several independent anchor pairs. An
+    orientation that's actually wrong has no reason to produce uniformly
+    small shifts across many independent, unrelated correspondences, so
+    picking the minimum-median orientation is a real discriminating test,
+    not just noise.
+
+    Parameters
+    ----------
+    fov_ids, positions, load_frame, step_size_um, pixel_size_um,
+    overlap_fraction, tolerance_fraction, upsample_factor : same as
+                  :func:`sample_neighbor_correspondences`
+    n_trial_anchors : how many anchors to sample PER candidate orientation
+                  (default 3 -- enough for a clear signal without paying for
+                  a full :func:`sample_neighbor_correspondences` run 7 times
+                  over)
+    seed        : shared across every candidate orientation, so all of them
+                  are tested on the SAME trial anchors/neighbours -- an
+                  apples-to-apples comparison, not different FOVs per
+                  candidate
+
+    Returns
+    -------
+    (best_orientation, results_df) -- the winning orientation string, and a
+    DataFrame with one row per candidate orientation (columns: orientation,
+    n_correspondences, median_shift_um) for a full audit trail.
+    """
+    import pandas as pd
+
+    rows = []
+    for orientation in _IMAGE_ORIENTATIONS:
+        trial = sample_neighbor_correspondences(
+            fov_ids=fov_ids, positions=positions, load_frame=load_frame,
+            step_size_um=step_size_um, pixel_size_um=pixel_size_um,
+            overlap_fraction=overlap_fraction, n_anchors=n_trial_anchors,
+            tolerance_fraction=tolerance_fraction, upsample_factor=upsample_factor,
+            image_orientation=orientation, seed=seed,
+        )
+        if not trial:
+            rows.append({"orientation": orientation, "n_correspondences": 0, "median_shift_um": np.inf})
+            continue
+        shifts_um = [
+            float(np.hypot(c.measured_xy[0] - c.nominal_xy[0], c.measured_xy[1] - c.nominal_xy[1]))
+            for c in trial
+        ]
+        rows.append({
+            "orientation": orientation, "n_correspondences": len(trial),
+            "median_shift_um": float(np.median(shifts_um)),
+        })
+
+    results_df = pd.DataFrame(rows).sort_values("median_shift_um").reset_index(drop=True)
+    best_orientation = str(results_df.iloc[0]["orientation"])
+    return best_orientation, results_df
 
 
 @dataclass
@@ -331,3 +442,55 @@ def fit_camera_rotation(
         matrix=matrix, n_correspondences=len(correspondences),
         zero_translation=zero_translation,
     )
+
+
+def filter_correspondence_outliers(
+    correspondences: List[NeighborCorrespondence],
+    mad_threshold:   float = 5.0,
+) -> Tuple[List[NeighborCorrespondence], List[NeighborCorrespondence]]:
+    """
+    Split correspondences into (kept, rejected) by a robust outlier test on
+    each one's ``|measured - nominal|`` shift magnitude.
+
+    Even with the right :func:`detect_image_orientation` in hand, a handful
+    of individual registrations can still fail outright -- weak/sparse DAPI
+    signal in that particular FOV, an occasional bad phase-correlation peak
+    -- the same "bad link" problem BigStitcher's manual workflow required
+    curating by hand (see this module's docstring). Confirmed directly on
+    real data: the bulk of correspondences cluster tightly (a few um), with
+    a handful of clear outliers an order of magnitude or more larger -- a
+    real gap in the distribution, not a continuum, so a robust threshold
+    cleanly separates them without needing manual review.
+
+    Parameters
+    ----------
+    correspondences : from :func:`sample_neighbor_correspondences`
+    mad_threshold   : reject a correspondence if its shift magnitude exceeds
+                      ``median + mad_threshold * robust_sigma``, where
+                      ``robust_sigma = 1.4826 * median_absolute_deviation``
+                      (1.4826 = 1/norm.ppf(0.75), the standard conversion
+                      from a MAD to a Gaussian-equivalent standard
+                      deviation). Default 5.0 is generous -- it only drops
+                      genuinely discrepant measurements, not real spread in
+                      an otherwise well-behaved set.
+
+    Returns
+    -------
+    (kept, rejected) -- both lists of :class:`NeighborCorrespondence`, in
+    the same order as *correspondences*.
+    """
+    if len(correspondences) < 3:
+        return list(correspondences), []
+
+    shifts_um = np.array([
+        np.hypot(c.measured_xy[0] - c.nominal_xy[0], c.measured_xy[1] - c.nominal_xy[1])
+        for c in correspondences
+    ])
+    median = float(np.median(shifts_um))
+    mad = float(np.median(np.abs(shifts_um - median)))
+    robust_sigma = 1.4826 * mad
+    threshold = median + mad_threshold * robust_sigma if robust_sigma > 0 else median
+
+    kept     = [c for c, s in zip(correspondences, shifts_um) if s <= threshold]
+    rejected = [c for c, s in zip(correspondences, shifts_um) if s > threshold]
+    return kept, rejected
