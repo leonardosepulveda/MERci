@@ -40,24 +40,77 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .alignment import apply_orientation, phase_drift, remove_hot_pixels
+from .alignment import phase_drift, remove_hot_pixels
 from .positions import find_grid_neighbor
 
 log = logging.getLogger(__name__)
 
 _DIRECTIONS = ("right", "left", "up", "down")
 
-# Every orientation apply_orientation() accepts -- the candidate pool
-# detect_image_orientation() searches over. Whether a camera's raw frame rows/
-# columns line up with physical stage x/y (and which way) is NOT standardised
-# across microscopes/mounting -- confirmed directly on a real MF3 dataset that
-# the naive assumption (row=y, col=x, no flip) produces wildly wrong, physically
-# implausible registrations (tens to hundreds of pixels, when true camera
-# rotation should shift an adjacent FOV by at most a few pixels), while
-# "transpose" produced small, consistent shifts across multiple independent
-# correspondence pairs and all four directions. Never assume "none" is correct
-# for a new microscope -- run detect_image_orientation() first.
-_IMAGE_ORIENTATIONS = ("none", "fliplr", "flipud", "transpose", "rot90", "rot180", "rot270")
+# Every (transpose, flip_horizontal, flip_vertical) combination --
+# detect_image_orientation()'s audit/fallback search space. Whether a
+# camera's raw frame rows/columns line up with physical stage x/y (and which
+# way) is NOT standardised across microscopes/mountings. MERlin's own
+# microscope-parameters JSON (data/configs/merlin/microscope/*.json) already
+# records the correct, verified combination per microscope as
+# transpose/flip_horizontal/flip_vertical booleans -- read and apply THAT
+# directly (see notebooks/misc/correct_camera_rotation.ipynb section 4)
+# rather than guessing. This 8-combination search exists only as a fallback/
+# audit.
+#
+# History worth knowing before trusting this search's output: on a real MF3
+# dataset, this audit twice ranked "transpose alone" above MERFISH3.json's
+# real combination (transpose=True, flip_horizontal=False,
+# flip_vertical=True). Both times the cause was a SEPARATE bug in
+# crop_overlap below, not a wrong microscope-parameters file: crop_overlap's
+# "up" direction had its anchor/neighbour row selection backwards, which
+# happened to cancel out with the missing flip_vertical and looked like a
+# clean signal. Confirmed directly (see prompt_history) by cropping the same
+# real overlap region under both candidates and inspecting it visually --
+# the JSON's combination with the ORIGINAL (buggy) crop_overlap produced
+# visibly mismatched crops and a large, inconsistent measured shift, while
+# the same JSON combination with crop_overlap's row selection swapped gave
+# small, visually-matching crops identical to what "transpose alone" had
+# been giving. crop_overlap now has the corrected row convention, and this
+# audit agrees with MERFISH3.json (ranks it #1/8) as a result -- but if this
+# audit ever again ranks a DIFFERENT combination above the microscope-
+# parameters JSON's declared one, do not assume the JSON is wrong: inspect
+# the raw overlap crops directly first, the same way this bug was actually
+# found, since a compensating bug elsewhere is at least as likely as a wrong
+# JSON file.
+_ORIENTATION_COMBINATIONS = [
+    (transpose, flip_horizontal, flip_vertical)
+    for transpose in (False, True)
+    for flip_horizontal in (False, True)
+    for flip_vertical in (False, True)
+]
+
+
+def apply_microscope_orientation(
+    img:              np.ndarray,
+    transpose:        bool = False,
+    flip_horizontal:  bool = False,
+    flip_vertical:    bool = False,
+) -> np.ndarray:
+    """
+    Re-orient a raw camera frame to match MERlin's own microscope-parameters
+    convention (``data/configs/merlin/microscope/*.json``'s ``transpose``/
+    ``flip_horizontal``/``flip_vertical`` fields).
+
+    Order matters and is fixed: transpose first, then flip_horizontal
+    (``np.flip(..., axis=1)``, i.e. mirror columns), then flip_vertical
+    (``axis=0``, mirror rows) -- exactly the order used by this project's own
+    historical BC341 reference implementation (``transform_image``, see this
+    module's docstring), which these same microscope-parameters JSON files
+    were written for.
+    """
+    if transpose:
+        img = img.T
+    if flip_horizontal:
+        img = np.flip(img, axis=1)
+    if flip_vertical:
+        img = np.flip(img, axis=0)
+    return img
 
 
 @dataclass
@@ -100,6 +153,17 @@ def crop_overlap(
     overlap as a fraction of the frame's full width/height (e.g.
     ``1 - ExperimentConfig.non_overlap_fraction``).
 
+    Row convention for "up"/"down" (confirmed directly against a real MF3
+    dataset, once the image was correctly oriented per its MERlin
+    microscope-parameters JSON -- see ``notebooks/misc/
+    correct_camera_rotation.ipynb`` section 4): for a correctly-oriented
+    frame, row index 0 is the physical -y (down) edge, not +y (up) -- so
+    "up" crops the anchor's LAST n rows against the neighbour's FIRST n
+    rows. An earlier version of this function assumed the opposite, which
+    happened to cancel out with a missing ``flip_vertical`` and looked
+    correct by coincidence until the image orientation was fixed to match
+    the microscope-parameters JSON.
+
     Returns
     -------
     (anchor_crop, neighbor_crop) -- two same-shape 2-D arrays that should
@@ -118,8 +182,8 @@ def crop_overlap(
     else:  # "up" / "down"
         n = max(1, int(round(h * overlap_fraction)))
         if direction == "up":
-            return anchor_img[:n, :], neighbor_img[h - n:, :]
-        return anchor_img[h - n:, :], neighbor_img[:n, :]
+            return anchor_img[h - n:, :], neighbor_img[:n, :]
+        return anchor_img[:n, :], neighbor_img[h - n:, :]
 
 
 def register_neighbor_pair(
@@ -131,7 +195,9 @@ def register_neighbor_pair(
     overlap_fraction: float,
     pixel_size_um:    float,
     upsample_factor:    int = 10,
-    image_orientation:  str = "none",
+    orient_transpose:       bool = False,
+    orient_flip_horizontal: bool = False,
+    orient_flip_vertical:   bool = False,
 ) -> Tuple[Tuple[float, float], float]:
     """
     Measure the neighbour's TRUE position relative to the anchor, from the
@@ -139,22 +205,27 @@ def register_neighbor_pair(
 
     Parameters
     ----------
-    image_orientation : one of :data:`_IMAGE_ORIENTATIONS`, applied to BOTH
-                  images (via :func:`MERci.acquisition.alignment.
-                  apply_orientation`) before cropping/registering -- corrects
-                  for this camera's raw-frame row/column axes not lining up
-                  with physical stage x/y the way ``crop_overlap`` assumes
-                  (row=y, col=x, no flip). Camera/mounting-specific and NOT
-                  safe to assume "none" -- see :func:`detect_image_orientation`.
+    orient_transpose, orient_flip_horizontal, orient_flip_vertical : applied
+                  to BOTH images (via :func:`apply_microscope_orientation`)
+                  before cropping/registering -- corrects for this camera's
+                  raw-frame row/column axes not lining up with physical
+                  stage x/y the way ``crop_overlap`` assumes (row=y, col=x,
+                  no flip). Camera/mounting-specific -- read the correct
+                  values from this microscope's own MERlin microscope-
+                  parameters JSON rather than assuming all-``False``; see
+                  :func:`detect_image_orientation` for a fallback/audit
+                  search when that file is unavailable or suspect.
 
     Returns
     -------
     (measured_neighbor_xy, error) -- the neighbour's measured true (x, y)
     stage position (µm), and the registration's normalised RMS error.
     """
-    if image_orientation != "none":
-        anchor_img   = apply_orientation(anchor_img, image_orientation)
-        neighbor_img = apply_orientation(neighbor_img, image_orientation)
+    if orient_transpose or orient_flip_horizontal or orient_flip_vertical:
+        anchor_img   = apply_microscope_orientation(
+            anchor_img, orient_transpose, orient_flip_horizontal, orient_flip_vertical)
+        neighbor_img = apply_microscope_orientation(
+            neighbor_img, orient_transpose, orient_flip_horizontal, orient_flip_vertical)
     a_crop, n_crop = crop_overlap(anchor_img, neighbor_img, direction, overlap_fraction)
     shift, error = phase_drift(
         remove_hot_pixels(a_crop), remove_hot_pixels(n_crop), upsample_factor
@@ -179,7 +250,9 @@ def sample_neighbor_correspondences(
     directions:         Tuple[str, ...] = _DIRECTIONS,
     tolerance_fraction: float = 0.25,
     upsample_factor:    int = 10,
-    image_orientation:  str = "none",
+    orient_transpose:       bool = False,
+    orient_flip_horizontal: bool = False,
+    orient_flip_vertical:   bool = False,
     seed:               Optional[int] = 0,
     progress_callback:  Optional[Callable[[int, int], None]] = None,
 ) -> List[NeighborCorrespondence]:
@@ -204,10 +277,12 @@ def sample_neighbor_correspondences(
     n_anchors   : how many anchor FOVs to sample (default 10)
     directions  : which 4-connected directions to test per anchor (default
                   all four)
-    image_orientation : passed through to :func:`register_neighbor_pair` --
-                  see :func:`detect_image_orientation` to determine the
-                  right value for a given microscope before trusting any
-                  correspondence this function returns.
+    orient_transpose, orient_flip_horizontal, orient_flip_vertical : passed
+                  through to :func:`register_neighbor_pair` -- read these
+                  from this microscope's own MERlin microscope-parameters
+                  JSON (``data/configs/merlin/microscope/*.json``) before
+                  trusting any correspondence this function returns; see
+                  :func:`detect_image_orientation` for a fallback/audit.
     seed        : RNG seed for anchor sampling (deterministic by default;
                   ``None`` for a fresh random sample each call)
     progress_callback : optional ``callback(done, total)`` for a live
@@ -250,7 +325,7 @@ def sample_neighbor_correspondences(
                 anchor_img, neighbor_img,
                 positions[anchor_fov], positions[neighbor_fov],
                 direction, overlap_fraction, pixel_size_um, upsample_factor,
-                image_orientation,
+                orient_transpose, orient_flip_horizontal, orient_flip_vertical,
             )
             correspondences.append(NeighborCorrespondence(
                 anchor_fov=anchor_fov, neighbor_fov=neighbor_fov, direction=direction,
@@ -270,72 +345,79 @@ def detect_image_orientation(
     tolerance_fraction: float = 0.25,
     upsample_factor:    int = 10,
     seed:               Optional[int] = 0,
-) -> Tuple[str, "pd.DataFrame"]:
+) -> Tuple[Tuple[bool, bool, bool], "pd.DataFrame"]:
     """
-    Determine which :data:`_IMAGE_ORIENTATIONS` value actually matches this
-    camera's real row/column-vs-stage-x/y convention, by trying each one on a
-    small trial set and keeping whichever gives the SMALLEST median
-    registered-shift magnitude.
+    Audit/fallback search: try all 8 (transpose, flip_horizontal,
+    flip_vertical) combinations on a small trial set and report whichever
+    gives the SMALLEST median registered-shift magnitude.
 
-    Why this is a reasonable criterion: real camera-vs-stage rotation is
-    small (typically well under a degree), so two genuinely 4-connected-
-    adjacent FOVs should need only a few pixels of correction at most. Tried
-    directly on a real MF3 dataset: the (wrong) default assumption
-    ("none") produced correspondences ranging from ~6 to ~110 um -- a smooth,
-    unbroken spread with no small-and-good cluster to separate out by
-    thresholding -- while "transpose" gave small (1-5 um), consistent shifts
-    across every direction and several independent anchor pairs. An
-    orientation that's actually wrong has no reason to produce uniformly
-    small shifts across many independent, unrelated correspondences, so
-    picking the minimum-median orientation is a real discriminating test,
-    not just noise.
+    Prefer reading the real transpose/flip_horizontal/flip_vertical values
+    from this microscope's own MERlin microscope-parameters JSON
+    (``data/configs/merlin/microscope/*.json``) instead of trusting this
+    function's output as the primary source -- it exists to CROSS-CHECK that
+    file (or substitute for it when unavailable), not replace it. Confirmed
+    directly: on a real MF3 dataset, "transpose alone" (missing MERFISH3.
+    json's flip_vertical=True) scored best among a smaller 7-candidate
+    single-transform search yet still left a visible residual mis-stitch --
+    an empirically-best-among-limited-options answer is not the same as the
+    actual correct one, which is exactly why the full 8-combination search
+    (matching the JSON file's 3 independent booleans) exists here now.
+
+    Why the "smallest median shift" criterion is still reasonable for this
+    exhaustive search: real camera-vs-stage rotation is small (well under a
+    degree), so two genuinely 4-connected-adjacent FOVs should need only a
+    few pixels of correction. A wrong combination has no reason to produce
+    uniformly small shifts across many independent, unrelated
+    correspondences, so picking the minimum-median combination is a real
+    discriminating test, not just noise.
 
     Parameters
     ----------
     fov_ids, positions, load_frame, step_size_um, pixel_size_um,
     overlap_fraction, tolerance_fraction, upsample_factor : same as
                   :func:`sample_neighbor_correspondences`
-    n_trial_anchors : how many anchors to sample PER candidate orientation
+    n_trial_anchors : how many anchors to sample PER candidate combination
                   (default 3 -- enough for a clear signal without paying for
-                  a full :func:`sample_neighbor_correspondences` run 7 times
+                  a full :func:`sample_neighbor_correspondences` run 8 times
                   over)
-    seed        : shared across every candidate orientation, so all of them
+    seed        : shared across every candidate combination, so all of them
                   are tested on the SAME trial anchors/neighbours -- an
                   apples-to-apples comparison, not different FOVs per
                   candidate
 
     Returns
     -------
-    (best_orientation, results_df) -- the winning orientation string, and a
-    DataFrame with one row per candidate orientation (columns: orientation,
-    n_correspondences, median_shift_um) for a full audit trail.
+    ((transpose, flip_horizontal, flip_vertical), results_df) -- the winning
+    combination, and a DataFrame with one row per candidate (columns:
+    transpose, flip_horizontal, flip_vertical, n_correspondences,
+    median_shift_um) for a full audit trail.
     """
     import pandas as pd
 
     rows = []
-    for orientation in _IMAGE_ORIENTATIONS:
+    for transpose, flip_h, flip_v in _ORIENTATION_COMBINATIONS:
         trial = sample_neighbor_correspondences(
             fov_ids=fov_ids, positions=positions, load_frame=load_frame,
             step_size_um=step_size_um, pixel_size_um=pixel_size_um,
             overlap_fraction=overlap_fraction, n_anchors=n_trial_anchors,
             tolerance_fraction=tolerance_fraction, upsample_factor=upsample_factor,
-            image_orientation=orientation, seed=seed,
+            orient_transpose=transpose, orient_flip_horizontal=flip_h, orient_flip_vertical=flip_v,
+            seed=seed,
         )
+        row = {"transpose": transpose, "flip_horizontal": flip_h, "flip_vertical": flip_v}
         if not trial:
-            rows.append({"orientation": orientation, "n_correspondences": 0, "median_shift_um": np.inf})
+            rows.append({**row, "n_correspondences": 0, "median_shift_um": np.inf})
             continue
         shifts_um = [
             float(np.hypot(c.measured_xy[0] - c.nominal_xy[0], c.measured_xy[1] - c.nominal_xy[1]))
             for c in trial
         ]
-        rows.append({
-            "orientation": orientation, "n_correspondences": len(trial),
-            "median_shift_um": float(np.median(shifts_um)),
-        })
+        rows.append({**row, "n_correspondences": len(trial), "median_shift_um": float(np.median(shifts_um))})
 
     results_df = pd.DataFrame(rows).sort_values("median_shift_um").reset_index(drop=True)
-    best_orientation = str(results_df.iloc[0]["orientation"])
-    return best_orientation, results_df
+    best = results_df.iloc[0]
+    best_combination = (bool(best["transpose"]), bool(best["flip_horizontal"]), bool(best["flip_vertical"]))
+    return best_combination, results_df
 
 
 @dataclass
