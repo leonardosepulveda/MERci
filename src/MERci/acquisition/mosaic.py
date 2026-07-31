@@ -481,6 +481,48 @@ def _estimate_bimodal_threshold(bin_centers_log: np.ndarray, counts: np.ndarray)
     return float(10 ** bin_centers_log[valley_idx])
 
 
+def _classify_tiles_by_signal(
+    log_images: List[np.ndarray], percentile: float = 99.0
+) -> Optional[np.ndarray]:
+    """
+    Split tiles into "empty" (background-only) vs. "signal" (real tissue
+    present) groups, from each tile's own upper-``percentile`` log-intensity
+    -- a per-TILE summary statistic (one number per tile), not a per-pixel
+    one, so the split isn't swamped by however many purely-empty tiles
+    happen to be in the mosaic (see :func:`plot_tile_intensity_histograms`
+    for why that swamping matters). 99th percentile: high enough to ignore
+    an empty tile's own noise floor, low enough that a tile whose real
+    tissue only covers a small fraction of its area still registers as
+    elevated relative to a genuinely empty tile.
+
+    Splitting on this small (one-value-per-tile) array with Otsu is far more
+    reliable than looking for two modes in the full pooled-pixel histogram:
+    it isn't diluted by the fact that most pixels, even in a tissue tile,
+    are still background.
+
+    Returns
+    -------
+    A boolean array (one entry per tile, True = classified as "signal"), or
+    ``None`` if the per-tile statistic itself has no separable structure
+    (e.g. every tile looks the same -- all empty, all tissue, or too
+    uniform a sample for this split to be meaningful) -- callers should
+    fall back to pooling all pixels together in that case.
+    """
+    from skimage.filters import threshold_otsu
+
+    tile_stat = np.array([np.percentile(li, percentile) for li in log_images])
+    if tile_stat.min() == tile_stat.max():
+        return None
+    try:
+        split = threshold_otsu(tile_stat)
+    except ValueError:
+        return None
+    signal_mask = tile_stat >= split
+    if signal_mask.all() or not signal_mask.any():
+        return None
+    return signal_mask
+
+
 def plot_tile_intensity_histograms(
     tiles:           List[SteveTile],
     bins:            int = 200,
@@ -491,10 +533,22 @@ def plot_tile_intensity_histograms(
 ) -> Tuple[object, Optional[float]]:
     """
     Overlay one log-space pixel-intensity histogram per tile (thin gray
-    lines), plus a solid combined histogram pooling every tile's pixels
-    together -- lets an outlier tile (a different objective, a debris/bubble
-    FOV, ...) stand out, and helps pick a fixed segmentation threshold by eye
-    instead of trusting Otsu blindly.
+    lines), plus a solid combined histogram, weighted 50/50 between
+    "empty" and "signal" tiles (:func:`_classify_tiles_by_signal`) rather
+    than pooled by raw pixel count -- lets an outlier tile (a different
+    objective, a debris/bubble FOV, ...) stand out, and helps pick a fixed
+    segmentation threshold by eye instead of trusting Otsu blindly.
+
+    Confirmed directly on a real dataset where most FOVs are tissue-free:
+    pooling by raw pixel count let the (much more numerous) empty tiles'
+    background peak swamp the real tissue peak down to ~3% of the combined
+    histogram's max density -- under the 5% prominence cutoff
+    :func:`_estimate_bimodal_threshold` requires, so it always returned
+    ``None`` even though the tissue peak is clearly real (visible in the
+    per-tile lines). Weighting the two classes equally instead of by pixel
+    count fixes this regardless of how lopsided the empty/signal tile split
+    is, since the two classes always contribute equal weight to the
+    combined curve.
 
     Every histogram (per-tile and combined) is computed over the same
     ``log10`` bin edges (spanning the full range across all tiles) so the
@@ -539,10 +593,22 @@ def plot_tile_intensity_histograms(
         counts, _ = np.histogram(li, bins=bin_edges, density=True)
         ax.plot(bin_centers, counts, "-", color=color, alpha=alpha, lw=1.0)
 
-    all_pixels = np.concatenate([li.ravel() for li in log_images])
-    combined_counts, _ = np.histogram(all_pixels, bins=bin_edges, density=True)
-    ax.plot(bin_centers, combined_counts, "-", color="black", lw=1.8,
-            label="all tiles combined")
+    signal_mask = _classify_tiles_by_signal(log_images)
+    if signal_mask is not None:
+        empty_pixels = np.concatenate(
+            [log_images[i].ravel() for i in range(len(tiles)) if not signal_mask[i]])
+        signal_pixels = np.concatenate(
+            [log_images[i].ravel() for i in range(len(tiles)) if signal_mask[i]])
+        empty_counts, _ = np.histogram(empty_pixels, bins=bin_edges, density=True)
+        signal_counts, _ = np.histogram(signal_pixels, bins=bin_edges, density=True)
+        combined_counts = 0.5 * empty_counts + 0.5 * signal_counts
+        combined_label = (f"combined (balanced: {int((~signal_mask).sum())} empty / "
+                           f"{int(signal_mask.sum())} signal tile(s))")
+    else:
+        all_pixels = np.concatenate([li.ravel() for li in log_images])
+        combined_counts, _ = np.histogram(all_pixels, bins=bin_edges, density=True)
+        combined_label = "all tiles combined"
+    ax.plot(bin_centers, combined_counts, "-", color="black", lw=1.8, label=combined_label)
 
     threshold = _estimate_bimodal_threshold(bin_centers, combined_counts)
     if show_threshold and threshold is not None:
