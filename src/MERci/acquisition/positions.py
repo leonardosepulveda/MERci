@@ -500,6 +500,63 @@ def find_exterior_fovs(
     return exterior
 
 
+def find_grid_neighbor(
+    fov_id:             int,
+    positions:          Dict[int, Tuple[float, float]],
+    direction:          str,
+    step_size:          float,
+    tolerance_fraction: float = 0.25,
+) -> Optional[int]:
+    """
+    Find the real FOV id at *fov_id*'s 4-connected grid neighbour in the
+    given *direction*, or ``None`` if that neighbour was not imaged (e.g.
+    *fov_id* is on the grid's exterior -- see :func:`find_exterior_fovs`).
+
+    Same KD-tree "is there a real FOV near this candidate position" approach
+    as :func:`find_exterior_fovs` -- queries the actual stage coordinates
+    rather than snapping onto a shared integer grid index, so it stays
+    correct for any single tissue-piece's own FOV grid regardless of other
+    pieces' phase (see that function's docstring for why).
+
+    Parameters
+    ----------
+    fov_id     : the anchor FOV
+    positions  : {fov_id: (x, y)} stage coordinates (µm) of the FOVs to
+                 search among (scope this to one round's own real imaged
+                 FOVs, matching :func:`find_exterior_fovs`)
+    direction  : ``"right"`` (+x), ``"left"`` (-x), ``"up"`` (+y), or
+                 ``"down"`` (-y)
+    step_size  : grid step size (µm)
+    tolerance_fraction : match tolerance for "is a neighbour actually
+                 present", as a fraction of step_size
+
+    Returns
+    -------
+    The neighbour's FOV id, or ``None`` if no real FOV sits there.
+    """
+    from scipy.spatial import KDTree
+
+    offsets = {
+        "right": (step_size, 0.0), "left": (-step_size, 0.0),
+        "up":    (0.0, step_size), "down": (0.0, -step_size),
+    }
+    if direction not in offsets:
+        raise ValueError(f"direction must be one of {list(offsets)}, got {direction!r}")
+    if fov_id not in positions:
+        raise KeyError(f"fov_id {fov_id} not in positions.")
+
+    fov_ids = list(positions.keys())
+    coords  = np.array([positions[f] for f in fov_ids], dtype=float)
+    tree    = KDTree(coords)
+
+    x, y   = positions[fov_id]
+    dx, dy = offsets[direction]
+    dist, idx = tree.query([x + dx, y + dy])
+    if dist > tolerance_fraction * step_size:
+        return None
+    return fov_ids[int(idx)]
+
+
 # ── Multi-tissue / multi-boundary discovery ─────────────────────────────────────
 
 @dataclass

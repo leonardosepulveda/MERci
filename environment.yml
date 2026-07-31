@@ -18,3 +18,4 @@ dependencies:
     - zarr
     - tifffile
     - pyyaml
+    - affine6p
