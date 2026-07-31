@@ -442,7 +442,7 @@ def get_color_sequence_name(
 # the analysis-side resolver ``find_frame_table_for_hal_config`` a simple
 # ``shutter-`` -> ``frame-table-`` rewrite.
 
-_VALID_KINDS = ("bits", "cells", "transit", "drift")
+_VALID_KINDS = ("bits", "cells", "transit", "drift", "focustest")
 
 
 def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
@@ -452,8 +452,11 @@ def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
 
     Parameters
     ----------
-    kind : ``"bits"``, ``"cells"``, ``"transit"``, or ``"drift"`` (a stage-
-           drift-check round -- see ``notebooks/misc/calculate_stage_drift.ipynb``)
+    kind : ``"bits"``, ``"cells"``, ``"transit"``, ``"drift"`` (a stage-
+           drift-check round -- see ``notebooks/misc/calculate_stage_drift.ipynb``),
+           or ``"focustest"`` (the auto-generated focus-lock-test movie config
+           -- see ``04_create_dave_config.ipynb``'s "Focus-lock test recipe"
+           section)
     name : colour-sequence name from :func:`get_color_sequence_name`
            (underscore-joined, e.g. ``"blkf5_488f2_560f25_650f25_750f25"``)
     tier : optional z-depth-tier label (e.g. ``"shallow"``, ``"deep"``) for a
