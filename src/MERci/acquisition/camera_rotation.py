@@ -576,3 +576,223 @@ def filter_correspondence_outliers(
     kept     = [c for c, s in zip(correspondences, shifts_um) if s <= threshold]
     rejected = [c for c, s in zip(correspondences, shifts_um) if s > threshold]
     return kept, rejected
+
+
+@dataclass
+class GlobalPositionCorrection:
+    """
+    Per-FOV positions from jointly solving every measured FOV's own position
+    against all its pairwise neighbour constraints at once (see
+    :func:`fit_global_positions`), instead of fitting one whole-grid affine.
+
+    Attributes
+    ----------
+    positions         : ``{fov_id: (x, y)}`` (µm) -- only FOVs that appeared
+                        in at least one kept correspondence; merge over a
+                        full nominal (or affine-corrected) positions dict as
+                        a fallback for every other FOV.
+    anchor_fovs        : ``{component_id: fov_id}`` -- the one FOV in each
+                        connected correspondence-graph component held fixed
+                        at its own nominal position, to remove that
+                        component's translational null space (a uniform
+                        shift of every position in an isolated component
+                        satisfies its own constraints equally well, so one
+                        reference point per component is required).
+    n_fovs_solved      : ``len(positions)``
+    n_correspondences  : how many correspondences fed the solve
+    n_components       : how many disconnected correspondence-graph
+                        components were solved independently (this
+                        module's sparse anchor-sampling strategy typically
+                        produces one component per sampled anchor, rarely
+                        overlapping -- see :func:`fit_global_positions`)
+    residual_rms_um    : RMS of ``(p[B] - p[A]) - measured_relative_offset``
+                        across every correspondence, evaluated at the
+                        solved positions -- 0.0 whenever every component is
+                        a simple star (exactly-determined, no redundant
+                        measurement to disagree with itself); only becomes
+                        informative once some FOV is constrained by more
+                        than one independent correspondence.
+    """
+    positions:         Dict[int, Tuple[float, float]]
+    anchor_fovs:       Dict[int, int]
+    n_fovs_solved:     int
+    n_correspondences: int
+    n_components:      int
+    residual_rms_um:   float
+
+
+def _connected_components(correspondences: List[NeighborCorrespondence]) -> List[List[int]]:
+    """Plain BFS connected components of the anchor<->neighbour graph --
+    these graphs are tiny (tens to low hundreds of nodes), no graph library
+    needed."""
+    adjacency: Dict[int, set] = {}
+    for c in correspondences:
+        adjacency.setdefault(c.anchor_fov, set()).add(c.neighbor_fov)
+        adjacency.setdefault(c.neighbor_fov, set()).add(c.anchor_fov)
+
+    visited: set = set()
+    components = []
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+        stack, component = [start], []
+        visited.add(start)
+        while stack:
+            fov = stack.pop()
+            component.append(fov)
+            for nb in adjacency[fov]:
+                if nb not in visited:
+                    visited.add(nb)
+                    stack.append(nb)
+        components.append(sorted(component))
+    return components
+
+
+def fit_global_positions(
+    correspondences:  List[NeighborCorrespondence],
+    nominal_positions: Dict[int, Tuple[float, float]],
+) -> GlobalPositionCorrection:
+    """
+    Jointly solve for every measured FOV's own real position from all kept
+    pairwise neighbour correspondences, instead of fitting one global affine
+    transform (:func:`fit_camera_rotation`) applied uniformly to the whole
+    nominal grid.
+
+    Why this exists: a single global affine can only correct a rotation/
+    scale/shear that's coherent across the WHOLE fov grid -- it cannot
+    correct real, independent per-FOV stage-positioning jitter, even given
+    perfect measurements. Confirmed directly on real data
+    (BC553_sample_02/MF3): one correspondence (anchor 1087, neighbour 1082,
+    direction "left") measured a real, clear 5.17 um y-shift, but the pooled
+    global-affine fit came out near-identity (no other correspondence
+    echoed the same pattern) -- that real measurement never reached the
+    "corrected" position at all, it was averaged away rather than applied.
+    This is the same problem BigStitcher's own tile-position optimization
+    solves for a small contiguous tile block (see this module's docstring
+    for why a full dense version doesn't scale to a whole multi-thousand-FOV
+    experiment): treat every sampled FOV's position as its own free
+    variable, and jointly minimize its disagreement with every
+    correspondence that constrains it, instead of reducing every
+    measurement to one shared rotation/scale.
+
+    Method
+    ------
+    For each kept correspondence (anchor A, neighbour B), the measured
+    relative offset ``r_AB = measured_xy(B) - nominal_positions[A]`` is a
+    direct, independent estimate of B's true position relative to A's own
+    nominal position. Solving::
+
+        minimize over every FOV's unknown position p[F]:
+            sum_AB || (p[B] - p[A]) - r_AB ||^2
+
+    is a sparse linear least-squares problem that separates cleanly into
+    two independent solves (x and y), via ``scipy.sparse.linalg.lsqr``.
+
+    The correspondence graph is typically NOT one connected mesh -- this
+    module's own sparse anchor-sampling strategy (:func:`sample_neighbor_
+    correspondences`) produces ``N_ANCHORS`` separate ~4-neighbour stars
+    that rarely overlap. Each connected component has its own 1-D-per-axis
+    translational null space (uniformly shifting every position in it
+    satisfies every constraint in that component equally), removed by
+    pinning ONE FOV per component -- whichever appears as an ``anchor_fov``
+    in the most correspondences, i.e. a real sampled anchor with several
+    real measurements attached, not an arbitrary leaf -- to its own nominal
+    position.
+
+    Honest limitation: with this sparse, non-overlapping sampling, most
+    components are simple stars (one anchor + up to 4 leaves, each leaf
+    constrained by exactly one correspondence) -- the solved leaf position
+    is then numerically identical to that correspondence's own
+    ``measured_xy``, and ``residual_rms_um`` is 0.0 (nothing to disagree
+    with). The real benefit here is using each measured FOV's own direct
+    measurement instead of discarding it into a diluted global-affine
+    average -- not yet genuine cross-measurement error averaging, which
+    would need denser/overlapping sampling to provide redundant constraints
+    per FOV.
+
+    Parameters
+    ----------
+    correspondences   : from :func:`sample_neighbor_correspondences`,
+                        already passed through
+                        :func:`filter_correspondence_outliers`
+    nominal_positions : ``{fov_id: (x, y)}`` -- the full experiment's
+                        nominal grid positions (needed to look up each
+                        correspondence's ANCHOR's own nominal position,
+                        which isn't stored on the correspondence itself --
+                        only the neighbour's is)
+
+    Returns
+    -------
+    GlobalPositionCorrection -- see its own docstring. Merge ``.positions``
+    over a full nominal (or affine-corrected) positions dict as a fallback
+    for every FOV not directly measured.
+    """
+    from scipy.sparse import lil_matrix
+    from scipy.sparse.linalg import lsqr
+
+    if not correspondences:
+        return GlobalPositionCorrection(
+            positions={}, anchor_fovs={}, n_fovs_solved=0,
+            n_correspondences=0, n_components=0, residual_rms_um=0.0,
+        )
+
+    components = _connected_components(correspondences)
+    all_fovs = sorted({fov for comp in components for fov in comp})
+    fov_to_idx = {fov: i for i, fov in enumerate(all_fovs)}
+    n = len(all_fovs)
+
+    # Pin each component's most-sampled real anchor to its own nominal position.
+    anchor_counts: Dict[int, int] = {}
+    for c in correspondences:
+        anchor_counts[c.anchor_fov] = anchor_counts.get(c.anchor_fov, 0) + 1
+    anchor_fovs = {
+        comp_id: max(comp, key=lambda fov: anchor_counts.get(fov, 0))
+        for comp_id, comp in enumerate(components)
+    }
+
+    n_corr = len(correspondences)
+    n_pins = len(anchor_fovs)
+    # Heavily weighted relative to unit-weighted correspondence rows -- pins
+    # the component's reference FOV to within numerical noise of its real
+    # nominal position without needing a true equality-constrained solver.
+    PIN_WEIGHT = 1.0e4
+
+    def _solve_axis(axis: int) -> np.ndarray:
+        A = lil_matrix((n_corr + n_pins, n), dtype=float)
+        b = np.zeros(n_corr + n_pins, dtype=float)
+
+        for row, c in enumerate(correspondences):
+            i_a, i_b = fov_to_idx[c.anchor_fov], fov_to_idx[c.neighbor_fov]
+            A[row, i_b] += 1.0
+            A[row, i_a] += -1.0
+            b[row] = c.measured_xy[axis] - nominal_positions[c.anchor_fov][axis]
+
+        for offset, (comp_id, pin_fov) in enumerate(anchor_fovs.items()):
+            row = n_corr + offset
+            A[row, fov_to_idx[pin_fov]] = PIN_WEIGHT
+            b[row] = PIN_WEIGHT * nominal_positions[pin_fov][axis]
+
+        solution = lsqr(A.tocsr(), b)[0]
+        return solution
+
+    x_solution = _solve_axis(0)
+    y_solution = _solve_axis(1)
+    positions = {
+        fov: (float(x_solution[i]), float(y_solution[i])) for fov, i in fov_to_idx.items()
+    }
+
+    residuals_um = []
+    for c in correspondences:
+        p_a = positions[c.anchor_fov]
+        p_b = positions[c.neighbor_fov]
+        r_ab = (
+            c.measured_xy[0] - nominal_positions[c.anchor_fov][0],
+            c.measured_xy[1] - nominal_positions[c.anchor_fov][1],
+        )
+        residuals_um.append(np.hypot(p_b[0] - p_a[0] - r_ab[0], p_b[1] - p_a[1] - r_ab[1]))
+    residual_rms_um = float(np.sqrt(np.mean(np.square(residuals_um)))) if residuals_um else 0.0
+
+    return GlobalPositionCorrection(
+        positions=positions, anchor_fovs=anchor_fovs, n_fovs_solved=len(positions),
+        n_correspondences=n_corr, n_components=len(components), residual_rms_um=residual_rms_um,
+    )
