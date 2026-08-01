@@ -19,10 +19,13 @@ output/
 
 # Prompt/task history (local only)
 prompt_history/
-verbatim_history/
 prompt_rationales/
 SOMEDAY.md
 FINDINGS.md
+
+# Claude working/cache files (generator scripts, diagnostic images, verbatim
+# capture buffer, migration backups) -- see CLAUDE.md's "Working / cache files"
+cache/
 
 # Local, machine-specific Claude Code settings (e.g. additionalDirectories)
 .claude/settings.local.json

@@ -1,9 +1,11 @@
-# save_verbatim.ps1 — Stop hook (canonical template; copied into each project's .claude/hooks/)
+# save_verbatim.ps1 — Stop hook (MERci-specific: writes into cache/verbatim_buffer/,
+# an internal staging area folded into each prompt_history/ entry's own
+# "## Verbatim History" section -- see CLAUDE.md's "Verbatim capture" note.
 # Appends Claude's verbatim assistant text from the just-finished turn to
-# verbatim_history/<YYYY-MM-DD>_verbatim.md. Reads the hook input JSON on stdin
+# cache/verbatim_buffer/<YYYY-MM-DD>_verbatim.md. Reads the hook input JSON on stdin
 # (which carries transcript_path), parses the JSONL transcript, finds the last
 # genuine user prompt, and collects every assistant text block after it.
-# Portable: the output folder is resolved relative to THIS script (../../verbatim_history),
+# Portable: the output folder is resolved relative to THIS script (../../cache/verbatim_buffer),
 # so no per-project edits are needed. Best-effort: any failure exits 0 silently
 # so it never blocks the session.
 
@@ -16,7 +18,7 @@ try {
     $tp = $hook.transcript_path
     if (-not $tp -or -not (Test-Path -LiteralPath $tp)) { exit 0 }
 
-    $outDir = Join-Path $PSScriptRoot '..\..\verbatim_history'
+    $outDir = Join-Path $PSScriptRoot '..\..\cache\verbatim_buffer'
     if (-not (Test-Path -LiteralPath $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }

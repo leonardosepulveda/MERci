@@ -218,12 +218,25 @@ src/MERci/
                     #   (positions_dir= enables per-segment loops; every loop gets its own identically-
                     #   named loop_variable even when several rounds share one positions file -- Dave's
                     #   real v2Generator indexes a loop by its own name, so a movie's <variable_entry>
-                    #   cannot alias a differently-named shared loop_variable declared elsewhere),
-                    #   dave_config_filename (single source of truth for the dave-{mic}-{N}hybs-{name}.xml
-                    #   name, shared by the notebook that writes it and the one that later annotates it --
-                    #   avoids globbing settings/dave-*.xml and picking the wrong file when two acquisitions
-                    #   with different hyb counts share one settings/ folder), annotate_dave_with_round_info,
-                    #   series_to_movie_name, get_hal_frame_count
+                    #   cannot alias a differently-named shared loop_variable declared elsewhere;
+                    #   <change_directory> is emitted immediately before each imaging loop, never before
+                    #   a preceding fluidics block, purely for XML readability -- a caller passing
+                    #   round_info restricted to only the bits/hyb rows (e.g. a standalone "hybs" recipe,
+                    #   see notebook 04 below) sets leading_fluidics=True to emit that slice's own
+                    #   leading fluidics block before its first round, reusing the exact same Kilroy-
+                    #   protocol-resolution/first_hyb_no_cleave logic a full cells+hybs round_info would
+                    #   have produced as a side effect of the preceding (now absent) cells round),
+                    #   dave_config_filename / dave_cells_config_filename / dave_focustest_config_filename
+                    #   (single source of truth for each recipe's dave-{mic}-{cells|N hybs|focustest}-
+                    #   {name}.xml name, shared by the notebook that writes it and the one that later
+                    #   annotates it -- avoids globbing settings/dave-*.xml and picking the wrong file
+                    #   when two acquisitions with different hyb counts share one settings/ folder),
+                    #   annotate_dave_with_round_info, series_to_movie_name, get_hal_frame_count,
+                    #   create_focus_test_dave_config (print_estimate=True by default -- reuses
+                    #   estimate_dave_experiment/format_experiment_estimate exactly like create_dave_config,
+                    #   since the estimator already parses the written XML generically and needs no
+                    #   changes to handle a fluidics-free single-loop recipe: check-only mode correctly
+                    #   reports ~0 s/0 B, since no <length> element exists on that mode's <movie>)
     kilroy.py       # load_kilroy_protocols, find_kilroy_config (MF2 fallback),
                     # KilroyProtocolResolver — resolve dave fluidic steps to real Kilroy protocol names.
                     # + protocol/command consistency: load_kilroy_commands, iter_protocol_references,
@@ -994,6 +1007,33 @@ calculation loop, and use explicit, legible plot font sizes. See
 `notebooks/misc/measure_tissue_thickness_test.ipynb` for the reference
 implementation.
 
+### Diagnostic images and visual verification
+
+This project's diagnostic/QC notebooks (e.g. `misc/correct_camera_rotation.ipynb`,
+mosaic viewers) live and die by image-based verification, so the global
+visual-verification protocol (`~/.claude/CLAUDE.md`) applies, plus these
+repo-specific habits learned from a real, multi-hour miscommunication during
+the camera-rotation-correction work (see
+`prompt_history/2026_07_31_1932_confirm_camera_rotation_orientation.md` and
+`..._1939_fix_camera_rotation_mosaic_never_oriented.md`):
+
+- Save every diagnostic image meant for the user's own eyes to a real path
+  under the experiment's own tree (e.g. `SAMPLE_DIR/analysis/figures/`) or the
+  repo, never only the session scratchpad — and state the literal path.
+- When a notebook section is redesigned/replaced, delete or rename the old
+  diagnostic PNGs it produced instead of leaving them in place under a
+  similar filename. A stale image with no version marker is indistinguishable
+  from the current one and caused a real, hours-long false alarm (the user
+  was comparing a pre-fix `mosaic_comparison.png` while the notebook itself
+  had already been fixed).
+- Before telling the user a diagnostic output is "already correct" based on a
+  rendered image, confirm the code path that produced that image actually
+  applies every transform being claimed (e.g. grep for
+  `apply_microscope_orientation` or the equivalent) — a plausible-looking
+  picture is not proof the code that built it is right, particularly for
+  tissue images whose texture may not show a raw-vs-corrected mismatch
+  clearly at a glance.
+
 ## Running notebooks
 
 Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks (`reference`) are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`; the `tumor/{epi,disk}/` and `lineage_tracing/{merfish,lineage}/` notebooks are **four** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`. Do not hardcode absolute paths in notebooks.
@@ -1015,28 +1055,42 @@ Commit and push as you go — do not leave finished work uncommitted.
 - Never commit transient files: atomic-write leftovers (`*.tmp.*`), `__pycache__/`,
   or `*.egg-info/` (all gitignored).
 
+## Working / cache files
+
+Any working/intermediate file Claude generates for this project — notebook-
+generator scripts used to build an executed notebook via `nbclient`, a
+diagnostic image meant for the user to inspect, a migration backup, the
+internal verbatim-capture buffer (below) — goes under `cache/` (repo root,
+gitignored), never the session scratchpad or any location outside this repo.
+Structure inside `cache/` is flexible; when pointing the user at a specific
+file, always give the literal path under `cache/`. This is distinct from
+`analysis/cache/<notebook_name>/` (see "Notebook coding guidelines" above),
+which is a per-*experiment* cache for a notebook's own calculation results,
+living under `SAMPLE_DIR/analysis/`, not this repo.
+
 ## Remembering task history
 
-This project keeps three complementary, local-only histories, all gitignored:
+This project keeps two complementary, local-only records, both gitignored:
 
-1. **`verbatim_history/`** — *uncompressed*. The exact text Claude writes each
-   turn, appended automatically by a `Stop` hook (`.claude/hooks/
-   save_verbatim.ps1`, wired into `.claude/settings.json`). No action needed
-   from Claude — the harness captures it. One file per day,
-   `{YYYY-MM-DD}_verbatim.md`.
-2. **`prompt_history/`** — *compressed summary*. One file per request. The
-   append-only source of truth: records the verbatim prompt, plan, what was
-   done, and the dead-ends. **Never edit past entries** — their value is
-   provenance. Described in full below.
-3. **`FINDINGS.md`** — *current state*. Curated, deduplicated head: what is
+1. **`prompt_history/`** — the log. One file per request: frontmatter, then
+   `## Prompt` / `## Plan` / `## Summary`, plus `## Learning` and
+   `## Verbatim History` when applicable (all described below). This is now
+   the single place to look for what happened on any given request —
+   including Claude's own verbatim turn-by-turn text, folded directly into
+   each entry.
+2. **`FINDINGS.md`** — *current state*. Curated, deduplicated head: what is
    true now, what was wrong, and the open next step. Read this first when
    resuming.
 
 **Maintenance habit:** for **every user question/request**, log it to
 `prompt_history/` (below). When that entry changes a conclusion or project
-state, also update the relevant `FINDINGS.md` section. Keep `prompt_history/`
-append-only. `prompt_history/` itself has **two methods** depending on how
-the prompt arrives:
+state, also update the relevant `FINDINGS.md` section. `prompt_history/` is
+no longer strictly append-only as a *file* (a past entry's structure may be
+fixed up if it doesn't fit the current template) — but the **`## Prompt`
+text itself must always stay verbatim**: never rephrase, summarize, or
+paraphrase it, whether writing a new entry or fixing up an old one.
+`prompt_history/` itself has **two methods** depending on how the prompt
+arrives:
 
 ### Method 1 — user pre-writes the prompt as a file
 
@@ -1045,9 +1099,10 @@ The user creates a file in `prompt_history/` whose name is **only the date/time*
 and act on it:
 
 1. Read the file and carry out the request.
-2. **Append** the response record to the *same file* (the YAML frontmatter +
-   `## Plan` + `## Summary` sections below; the `## Prompt` is already the file's
-   existing content). Keep the original prompt text intact — append, never rewrite.
+2. Rewrite the file to start with the YAML frontmatter, followed by `## Prompt`
+   (the file's original raw text, moved under this heading verbatim — never
+   rephrased), then `## Plan` / `## Summary` and the rest of the shared format
+   below.
 3. **Rename** the file to add a short description, converting it to the standard
    form `{YYYY_MM_DD_HH_MM}_{short_description}.md`
    (e.g. `2026_06_18_1002.txt` → `2026_06_18_1002_update_logging_rules.md`).
@@ -1073,13 +1128,25 @@ status: completed | in-progress | abandoned
 ---
 
 ## Prompt
-<verbatim copy of the user's request>
+<verbatim copy of the user's request -- never rephrased>
 
 ## Plan
 <Claude's plan of action before executing>
 
 ## Summary
 <what was actually done, including any deviations from the plan>
+
+## Learning
+<optional -- only when the Summary above already surfaced a concrete, generalizable
+lesson/rule/gotcha useful beyond this one request (e.g. a tool quirk, a wrong
+assumption corrected, a verification habit that mattered). Omit this heading
+entirely when nothing like that came up -- do not invent one to fill the slot.>
+
+## Verbatim History
+<Claude's own verbatim turn-by-turn text for this request, folded in from the
+internal cache/verbatim_buffer/ (below) when the entry is finalized. Omit this
+heading if no buffer content exists for this request (e.g. very old entries
+predating the buffer).>
 ```
 
 The `UserPromptSubmit` date/time hook injects `Current local date/time: … (epoch N)`
@@ -1092,7 +1159,19 @@ multi-turn request). Omit `elapsed` if no submit epoch is available — never gu
 Format rationale: Markdown + YAML frontmatter is Claude-native, human-readable,
 and lets all entries be scanned/grepped by metadata without reading every body.
 
-### FINDINGS.md — current state (tier 3)
+### Verbatim capture (internal mechanism, not a separate tier to read)
+
+A `Stop` hook (`.claude/hooks/save_verbatim.ps1`, wired into `.claude/settings.json`)
+still runs automatically after every turn and appends Claude's exact assistant text
+to a per-day buffer, `cache/verbatim_buffer/{YYYY-MM-DD}_verbatim.md` — no action
+needed from Claude for the capture itself. This buffer is purely an internal
+staging area; never point the user at it. When finalizing a `prompt_history/`
+entry, fold that request's slice of the current day's buffer into the entry's own
+`## Verbatim History` section (matching by timestamp — the slice from this
+request's own start up to the next request's start), then clear/truncate that
+portion of the buffer so it isn't re-ported into a later entry.
+
+### FINDINGS.md — current state
 
 `FINDINGS.md` (repo root, gitignored) is the curated, deduplicated head of
 what's true about this project right now — not a log. Read it first when
@@ -1117,7 +1196,7 @@ quick record, not for actually learning *how* a conclusion was reached. For
 tasks with genuine investigation (reverse-engineering an undocumented
 format, debugging by reading unfamiliar source, iterating on an approach
 that failed at first), also write `prompt_rationales/{same-basename}.html`
-(gitignored, personal-only, like `prompt_history/`/`verbatim_history/`) — a
+(gitignored, personal-only, like `prompt_history/`) — a
 narrative walkthrough with real code snippets, dead ends, and the moment a
 hypothesis got confirmed or falsified. Not needed for mechanical tasks. See
 `~/.claude/commands/rationale.md` (the `/rationale` command) for the exact
