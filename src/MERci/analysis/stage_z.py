@@ -28,6 +28,14 @@ CACHE_COLUMNS = [
     "first_stage_z", "min_stage_z", "max_stage_z", "all_same",
 ]
 
+# Sentinel (round_id, series) tag for focus-lock-test rows in the same cache --
+# the focus-lock test (MERci.acquisition.dave.create_focus_test_dave_config) is
+# a standalone calibration procedure, not a real imaging round in
+# round_info.csv, so it has no real round_id of its own to reuse. -1 is never
+# a real imaging_round value (those start at 1).
+FOCUSTEST_ROUND_ID    = -1
+FOCUSTEST_SERIES_NAME = "focustest"
+
 
 def off_path_for(image_path: Path) -> Path:
     """Return the ``.off`` sidecar path for *image_path* (same dir, same stem)."""
@@ -211,6 +219,83 @@ def update_stage_z_cache(config, meta, cache_path: Path) -> pd.DataFrame:
     return cache
 
 
+def discover_focustest_off_files(focus_test_dir: Path, movie_name: Optional[str] = None) -> dict:
+    """
+    ``{fov_id: off_path}`` for every focus-lock-test ``.off`` sidecar under
+    *focus_test_dir* (:func:`MERci.acquisition.dave.create_focus_test_dave_config`'s
+    own output directory, e.g. ``SAMPLE_DIR/data/focus_test``). ``fov_id`` is
+    the file's own zero-padded index (``{movie_name}_{fov_id:0N}.off``) --
+    Dave visits one position per movie in the SAME 0-based row order as the
+    positions file the recipe was built from, so this is the same ``fov_id``
+    space as everywhere else in this package, not a separate numbering.
+
+    Parameters
+    ----------
+    movie_name : the recipe's own ``movie_name`` (e.g. ``"hal-st2-focustest"``,
+        :func:`MERci.acquisition.dave.create_focus_test_dave_config`'s own
+        parameter) -- auto-detected from the first ``*.off`` file present if
+        not given.
+
+    Returns
+    -------
+    ``{}`` if *focus_test_dir* doesn't exist or has no ``.off`` files yet.
+    """
+    focus_test_dir = Path(focus_test_dir)
+    off_paths = sorted(focus_test_dir.glob("*.off")) if focus_test_dir.is_dir() else []
+    if not off_paths:
+        return {}
+    if movie_name is None:
+        movie_name = off_paths[0].stem.rsplit("_", 1)[0]
+    result = {}
+    for p in focus_test_dir.glob(f"{movie_name}_*.off"):
+        idx_str = p.stem[len(movie_name) + 1:]
+        if idx_str.isdigit():
+            result[int(idx_str)] = p
+    return result
+
+
+def update_focustest_stage_z_cache(
+    focus_test_dir: Path, cache_path: Path, movie_name: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Extend the stage-z cache (same on-disk schema/file as
+    :func:`update_stage_z_cache`) with the focus-lock test's own per-FOV
+    ``.off`` files under *focus_test_dir*.
+
+    The focus-lock test is a standalone calibration procedure
+    (:func:`MERci.acquisition.dave.create_focus_test_dave_config`), not a
+    real imaging round in ``round_info.csv`` -- :func:`update_stage_z_cache`'s
+    ``ExperimentMetadata``-driven round/series loop has no way to discover
+    it, so it needs this separate entry point. Rows are tagged
+    ``round_id=FOCUSTEST_ROUND_ID``, ``series=FOCUSTEST_SERIES_NAME`` so they
+    plot alongside real rounds via the same
+    :func:`assign_x_positions`/plotting code once loaded back with
+    :func:`load_stage_z_cache` (see :func:`round_label`'s focustest
+    special-case for the legend label).
+    """
+    cache = load_stage_z_cache(cache_path)
+    seen = set(zip(cache["round_id"], cache["fov_id"], cache["series"]))
+    new_rows = []
+
+    for fov_id, off_path in discover_focustest_off_files(focus_test_dir, movie_name).items():
+        key = (FOCUSTEST_ROUND_ID, fov_id, FOCUSTEST_SERIES_NAME)
+        if key in seen:
+            continue
+        off_df = read_off_file_if_ready(off_path)
+        if off_df is None:
+            continue   # not written yet, or still being written -- pick it up on a future run
+        new_rows.append({
+            "round_id": FOCUSTEST_ROUND_ID, "fov_id": fov_id, "series": FOCUSTEST_SERIES_NAME,
+            "off_path": str(off_path), **summarize_stage_z(off_df),
+        })
+
+    if new_rows:
+        cache = pd.concat([cache, pd.DataFrame(new_rows)], ignore_index=True)
+        cache["all_same"] = _coerce_bool_column(cache["all_same"])
+        cache.to_csv(cache_path, index=False)
+    return cache
+
+
 def round_label(meta, round_id: int) -> str:
     """``"cells"`` if *round_id*'s series are the cells round, else
     ``"hyb{N:02d}"`` where ``N`` is this round's 1-based rank among all
@@ -219,7 +304,14 @@ def round_label(meta, round_id: int) -> str:
     ``round_id=2`` is the FIRST real hyb round and must map to ``"hyb01"``,
     matching the real ``H01``/``H02``/... data folders -- using ``round_id``
     directly mislabels every hyb round one too high (e.g. ``"hyb02"`` for the
-    round that actually wrote to ``H01``)."""
+    round that actually wrote to ``H01``).
+
+    ``round_id == FOCUSTEST_ROUND_ID`` is not a real round at all (see
+    :func:`update_focustest_stage_z_cache`) -- returned as its own label
+    before touching *meta*, which has no entry for it."""
+    if round_id == FOCUSTEST_ROUND_ID:
+        return "focustest"
+
     def _is_cells(rid: int) -> bool:
         return any((s.imaging_type or "").strip().lower() == "cells"
                    for s in meta.series_for_round(rid))
