@@ -97,6 +97,22 @@ def dave_config_filename(microscope: str, n_hybs: int, sample_name: str) -> str:
     return f"dave-{microscope.lower()}-{n_hybs}hybs-{sample_name}.xml"
 
 
+def dave_cells_config_filename(microscope: str, sample_name: str) -> str:
+    """Dave recipe filename for the cells-only recipe: ``dave-{mic}-cells-{sample_name}.xml``.
+
+    Same "single source of truth" rationale as :func:`dave_config_filename`.
+    """
+    return f"dave-{microscope.lower()}-cells-{sample_name}.xml"
+
+
+def dave_focustest_config_filename(microscope: str, sample_name: str) -> str:
+    """Dave recipe filename for the focus-lock test recipe: ``dave-{mic}-focustest-{sample_name}.xml``.
+
+    Same "single source of truth" rationale as :func:`dave_config_filename`.
+    """
+    return f"dave-{microscope.lower()}-focustest-{sample_name}.xml"
+
+
 def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
     """
     Best-effort microscope id from the ``series`` names in *round_info*.
@@ -491,6 +507,7 @@ def create_dave_config(
     use_adaptors:         bool = False,
     include_final_cleave: bool = False,
     first_hyb_no_cleave:  bool = True,
+    leading_fluidics:     bool = False,
     num_focus_checks:     int  = 50,
     fluidics_protocols:   Optional[Sequence[str]] = None,
     kilroy_config:        Optional[Path] = None,
@@ -548,19 +565,18 @@ def create_dave_config(
     ``include_final_cleave=True``.
 
     **Save location per round.** When ``round_info`` has a ``data_dir`` column, a
-    ``<change_directory>`` element sets HAL's save directory (from ``data_dir``) to
-    the upcoming imaging round's folder. It is emitted **before that round's fluidics
-    loop** — so a ``<change_directory>`` precedes every fluidics block — and before
-    the first imaging round (which has no preceding fluidics). Emission is
-    de-duplicated: the directory is not re-set before the round's imaging loop when
-    the fluidics already set it. In the multi-boundary layout a round spans several
-    directories, so the extra per-segment directories are still set before their own
-    segment loops. This spreads rounds across folders (e.g. ``data/hybs/H01``,
-    ``H02``, …). HAL **requires the directory to exist** (it errors otherwise), and
-    neither Dave nor HAL creates it, so with ``create_data_dirs=True`` (default) this
-    function creates every referenced directory. (``change_directory`` maps to HAL's
-    "Set Directory" message, which is deprecated but still functional — it only emits
-    a warning.)
+    ``<change_directory>`` element sets HAL's save directory (from ``data_dir``)
+    immediately **before that round's own imaging loop** (purely a readability
+    choice -- the tag sits next to the loop it applies to, rather than earlier
+    during the preceding fluidics block). Emission is de-duplicated: unchanged
+    from the last one emitted is a no-op. In the multi-boundary layout a round
+    spans several directories, so the extra per-segment directories are still
+    set before their own segment loops. This spreads rounds across folders
+    (e.g. ``data/hybs/H01``, ``H02``, …). HAL **requires the directory to
+    exist** (it errors otherwise), and neither Dave nor HAL creates it, so with
+    ``create_data_dirs=True`` (default) this function creates every referenced
+    directory. (``change_directory`` maps to HAL's "Set Directory" message,
+    which is deprecated but still functional — it only emits a warning.)
 
     Parameters
     ----------
@@ -610,6 +626,19 @@ def create_dave_config(
                             first hybridisation flows onto a freshly prepared
                             sample); all later fluidics blocks keep the cleave.
                             Ignored when ``fluidics_protocols`` is given.
+    leading_fluidics      : if True, emit a fluidics block BEFORE ``round_info``'s
+                            first round, using the same protocol-resolution logic
+                            (Kilroy lookup, ``first_hyb_no_cleave``, hyb numbering)
+                            that would otherwise apply if a round ``round_ids[0] - 1``
+                            existed and just finished imaging. Use this to build a
+                            self-contained "hybs-only" recipe (``round_info`` holding
+                            only the bits rounds) that is independently runnable in
+                            Dave without a separate "cells" file having just run in
+                            the same session -- the first hyb's hybridization step
+                            would otherwise have nowhere to attach, since normally it
+                            is written as a side effect of the PRECEDING round's own
+                            loop iteration (which does not exist in this slice).
+                            No-op when ``round_info`` is empty.
     num_focus_checks      : value for ``<num_focus_checks>``
     fluidics_protocols    : if provided, use this fixed list of Kilroy protocol
                             names for every between-round fluidics block,
@@ -783,8 +812,13 @@ def create_dave_config(
         ve.set("name", variable_name)
 
     def _add_fluidics(round_id: int, is_last: bool) -> None:
-        """Append the between-round fluidics loop that FOLLOWS *round_id*."""
-        precede_dir = None   # save dir for the imaging round this fluidics precedes
+        """Append the between-round fluidics loop that FOLLOWS *round_id*.
+
+        *round_id* need not itself exist in ``round_info`` -- only
+        ``round_id + 1`` (the round this fluidics precedes) is looked up, so a
+        caller can pass ``round_ids[0] - 1`` to emit a LEADING fluidics block
+        before a round_info slice's first round (see ``leading_fluidics``).
+        """
         if not is_last:
             next_round = round_id + 1
             # Hyb number tracks the bit/hyb index of the NEXT imaging round (not
@@ -792,16 +826,6 @@ def create_dave_config(
             # neither the Kilroy protocol numbers nor the loop's own name.
             hyb_idx = _hyb_idx(next_round)
             fl_name = f"Hyb {hyb_idx:02d} Fluidics"
-
-            # The directory for the upcoming imaging round (from round_info.data_dir)
-            # is set BEFORE its fluidics block, so a <change_directory> precedes every
-            # fluidics loop. In the multi-segment layout the round spans several
-            # directories; the first segment's is set here and the remaining segments
-            # set theirs before their own loops.
-            if has_data_dir:
-                next_rows = round_info[round_info["imaging_round"] == next_round]
-                if len(next_rows):
-                    precede_dir = next_rows.iloc[0].get("data_dir")
 
             # The fluidics that precedes the FIRST bits round omits the cleave.
             is_first_hyb = (first_bits_round is not None and next_round == first_bits_round)
@@ -854,12 +878,14 @@ def create_dave_config(
         else:
             return
 
-        _add_change_directory(precede_dir)   # <change_directory> before this fluidics
         fl_loop = ET.SubElement(seq, "loop")
         fl_loop.set("name", fl_name)
         ve = ET.SubElement(fl_loop, "variable_entry")
         ve.set("name", fl_name)
         fluidics_loop_vars.append((fl_name, fl_protocols))
+
+    if leading_fluidics and round_ids:
+        _add_fluidics(round_ids[0] - 1, is_last=False)
 
     for idx, round_id in enumerate(round_ids):
         is_last = (idx == n_rounds - 1)
@@ -982,6 +1008,11 @@ def create_focus_test_dave_config(
     data_dir:         Optional[Path] = None,
     create_data_dir:  bool = True,
     movie_name:       str = "focustest",
+    print_estimate:   bool = True,
+    kilroy_config:    Optional[Path] = None,
+    microscope:       Optional[str] = None,
+    estimate_frame_shape: Optional[Sequence[int]] = None,
+    estimate_bytes_per_pixel: int = 2,
 ) -> int:
     """
     Write a lightweight Dave recipe that visits every FOV in *positions_file*
@@ -1065,6 +1096,22 @@ def create_focus_test_dave_config(
     movie_name       : base movie name (e.g. ``"hal-mf3-focustest"``);
                        ``increment="Yes"`` numbers it per FOV exactly like a
                        real acquisition movie
+    print_estimate   : if True (default), print an estimated run time/storage for
+                       this recipe via the same :func:`estimate_dave_experiment`
+                       mechanism :func:`create_dave_config` uses -- in check-only
+                       mode (``n_test_frames=0``) this correctly reports ~0 s/0 B
+                       (no image is ever taken), it does not add a stage-move/
+                       focus-check time estimate (neither does the main recipe's
+                       estimate, for the same reason: HAL/Dave don't expose that
+                       timing either).
+    kilroy_config    : unused here (this recipe has no fluidics) -- accepted only
+                       so callers can pass the same value they use for
+                       :func:`create_dave_config` without conditionally omitting it
+    microscope       : microscope id, used to pick the camera frame size for the
+                       storage estimate (see :func:`create_dave_config`)
+    estimate_frame_shape     : explicit ``(width, height)`` in pixels; overrides
+                       the microscope-derived size
+    estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
 
     Returns
     -------
@@ -1123,6 +1170,22 @@ def create_focus_test_dave_config(
     ET.SubElement(lv, "file_path").text = str(positions_file)
 
     _write_dave_xml(root, Path(output_path))
+
+    if print_estimate:
+        if estimate_frame_shape is not None:
+            frame_w, frame_h = int(estimate_frame_shape[0]), int(estimate_frame_shape[1])
+        else:
+            frame_w, frame_h = get_camera_frame_size(microscope)
+        est = estimate_dave_experiment(
+            Path(output_path),
+            kilroy_config   = kilroy_config,
+            settings_dir    = settings_dir,
+            frame_width     = frame_w,
+            frame_height    = frame_h,
+            bytes_per_pixel = estimate_bytes_per_pixel,
+        )
+        print(format_experiment_estimate(est, per_round=True))
+
     return n_fovs
 
 
@@ -1539,6 +1602,12 @@ def _write_dave_xml(root: ET.Element, output_path: Path, leading_comment: Option
     # comments (create_dave_config), for readability -- the strip above would
     # otherwise flatten them along with every other element.
     text = re.sub(r"(<!-- (?:POSITION|FLUIDICS) VARIABLES -->\n)", r"\1\n", text)
+
+    # Two blank lines BEFORE each of those same section comments too, so the
+    # loop_variable declarations read as a clearly separated block from the
+    # recipe body above them, not just visually attached to it. The comment
+    # is indented (toprettyxml), so the newline and the tag are not adjacent.
+    text = re.sub(r"\n([ \t]*<!-- (?:POSITION|FLUIDICS) VARIABLES -->)", r"\n\n\n\1", text)
 
     if leading_comment:
         decl, _, rest = text.partition("\n")
