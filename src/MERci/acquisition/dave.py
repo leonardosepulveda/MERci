@@ -58,7 +58,7 @@ from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
     load_protocol_durations,
-    protocol_valve_commands,
+    protocol_last_flowed_valve,
 )
 from .positions import group_boundaries_by_path_mode
 
@@ -845,15 +845,24 @@ def create_dave_config(
                 # Some Kilroy protocols (e.g. "Hybridize N") already end by
                 # setting/flowing the imaging buffer themselves -- appending the
                 # standalone image-buffer protocol on top would flow it twice.
-                # Detected by comparing the step immediately preceding it
-                # (readouts, or the hybridize step itself) against the
-                # standalone protocol's own first valve command, rather than
-                # hard-coding which Dave step this can happen after.
+                # Detected by comparing the LAST VALVE THAT ACTUALLY FLOWED
+                # (protocol_last_flowed_valve, not just the last <valve>
+                # element) in the step immediately preceding it (readouts, or
+                # the hybridize step itself) against the standalone
+                # protocol's own last-flowed valve, rather than hard-coding
+                # which Dave step this can happen after. Using the literal
+                # last <valve> element instead of the last one that flowed
+                # is NOT equivalent: a Kilroy config can end a protocol with
+                # a bare valve reposition move with no <pump> after it (e.g.
+                # parking at the next hyb's port), which is not itself a
+                # flow -- confirmed as a real, previously undetected
+                # double-flow bug against a live experiment's actual Kilroy
+                # config (see protocol_last_flowed_valve's docstring).
                 image_buffer = resolver.image_buffer()
-                preceding_valves = protocol_valve_commands(kilroy_config, steps[-1])
-                buffer_valves    = protocol_valve_commands(kilroy_config, image_buffer)
-                already_flowed = bool(preceding_valves and buffer_valves
-                                      and preceding_valves[-1].lower() == buffer_valves[0].lower())
+                preceding_last_flow = protocol_last_flowed_valve(kilroy_config, steps[-1])
+                buffer_last_flow    = protocol_last_flowed_valve(kilroy_config, image_buffer)
+                already_flowed = bool(preceding_last_flow and buffer_last_flow
+                                      and preceding_last_flow.lower() == buffer_last_flow.lower())
                 if not already_flowed:
                     steps.append(image_buffer)
                 fl_protocols = cleave + steps
