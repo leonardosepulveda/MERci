@@ -1098,6 +1098,10 @@ The user creates a file in `prompt_history/` whose name is **only the date/time*
 (e.g. `2026_06_18_1002.txt`) and writes their request inside it. When asked to read
 and act on it:
 
+0. **If more than one such date/time-only `.txt` file is currently pending**
+   (e.g. `2026_08_01_1844.txt`, `2026_08_01_1850.txt`, `2026_08_01_1851.txt` all
+   sitting unprocessed at once), always start with the one written **first**
+   (earliest timestamp in the filename) — in that example, `2026_08_01_1844.txt`.
 1. Read the file and carry out the request.
 2. Rewrite the file to start with the YAML frontmatter, followed by `## Prompt`
    (the file's original raw text, moved under this heading verbatim — never
