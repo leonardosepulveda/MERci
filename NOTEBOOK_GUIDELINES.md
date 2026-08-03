@@ -83,11 +83,11 @@ in new notebooks rather than picking new numbers per plot.
 Every cell that calls `plt.show()` on a real figure (not a quick throwaway
 diagnostic) should also `fig.savefig(...)` a copy to
 `SAMPLE_DIR/analysis/figures/{NOTEBOOK_NAME}.{figure_name}.png`, where
-`NOTEBOOK_NAME` is the notebook's own filename stem (e.g. `08_stage_z_drift`,
+`NOTEBOOK_NAME` is the notebook's own filename stem (e.g. `stage_z_drift`,
 defined once in the Parameters/Setup section) and `figure_name` is a short,
 descriptive slug for that specific figure (e.g. `stage_z_drift`,
 `stage_z_heatmap`). This gives every notebook's output figures one shared,
 predictable location and naming scheme, so a later batch step (or a human
 skimming the experiment folder) can find any notebook's plots without
-knowing that notebook's own internal cell structure. `08_stage_z_drift.ipynb`
+knowing that notebook's own internal cell structure. `during_imaging/stage_z_drift.ipynb`
 is the reference implementation.

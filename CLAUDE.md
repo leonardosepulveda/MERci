@@ -17,7 +17,7 @@ mamba activate merci_env
 jupyter lab
 ```
 
-Open notebooks from their folders under `MERci/notebooks/` (`prepare_imaging/`, `analysis/`, `misc/`) in the JupyterLab file browser so that `SAMPLE_DIR` is auto-detected correctly.
+Open notebooks from their folders under `MERci/notebooks/` (`prepare_imaging/`, `analysis/`, `during_imaging/`, `misc/`) in the JupyterLab file browser so that `SAMPLE_DIR` is auto-detected correctly.
 
 ## Deployment model
 
@@ -369,7 +369,7 @@ src/MERci/
                     #   (``x = fov_id`` -- every round overlays at the SAME x position rather than
                     #   laid out back-to-back, so round-to-round drift at a given FOV shows as a
                     #   vertical offset between per-round lines, not a left-to-right shift) — see
-                    #   notebooks/analysis/08
+                    #   notebooks/during_imaging/stage_z_drift.ipynb
     spot_localization.py  # bead detection / 3D Gaussian fitting + PSF simulation (detect_beads_2d,
                           # localize_beads_in_file, match_beads_across_colors, simulate_multicolor_stack, …)
     cli_analyze_fov.py       # standalone SLURM-array-task script (not imported by anything else in
@@ -559,17 +559,52 @@ notebooks/
                                                    #   for local (same_drive/mirror_drive) projects; 07 is the
                                                    #   cluster-QC alternative for projects that would rather move
                                                    #   analysis off the microscope computer entirely
-    08_stage_z_drift.ipynb                         # one-shot QC: reads each FOV's ``.off`` focus-lock
-                                                   #   sidecar's stage-z column (analysis/stage_z.py,
+  during_imaging/   # Live QC notebooks meant to be watched in real time WHILE HAL/Dave
+                    #   is actively acquiring (as opposed to analysis/'s schedulers, which
+                    #   run continuously in the background, or its one-shot review notebooks)
+    stage_z_drift.ipynb                            # one-shot QC (moved from analysis/08_stage_z_drift.ipynb --
+                                                   #   same notebook, unchanged logic): reads each FOV's ``.off``
+                                                   #   focus-lock sidecar's stage-z column (analysis/stage_z.py,
                                                    #   tolerating a sidecar HAL has created but not finished
                                                    #   writing yet -- safe to run DURING acquisition),
-                                                   #   caching results to analysis/stage_z_summary.csv so
+                                                   #   caching results to analysis/cache/stage_z_drift/ so
                                                    #   re-runs only read newly-written ``.off`` files, then
                                                    #   plots the first-frame stage-z value as one line per
                                                    #   round, all overlaid at the SAME x position (``fov_id``)
                                                    #   rather than laid out back-to-back, so drift at a given
                                                    #   FOV across rounds reads as a vertical spread between
                                                    #   differently-colored lines
+    imaged_fovs.ipynb                              # live acquisition-progress map: reuses prepare_imaging/
+                                                   #   <variant>/02_create_positions_from_boundaries.ipynb's own
+                                                   #   background (the real Steve low-mag mosaic photo when
+                                                   #   boundaries came from 02_create_boundary_from_mosaic.ipynb,
+                                                   #   else the same schematic tissue-boundary outline) and draws
+                                                   #   one square per planned FOV, filling a square in as that
+                                                   #   FOV's image file actually appears on disk -- polls faster
+                                                   #   than one FOV takes to acquire (ExperimentMetadata.
+                                                   #   series_for_round(...).resolve_path(...).exists(), no image
+                                                   #   reads) so no FOV is missed; ROUND_ID=None auto-detects
+                                                   #   whichever round currently has SOME but not ALL FOVs written
+                                                   #   (falls back to the most recently active, else the first,
+                                                   #   round). A FOV is additionally flagged (different fill
+                                                   #   color) if its ``.off`` sidecar's ``good-offset`` column
+                                                   #   is 0 for EVERY frame -- the two-spot focus lock was never
+                                                   #   found at all -- which is NOT the same thing as the normal
+                                                   #   case of losing lock only once a z-sweep goes past the
+                                                   #   lock's own tracking range (which flips most FOVs' own
+                                                   #   good-offset from 1->0 partway through and is deliberately
+                                                   #   NOT flagged). This heuristic was chosen after investigating
+                                                   #   whether storm_control's Dave/HAL could log a real focus-
+                                                   #   lock "warning" to a file instead: they don't reliably --
+                                                   #   the only place that information appears on disk is an
+                                                   #   incidental byproduct of Dave's generic, rotating debug log
+                                                   #   (``<data_dir>/logs/dave_N.out``, capped/rotated, filename
+                                                   #   not fixed, no per-FOV tag on the record) -- too fragile to
+                                                   #   poll from an unattended notebook (see prompt_history/ for
+                                                   #   the full investigation). Live redraw uses plain
+                                                   #   IPython.display.clear_output+display(fig) on a loop (no
+                                                   #   ipywidgets dependency) -- interrupt the kernel to stop; the
+                                                   #   last drawn state is kept and saved to analysis/figures/.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
@@ -1036,7 +1071,7 @@ the camera-rotation-correction work (see
 
 ## Running notebooks
 
-Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/` and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks (`reference`) are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`; the `tumor/{epi,disk}/` and `lineage_tracing/{merfish,lineage}/` notebooks are **four** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`. Do not hardcode absolute paths in notebooks.
+Notebooks auto-detect `SAMPLE_DIR` from their own location. `analysis/`, `during_imaging/`, and `misc/` notebooks are two levels under the repo root, so `MERCI_DIR = Path(os.getcwd()).parent.parent` (the `MERci/` clone), then `SAMPLE_DIR = MERCI_DIR.parent`. The `prepare_imaging/<variant>/` notebooks (`reference`) are **three** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent`; the `tumor/{epi,disk}/` and `lineage_tracing/{merfish,lineage}/` notebooks are **four** levels deep, so they use `MERCI_DIR = Path(os.getcwd()).parent.parent.parent.parent`. Do not hardcode absolute paths in notebooks.
 
 ## Scope constraint
 
