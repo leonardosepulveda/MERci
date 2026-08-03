@@ -587,24 +587,32 @@ notebooks/
                                                    #   whichever round currently has SOME but not ALL FOVs written
                                                    #   (falls back to the most recently active, else the first,
                                                    #   round). A FOV is additionally flagged (different fill
-                                                   #   color) if its ``.off`` sidecar's ``good-offset`` column
-                                                   #   is 0 for EVERY frame -- the two-spot focus lock was never
-                                                   #   found at all -- which is NOT the same thing as the normal
-                                                   #   case of losing lock only once a z-sweep goes past the
-                                                   #   lock's own tracking range (which flips most FOVs' own
-                                                   #   good-offset from 1->0 partway through and is deliberately
-                                                   #   NOT flagged). This heuristic was chosen after investigating
-                                                   #   whether storm_control's Dave/HAL could log a real focus-
-                                                   #   lock "warning" to a file instead: they don't reliably --
-                                                   #   the only place that information appears on disk is an
-                                                   #   incidental byproduct of Dave's generic, rotating debug log
-                                                   #   (``<data_dir>/logs/dave_N.out``, capped/rotated, filename
-                                                   #   not fixed, no per-FOV tag on the record) -- too fragile to
-                                                   #   poll from an unattended notebook (see prompt_history/ for
-                                                   #   the full investigation). Live redraw uses plain
-                                                   #   IPython.display.clear_output+display(fig) on a loop (no
-                                                   #   ipywidgets dependency) -- interrupt the kernel to stop; the
-                                                   #   last drawn state is kept and saved to analysis/figures/.
+                                                   #   color) if its ``.off`` sidecar's ``good-offset`` column is
+                                                   #   1 in FEWER than ``MIN_GOOD_OFFSET_FRAMES`` frames (default
+                                                   #   1 -- flags only a FOV where the two-spot focus lock was
+                                                   #   never found at all, i.e. good-offset is 0 for EVERY frame;
+                                                   #   raise it to also flag a weak/marginal lock found only
+                                                   #   briefly). The default is deliberately NOT "any 1->0
+                                                   #   transition" -- that's the normal case of losing lock once a
+                                                   #   z-sweep goes past the lock's own tracking range, which
+                                                   #   flips most FOVs' own good-offset from 1->0 partway through
+                                                   #   and should not be flagged. This heuristic was chosen after
+                                                   #   investigating whether storm_control's Dave/HAL could log a
+                                                   #   real focus-lock "warning" to a file instead: they don't
+                                                   #   reliably -- the only place that information appears on disk
+                                                   #   is an incidental byproduct of Dave's generic, rotating debug
+                                                   #   log (``<data_dir>/logs/dave_N.out``, capped/rotated,
+                                                   #   filename not fixed, no per-FOV tag on the record) -- too
+                                                   #   fragile to poll from an unattended notebook (see
+                                                   #   prompt_history/ for the full investigation). Live redraw
+                                                   #   uses plain IPython.display.clear_output+display(fig) on a
+                                                   #   loop (no ipywidgets dependency) -- interrupt the kernel to
+                                                   #   stop; the last drawn state is kept and saved to
+                                                   #   ``SAMPLE_DIR/figures/`` -- deliberately NOT
+                                                   #   ``analysis/figures/`` like every other notebook
+                                                   #   (NOTEBOOK_GUIDELINES.md #6), since this is a live view meant
+                                                   #   to be checked at a glance during acquisition, not filed
+                                                   #   away with post-hoc QC figures.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
