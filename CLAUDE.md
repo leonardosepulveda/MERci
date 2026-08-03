@@ -584,9 +584,18 @@ notebooks/
                                                    #   than one FOV takes to acquire (ExperimentMetadata.
                                                    #   series_for_round(...).resolve_path(...).exists(), no image
                                                    #   reads) so no FOV is missed; ROUND_ID=None auto-detects
-                                                   #   whichever round currently has SOME but not ALL FOVs written
-                                                   #   (falls back to the most recently active, else the first,
-                                                   #   round). A FOV is additionally flagged (different fill
+                                                   #   whichever round currently has SOME but not ALL FOVs written.
+                                                   #   If nothing is actively in progress (e.g. run during the
+                                                   #   fluidics gap between one round finishing and the next
+                                                   #   starting -- fluidics is strictly between rounds' imaging
+                                                   #   loops, never mid-round, so the next round has zero files at
+                                                   #   that point and is otherwise invisible to this scan), it
+                                                   #   points at the round AFTER the most recently completed one
+                                                   #   instead (unless that's already the last round), so the
+                                                   #   notebook is ready and waiting rather than showing an
+                                                   #   already-finished round as "done"; falls back to the first
+                                                   #   round if nothing anywhere has been imaged yet. A FOV is
+                                                   #   additionally flagged (different fill
                                                    #   color) if its ``.off`` sidecar's ``good-offset`` column is
                                                    #   1 in FEWER than ``MIN_GOOD_OFFSET_FRAMES`` frames (default
                                                    #   1 -- flags only a FOV where the two-spot focus lock was
