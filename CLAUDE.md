@@ -622,6 +622,39 @@ notebooks/
                                                    #   (NOTEBOOK_GUIDELINES.md #6), since this is a live view meant
                                                    #   to be checked at a glance during acquisition, not filed
                                                    #   away with post-hoc QC figures.
+    round_mosaics.ipynb                            # live, no-FFC quick-look mosaic for EVERY round: one
+                                                   #   frame per FOV per real (non-blank) color, near a fixed
+                                                   #   TARGET_Z_UM (default 10.0 -- a real stage z in um, same
+                                                   #   convention as every other z parameter in this package;
+                                                   #   resolved per round/color via each round's own frame
+                                                   #   table, warning if the nearest available z is >5um away
+                                                   #   from the request) -- no z-stack read, no flat-field
+                                                   #   correction, deliberately light enough to run continuously
+                                                   #   alongside a real acquisition reading straight off the NAS.
+                                                   #   Section 4 does a one-time catch-up pass over any round
+                                                   #   already 100% imaged when the notebook starts (skipped if
+                                                   #   that round's mosaic file(s) already exist); section 5's
+                                                   #   live loop then watches whichever round is currently being
+                                                   #   imaged (same detect_active_round auto-detection/fluidics-
+                                                   #   gap fallback as imaged_fovs.ipynb, copied not shared),
+                                                   #   updating that round's mosaic(s) as new FOVs appear, and
+                                                   #   -- unlike imaged_fovs.ipynb -- automatically advances to
+                                                   #   the next round once the current one finishes (freeing its
+                                                   #   in-memory thumbnails first) rather than stopping, since
+                                                   #   this is meant to be started once and left running for a
+                                                   #   whole multi-round experiment. Reads/thumbnails
+                                                   #   (analysis.fov.create_thumbnail) go to the shared
+                                                   #   analysis/thumbnails/ location 01_fov_scheduler.ipynb also
+                                                   #   uses (interoperable either direction); mosaics save to
+                                                   #   SAMPLE_DIR/figures/ (same deliberate exception as
+                                                   #   imaged_fovs.ipynb) under
+                                                   #   round_mosaics.round{id:03d}_{color}nm.png -- a different
+                                                   #   filename pattern than tracker.mosaic_path's
+                                                   #   analysis/mosaics/round_{id:03d}_{color}nm_mosaic.png, so
+                                                   #   this quick-look tool and analysis/02_round_scheduler.
+                                                   #   ipynb's production (mid-z, optional FFC, round-complete-
+                                                   #   only) mosaics can run at the same time without clobbering
+                                                   #   each other.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
