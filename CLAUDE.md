@@ -622,96 +622,107 @@ notebooks/
                                                    #   (NOTEBOOK_GUIDELINES.md #6), since this is a live view meant
                                                    #   to be checked at a glance during acquisition, not filed
                                                    #   away with post-hoc QC figures.
-    round_mosaics.ipynb                            # live quick-look mosaic for EVERY round: one frame per
-                                                   #   FOV per real color (EXCLUDED_COLORS, default just
-                                                   #   488nm -- HAL's own bead/focus-lock reference channel,
-                                                   #   always at a fixed bead z regardless of TARGET_Z_UM, not
-                                                   #   real tissue signal; set to [] to include it again), near
-                                                   #   a fixed TARGET_Z_UM (default 10.0 -- a real stage z in
-                                                   #   um, same convention as every other z parameter in this
-                                                   #   package; resolved per round/color via each round's own
-                                                   #   frame table, warning if the nearest available z is >5um
-                                                   #   away from the request) -- no z-stack read, deliberately
-                                                   #   light enough to run continuously alongside a real
-                                                   #   acquisition reading straight off the NAS. Section 4
-                                                   #   ("shared helpers") holds every read/thumbnail/mosaic
-                                                   #   function used by all three ways of driving this notebook
-                                                   #   below, run once regardless of which of the three you use
-                                                   #   first -- an earlier version defined these inside the
-                                                   #   catch-up pass itself, which raised a real NameError when
-                                                   #   the on-demand section was run first (now the norm, see
-                                                   #   below); also where flat-field correction (ENABLE_FFC,
-                                                   #   off by default) is computed -- FFC_N_FOVS (default 10)
-                                                   #   real exterior FOVs (acquisition.positions.
-                                                   #   find_exterior_fovs) per color, a small ONE-TIME cost
-                                                   #   (vignetting is fixed per experiment, cached to
-                                                   #   analysis/cache/round_mosaics/ffc_field_{color}nm.npz)
-                                                   #   reused for every round after. Three independent ways to
-                                                   #   drive it, in the order they appear in the notebook
-                                                   #   (matching the user's own preferred order: check one
-                                                   #   round on demand first, then catch up, then go live):
-                                                   #   section 5 builds an on-demand mosaic for one SPECIFIC
-                                                   #   round (default `"cells"`, resolved by imaging_type via
-                                                   #   resolve_round_by_imaging_type -- same convention as
-                                                   #   correct_camera_rotation.ipynb's own ROUND_IMAGING_TYPE
-                                                   #   parameter; an int is also accepted to pick a round
-                                                   #   directly by id) against whatever FOVs are imaged for it
-                                                   #   right now, re-runnable any time, independent of the
-                                                   #   other two; section 6 is a one-time catch-up pass over
-                                                   #   any round already 100% imaged when the notebook starts,
-                                                   #   in round-id order, skipped if that round's mosaic
-                                                   #   file(s) already exist -- e.g. starting mid-experiment
-                                                   #   during round 6 builds rounds 1-5 here, in order, before
-                                                   #   section 7 ever watches round 6 -- and applies FFC the
-                                                   #   full production way (analysis.round.create_mosaic_ffc,
-                                                   #   real raw frames + one shared whole-canvas contrast
-                                                   #   stretch); section 7's live loop can't afford that
-                                                   #   (keeping a whole round's raw frames in memory while it's
-                                                   #   still being imaged isn't affordable), so it instead
-                                                   #   divides out the FFC field frame-by-frame right after
-                                                   #   reading, before independently thumbnailing each tile --
-                                                   #   a stated, deliberate quality tradeoff for memory-bounded
-                                                   #   incremental updates (see the notebook's own section 4
-                                                   #   markdown). Section 7 otherwise watches whichever round
-                                                   #   is currently being imaged (same detect_active_round
-                                                   #   auto-detection/fluidics-gap fallback as
-                                                   #   imaged_fovs.ipynb, copied not shared), updating that
-                                                   #   round's mosaic(s) as new FOVs appear, and -- unlike
-                                                   #   imaged_fovs.ipynb -- automatically advances to the next
-                                                   #   round once the current one finishes (freeing its
-                                                   #   in-memory thumbnails first) rather than stopping, since
-                                                   #   this is meant to be started once and left running for a
-                                                   #   whole multi-round experiment. Reads/thumbnails
-                                                   #   (analysis.fov.create_thumbnail) go to the shared
+    round_mosaics.ipynb                            # live quick-look mosaic, one state table + one loop
+                                                   #   driving all three use cases (on-demand/catch-up/live --
+                                                   #   previously three separate notebook sections, unified
+                                                   #   after the split version proved awkward to reorder and hid
+                                                   #   a real cross-section NameError). One frame per FOV per
+                                                   #   real color (EXCLUDED_COLORS, default just 488nm -- HAL's
+                                                   #   own bead/focus-lock reference channel, always at a fixed
+                                                   #   bead z regardless of TARGET_Z_UM, not real tissue signal;
+                                                   #   set to [] to include it again), near a fixed TARGET_Z_UM
+                                                   #   (default 10.0 -- a real stage z in um, same convention as
+                                                   #   every other z parameter in this package; resolved per
+                                                   #   round/color via each round's own frame table, warning if
+                                                   #   the nearest available z is >5um away from the request) --
+                                                   #   no z-stack read, deliberately light enough to run
+                                                   #   continuously alongside a real acquisition reading
+                                                   #   straight off the NAS.
+                                                   #
+                                                   #   SELECTED_ROUNDS ("all" default, or a list mixing round
+                                                   #   labels like "cells" -- resolved by imaging_type, same
+                                                   #   convention as correct_camera_rotation.ipynb's own
+                                                   #   ROUND_IMAGING_TYPE -- and/or explicit imaging_round
+                                                   #   numbers) + LIVE_LOOP (True default) together subsume the
+                                                   #   old three modes: a single round + LIVE_LOOP=False = old
+                                                   #   "on-demand specific round"; "all" + LIVE_LOOP=False = old
+                                                   #   "catch-up pass" (one pass over whatever's already fully
+                                                   #   imaged); "all" + LIVE_LOOP=True (default) = old "live
+                                                   #   loop," watching/advancing across every round for the
+                                                   #   whole experiment. Section 6 builds a small state table
+                                                   #   (one row per selected round: imaged_fovs, processed_fovs
+                                                   #   -- FOVs with a cached thumbnail for EVERY one of that
+                                                   #   round's colors, not just one -- and total_fovs); section
+                                                   #   7's loop rebuilds that table every cycle and processes any
+                                                   #   round with processed_fovs < imaged_fovs, in the order
+                                                   #   SELECTED_ROUND_IDS lists them, stopping once every
+                                                   #   selected round is both fully imaged AND fully processed
+                                                   #   (or MAX_RUNTIME_MIN is exceeded) if LIVE_LOOP, else after
+                                                   #   one pass.
+                                                   #
+                                                   #   SLURM/cluster parallelization (one array job per FOV,
+                                                   #   mirroring 07_cluster_submit_analysis.ipynb) was considered
+                                                   #   and deliberately deferred: that pattern exists in this
+                                                   #   repo for a much heavier per-FOV task (analyze_file's full
+                                                   #   multi-frame z-stack read, budgeted at 2h per SLURM task);
+                                                   #   this notebook's per-FOV cost (one named frame + a cheap
+                                                   #   thumbnail) is a fraction of that, and SLURM's own
+                                                   #   submission/queue overhead would plausibly dominate a task
+                                                   #   this light rather than speed it up -- sequential only for
+                                                   #   now, revisit (or a local ProcessPoolExecutor, matching
+                                                   #   FOVScheduler's own pattern, avoiding SLURM's overhead
+                                                   #   entirely) only if a real bulk backlog proves too slow.
+                                                   #
+                                                   #   Section 5 ("shared helpers") holds every read/thumbnail/
+                                                   #   mosaic function used by section 6/7, run before either --
+                                                   #   also where flat-field correction (ENABLE_FFC, off by
+                                                   #   default) is computed: FFC_N_FOVS (default 10) real
+                                                   #   exterior FOVs (acquisition.positions.find_exterior_fovs)
+                                                   #   per color, a small ONE-TIME cost (vignetting is fixed per
+                                                   #   experiment, cached to analysis/cache/round_mosaics/
+                                                   #   ffc_field_{color}nm.npz) reused for every round after. A
+                                                   #   round already 100% imaged when it's first processed gets
+                                                   #   FFC the full production way (analysis.round.
+                                                   #   create_mosaic_ffc, real raw frames + one shared
+                                                   #   whole-canvas contrast stretch); one still being imaged
+                                                   #   gets it divided out frame-by-frame right after reading,
+                                                   #   before independently thumbnailing (keeping a whole
+                                                   #   in-progress round's raw frames in memory isn't
+                                                   #   affordable) -- a stated quality tradeoff, and EITHER WAY
+                                                   #   still writes the plain (non-FFC) thumbnail alongside the
+                                                   #   raw-frame path specifically so `processed_fovs` has
+                                                   #   something to detect -- confirmed directly that without
+                                                   #   this, an FFC-enabled round could never register as
+                                                   #   processed at all (build_round_mosaic's FFC branch never
+                                                   #   touched THUMBNAILS_DIR) and LIVE_LOOP=True would loop on
+                                                   #   it forever. Reads/thumbnails go to the shared
                                                    #   analysis/thumbnails/ location 01_fov_scheduler.ipynb also
-                                                   #   uses (interoperable either direction); mosaics save to
-                                                   #   SAMPLE_DIR/figures/ (same deliberate exception as
-                                                   #   imaged_fovs.ipynb) under
+                                                   #   uses (interoperable either direction, and always the
+                                                   #   plain raw-frame convention regardless of ENABLE_FFC, so
+                                                   #   the cache stays reusable if FFC is later toggled off);
+                                                   #   mosaics save to SAMPLE_DIR/figures/ (same deliberate
+                                                   #   exception as imaged_fovs.ipynb) under
                                                    #   round_mosaics.round{id:03d}_{color}nm.png -- a different
                                                    #   filename pattern than tracker.mosaic_path's
                                                    #   analysis/mosaics/round_{id:03d}_{color}nm_mosaic.png, so
                                                    #   this quick-look tool and analysis/02_round_scheduler.
                                                    #   ipynb's production (mid-z, optional FFC, round-complete-
                                                    #   only) mosaics can run at the same time without clobbering
-                                                   #   each other. Section 4's `CATCHUP_READ_DELAY_SEC` (default
-                                                   #   0.02s, ~50 files/sec cap) paces the one sustained read
-                                                   #   burst this notebook does (reading a whole round back to
-                                                   #   back, in sections 5/6) -- there's no universal "safe NAS
-                                                   #   read rate" (depends on that NAS's real hardware/network
+                                                   #   each other. `CATCHUP_READ_DELAY_SEC` (default 0.02s, ~50
+                                                   #   files/sec cap) paces FRESH reads only (a cached thumbnail
+                                                   #   costs no sleep) -- there's no universal "safe NAS read
+                                                   #   rate" (depends on that NAS's real hardware/network
                                                    #   capacity, which nothing here can measure), but HAL's own
                                                    #   write demand is small/steady and computable
-                                                   #   (~image_size_px**2*2 bytes per exposure_time), well
-                                                   #   under typical network bandwidth on bytes alone -- the
-                                                   #   real risk this default guards against is IOPS/seek
-                                                   #   contention from many small scattered reads landing on the
-                                                   #   same storage HAL is sequentially writing to, not raw
-                                                   #   throughput; see the notebook's own section 4 markdown for
-                                                   #   the full reasoning and how to check/tune it empirically
-                                                   #   (real file-write-mtime gaps, the same technique
+                                                   #   (~image_size_px**2*2 bytes per exposure_time), well under
+                                                   #   typical network bandwidth on bytes alone -- the real risk
+                                                   #   this default guards against is IOPS/seek contention from
+                                                   #   many small scattered reads landing on the same storage
+                                                   #   HAL is sequentially writing to, not raw throughput; see
+                                                   #   the notebook's own section 5 markdown for the full
+                                                   #   reasoning and how to check/tune it empirically (real
+                                                   #   file-write-mtime gaps, the same technique
                                                    #   misc/measure_tissue_thickness_test.ipynb section 8 uses).
-                                                   #   The live loop's own reads need no separate pacing -- they
-                                                   #   can't outrun HAL's own writing, since each poll only reads
-                                                   #   FOVs that have newly appeared since the last check.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
