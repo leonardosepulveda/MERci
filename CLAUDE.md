@@ -690,7 +690,20 @@ notebooks/
                                                    #   misc/measure_tissue_thickness_test.ipynb section 8 uses).
                                                    #   The live loop's own reads need no separate pacing -- they
                                                    #   can't outrun HAL's own writing, since each poll only reads
-                                                   #   FOVs that have newly appeared since the last check.
+                                                   #   FOVs that have newly appeared since the last check. Section
+                                                   #   7 is a third, independent option: an on-demand mosaic for
+                                                   #   one SPECIFIC round (default `"cells"`, resolved by
+                                                   #   imaging_type via a new resolve_round_by_imaging_type
+                                                   #   helper -- same convention as correct_camera_rotation.
+                                                   #   ipynb's own ROUND_IMAGING_TYPE parameter; an int is also
+                                                   #   accepted to pick a round directly by id), reusing section
+                                                   #   5's build_round_mosaic/CATCHUP_READ_DELAY_SEC against
+                                                   #   whatever FOVs are imaged for it right now -- whether that
+                                                   #   round is finished, still in progress, or the live loop
+                                                   #   hasn't reached it yet. Re-run this cell any time to refresh
+                                                   #   it against newly-imaged FOVs; independent of the catch-up
+                                                   #   pass/live loop, which only ever touch this round on their
+                                                   #   own schedule.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
