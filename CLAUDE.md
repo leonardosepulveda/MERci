@@ -1167,6 +1167,42 @@ notebooks/
                     #   error-corrected (MERFISH's standard single-bit-dropout recovery, since
                     #   distance-4 codewords guarantee a 1-bit-corrupted pattern is still closest to its
                     #   true code), 2+ = lost.
+                    #   Sections 18-20: the alternative to `_added` (appending missing FOVs to the
+                    #   CURRENT positions file, sections 11-13) -- a FRESH positions file built
+                    #   entirely from the corrected boundary. (18) writes `new_grid_positions`
+                    #   (section 7 -- already "the same shared grid, filtered against the shifted
+                    #   boundary", not an independently re-centered one) directly to
+                    #   `positions_{tag}_shift.txt`; row order inherits `dense_path`'s own
+                    #   boustrophedon order, NOT notebook 02's final `close_scanning_path`-style
+                    #   return-leg closing (same documented gap as `old_grid_positions`, section 10).
+                    #   (19) overlays BOTH `_added` and `_shift` as real FOV perimeter squares on the
+                    #   real corrected mosaic (`shifted_canvas`) -- confirmed on real data that `_added`
+                    #   extends slightly further at the tissue edges (its 200 UNNECESSARY FOVs,
+                    #   already-imaged but outside the corrected boundary) while `_shift` tracks the
+                    #   true boundary tightly. **Found and fixed a real, non-deterministic matplotlib
+                    #   quirk here**: the usual "invisible `ax.plot([], [], label=...)`" trick for
+                    #   giving un-labelable `Rectangle` patches a legend entry intermittently failed
+                    #   ("No artists with labels found") when combined with `imshow` immediately
+                    #   before it -- confirmed directly via isolated repro that the SAME exact code
+                    #   sometimes works and sometimes doesn't (not a fixed, deterministic bug, and not
+                    #   reproduced by any single isolated factor -- color name and linestyle kwarg
+                    #   alone each worked fine independently); fixed by passing explicit
+                    #   `matplotlib.lines.Line2D` objects straight to `ax.legend(handles=[...])`
+                    #   instead of relying on an implicit empty-artist scan, which sidesteps the
+                    #   flakiness entirely. (Every OTHER section's own `ax.plot([], [], label=...)`
+                    #   calls -- 6/9/10/15 -- use the same fragile pattern and are equally exposed to
+                    #   this, just didn't happen to trip it during this session's runs; not
+                    #   retrofitted since not requested, but worth knowing.) (20) a scatter of every
+                    #   `_added` FOV's own row index against its matching `_shift` row index (EXACT
+                    #   coordinate match, same convention as section 11's renumbering table) --
+                    #   confirmed on real data this bijects cleanly: all 1162 `_shift` FOVs are
+                    #   reached, the 200 unmatched `_added` FOVs are exactly the UNNECESSARY count from
+                    #   section 9. The plot itself shows two visually distinct regimes: `_added`'s
+                    #   first ~1166 rows (the original `current_positions`, sharing the same
+                    #   boustrophedon convention as `_shift`) trace a smooth near-diagonal band, while
+                    #   its last 196 rows (the nearest-neighbor-reordered MISSING FOVs, section 12) map
+                    #   to `_shift` indices scattered across the full range, since that reordering
+                    #   doesn't follow `_shift`'s own boustrophedon order.
                     #   Deployed to `S:\Leonardo\LT060_sample_04\merfish\MERci\notebooks\tests\` to run
                     #   interactively on the microscope; every figure saves to `SAMPLE_DIR/figures/` for
                     #   the user's own review before trusting the `_added` file -- in particular steps 1/2's
