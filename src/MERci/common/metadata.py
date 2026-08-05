@@ -23,6 +23,25 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
+def _path_exists_safe(p: Path) -> bool:
+    """
+    Like ``Path.exists()``, but treats an OS-level access failure (e.g. an
+    unmapped/differently-credentialed network drive letter recorded in
+    round_info.csv's ``dir`` column on a different machine -- confirmed
+    directly: ``OSError: [WinError 1326] The user name or password is
+    incorrect`` for a real absolute path that isn't reachable from this
+    machine) the same as "doesn't exist" rather than letting it propagate.
+    ``Path.exists()`` itself only swallows the specific errno values that
+    mean "not found"; other OSErrors (permission/auth/unreachable) still
+    raise, which previously crashed the whole candidate-path resolution
+    instead of just skipping to the next candidate.
+    """
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 # ── Data structures ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -106,9 +125,13 @@ class SeriesInfo:
         """
         if dir_path not in self._dir_scan_cache:
             found: Dict[int, Path] = {}
-            if dir_path.exists():
+            if _path_exists_safe(dir_path):
                 suffix_lower = image_suffix.lower()
-                for entry in dir_path.iterdir():
+                try:
+                    entries = list(dir_path.iterdir())
+                except OSError:
+                    entries = []
+                for entry in entries:
                     if entry.suffix.lower() != suffix_lower:
                         continue
                     entry_fov = self.fov_from_stem(entry.stem)
@@ -127,7 +150,7 @@ class SeriesInfo:
         """
         paths = self.candidate_paths(fov_id, image_suffix)
         for p in paths:
-            if p.exists():
+            if _path_exists_safe(p):
                 return p
         dirs = self.candidate_dirs or ([self.data_dir] if self.data_dir else [Path(".")])
         for d in dirs:
@@ -280,7 +303,7 @@ class ExperimentMetadata:
         additionally requires a ``.fov_done`` sentinel per file).
         """
         files = self.files_for_round(round_id)
-        return bool(files) and all(f.exists() for f in files)
+        return bool(files) and all(_path_exists_safe(f) for f in files)
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────

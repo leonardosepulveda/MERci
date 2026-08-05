@@ -73,7 +73,23 @@ SAMPLE_DIR/          (the experiment root, e.g. D:\experiments\my_sample\)
 src/MERci/
   common/
     config.py       # ExperimentConfig dataclass — all paths and tunable parameters
-    metadata.py     # ExperimentMetadata — parses round_info.csv + positions.txt
+    metadata.py     # ExperimentMetadata — parses round_info.csv + positions.txt.
+                    #   `_path_exists_safe` (used by SeriesInfo.resolve_path/_scan_dir_for_fov/
+                    #   ExperimentMetadata.round_fully_written) treats an OS-level access error the
+                    #   same as "doesn't exist" rather than letting it propagate -- round_info.csv's
+                    #   `dir` column can be a stale absolute path from a DIFFERENT machine (confirmed
+                    #   directly on a real experiment: `OSError: [WinError 1326] The user name or
+                    #   password is incorrect` for an unreachable drive letter), which plain
+                    #   `Path.exists()` does NOT swallow (only the specific "not found" errno), so it
+                    #   previously crashed candidate-path resolution instead of just skipping to the
+                    #   next candidate. Note this only fixes the CRASH, not necessarily the SPEED: if
+                    #   the unreachable candidate's own OS-level failure is itself slow (e.g. a network
+                    #   auth retry, not an instant refusal), resolving many FOVs still pays that cost
+                    #   once per FOV -- confirmed impractically slow across 1000+ FOVs x many rounds on
+                    #   the same real experiment; a caller in that situation is often better off
+                    #   resolving paths directly relative to its own already-confirmed-reachable
+                    #   SAMPLE_DIR (see e.g. `notebooks/tests/fix_mosaic_shift_missing_fovs.ipynb`)
+                    #   rather than constructing a full ExperimentMetadata at all.
     io.py           # read_dax/zarr/tiff/image, parse_inf, get_dax_shape, load_round_info, load_positions,
                     # save_positions_array, discover_image_files, path_mtime (effective last-write mtime
                     # of a file OR a directory store -- max mtime of its contents, zarr-aware, since a
