@@ -747,6 +747,63 @@ notebooks/
                                                    #   reasoning and how to check/tune it empirically (real
                                                    #   file-write-mtime gaps, the same technique
                                                    #   misc/measure_tissue_thickness_test.ipynb section 8 uses).
+                                                   #
+                                                   #   Bulk preload + camera orientation + shared contrast (all
+                                                   #   in section 5): a dedicated `tile_cache_path` PNG cache
+                                                   #   (per round/color/FOV -- oriented + FFC-divided-if-enabled
+                                                   #   + shared-contrast-stretched, i.e. exactly the placed
+                                                   #   canvas pixels, distinct from THUMBNAILS_DIR's plain
+                                                   #   processed-marker convention) lets an already-mostly-done
+                                                   #   round (e.g. 666/1166 from a prior kernel session) reload
+                                                   #   near-instantly with NO raw re-reads; `build_round_mosaic`
+                                                   #   bulk-loads every cached tile with no per-tile redraw, shows
+                                                   #   that accumulated state once, THEN reads/places any
+                                                   #   remaining FOV one at a time with a redraw after each. Every
+                                                   #   raw frame is re-oriented via `apply_microscope_orientation`
+                                                   #   (MERlin's own transpose/flip_horizontal/flip_vertical
+                                                   #   convention for `MICROSCOPE`, a section-2 parameter -- same
+                                                   #   pattern as `misc/correct_camera_rotation.ipynb`) right
+                                                   #   after reading; a cached FFC field is itself estimated from
+                                                   #   UN-oriented raw pixels and oriented once (cheaper) --
+                                                   #   averaging/smoothing/normalization/clipping all commute
+                                                   #   exactly with a fixed transpose/flip, so this is
+                                                   #   mathematically identical to orienting every sample frame
+                                                   #   first. A single shared `(vmin, vmax)` contrast range per
+                                                   #   (round, color) is estimated once from
+                                                   #   `CONTRAST_SAMPLE_N_FOVS` (default 10) random INTERIOR
+                                                   #   (non-exterior) FOVs' pooled histogram at `CONTRAST_LOW_
+                                                   #   PCT`/`CONTRAST_HIGH_PCT` (default 5th/99th) percentile,
+                                                   #   cached to `analysis/cache/round_mosaics/contrast_range_
+                                                   #   round{r}_{color}nm.npz` -- every tile then uses this FIXED
+                                                   #   range instead of an independent per-frame percentile, so
+                                                   #   tiles stay visually consistent without needing the whole
+                                                   #   round done first.
+                                                   #
+                                                   #   Redraw cost must stay independent of real mosaic size.
+                                                   #   The tile-by-tile live-redraw design above was only ever
+                                                   #   verified against 20 small fake FOVs; confirmed directly
+                                                   #   that at LT060_sample_04's real production scale (1166
+                                                   #   FOVs, a ~10600x6700 px canvas) matplotlib's own
+                                                   #   `imshow`+draw of the FULL-resolution array cost ~6s and a
+                                                   #   full-resolution PNG disk write ~3s -- EVERY time
+                                                   #   `maybe_redraw` fired (up to every `LIVE_REDRAW_MIN_
+                                                   #   INTERVAL_SEC`, default 0.5s), completely dominating
+                                                   #   wall-clock time regardless of how fast the underlying FOV
+                                                   #   reads were, so per-tile "live" updates in practice arrived
+                                                   #   only every several seconds -- functionally the same
+                                                   #   "crawls FOV by FOV" complaint the tile-cache/live-redraw
+                                                   #   design was meant to fix, just not caught by a small-scale
+                                                   #   test. Fixed by decoupling the two costs: the ON-SCREEN
+                                                   #   preview is downsampled to `LIVE_PREVIEW_MAX_PX` first
+                                                   #   (`_downsample_for_preview`, confirmed directly to cost
+                                                   #   well under 0.1s regardless of real canvas size), so it
+                                                   #   redraws genuinely live every `LIVE_REDRAW_MIN_INTERVAL_
+                                                   #   SEC`; the FULL-RESOLUTION PNG actually saved to
+                                                   #   `figures/` is only rewritten at the much coarser
+                                                   #   `DISK_SAVE_MIN_INTERVAL_SEC` (default 20s) or on a forced
+                                                   #   call (`show_round_mosaic`'s new `save_full_res` param),
+                                                   #   bounding on-disk staleness without paying the expensive
+                                                   #   write on every tile.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of prepare_imaging/01: hal+shutter XML -> frame_table CSV
