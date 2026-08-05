@@ -178,7 +178,15 @@ src/MERci/
                     #   carries its own stage position + pixel size + zvalue (Steve's own display stacking order,
                     #   confirmed to increase monotonically with acquisition order), recovered from the tile's
                     #   own x_um/x_pix ratio and magnification, not a hard-coded coord.Point.pixels_to_um or the
-                    #   .msc file's own rounded objective line) + filter_tiles_by_objective (kept for explicit
+                    #   .msc file's own rounded objective line; each tile's own (x_um, y_um) is additionally
+                    #   corrected by its objective's real per-objective (x_offset, y_offset), parsed from the
+                    #   same .msc manifest's `objective,<name>,<um_per_pix>,<x_offset>,<y_offset>` line via
+                    #   _parse_objective_offsets -- confirmed directly, on real data, that a previously-
+                    #   uncorrected mosaic/high-mag-alignment-tile discrepancy exactly matched this already-
+                    #   recorded-but-previously-ignored value; this offset is NOT a fixed hardware constant
+                    #   (objectives are physically removed/reinstalled between users on this shared microscope),
+                    #   so it is always read fresh from each experiment's own .msc file, never hard-coded)
+                    #   + filter_tiles_by_objective (kept for explicit
                     #   manual exclusion, e.g. rejecting bad tiles -- NOT applied by default any more, since
                     #   assemble_mosaic_canvas now handles mixed objectives/overlapping tiles directly),
                     #   assemble_mosaic_canvas (pastes tiles into one flattened image in stage-micron coords at
@@ -979,13 +987,23 @@ notebooks/
                     #   boundary/FOV grid -- if the shift is skipped or applied too late (the
                     #   boundary already saved from the un-shifted mosaic), every FOV grid built
                     #   from it ends up offset from where the tissue actually is.
+                    #   **Root cause since fixed upstream**: this shift turned out to already be
+                    #   recorded, per-objective, in the mosaic's own `.msc` manifest, and
+                    #   `acquisition.mosaic.load_steve_mosaic` now parses and applies it
+                    #   automatically (see that module's entry above) -- this bug class cannot recur
+                    #   for any FUTURE experiment. This notebook remains the one-off remediation for
+                    #   LT060_sample_04, whose boundary was already generated before the fix existed;
+                    #   sections 1-2 below manually RECONSTRUCT the pre-fix ("uncorrected") tile
+                    #   positions (subtracting the same `.msc`-recorded offset, read once via
+                    #   `acquisition.mosaic._parse_objective_offsets` -- single source of truth, never
+                    #   hand-duplicated) purely to keep the original before/after illustration; every
+                    #   tile loaded from `load_steve_mosaic` itself is already correctly positioned.
                     #   (1)/(2) composite BOTH objectives together (`acquisition.mosaic.
                     #   load_steve_mosaic`'s own mixed-objective support, cached locally --
                     #   `analysis/cache/fix_mosaic_shift_missing_fovs/steve_tiles.pkl`, since
                     #   reading many small per-tile files over a network acquisition drive is slow
-                    #   regardless of total data volume) at the whole-mosaic scale, unshifted then
-                    #   with the known `(SHIFT_DX_UM, SHIFT_DY_UM)` applied to the low-mag tiles only
-                    #   (high-mag is the fixed calibration reference); `normalize_tile_intensities`
+                    #   regardless of total data volume) at the whole-mosaic scale, reconstructed-
+                    #   unshifted then as actually loaded (corrected); `normalize_tile_intensities`
                     #   independently rescales each objective's own tiles onto a shared display range
                     #   first (`LOW_MAG_DISPLAY_PCT`/`HIGH_MAG_DISPLAY_PCT`), since the two objectives'
                     #   very different exposures make a shared-percentile stretch over raw values
@@ -999,27 +1017,15 @@ notebooks/
                     #   composite/normalization, before vs. after side by side -- confirmed on real
                     #   LT060_sample_04 data to show the actual alignment difference clearly (the
                     #   high-mag patch's texture visibly integrates into the surrounding tissue only
-                    #   in the "after" panel). Also directly confirmed a candidate ROOT CAUSE for why
-                    #   this shift is needed at all: the `.msc` manifest's own `objective` line records
-                    #   a per-objective `(x_offset, y_offset)` (documented in this module's own
-                    #   docstring as "informational only -- not used here") -- on this real sample, the
-                    #   10x line's offset is `(410.00, 420.00)`, EXACTLY the value independently
-                    #   measured by imaging real high-mag calibration FOVs. Strongly suggests
-                    #   `load_steve_mosaic`/`02_create_boundary_from_mosaic.ipynb` should be applying
-                    #   this already-recorded offset automatically for whichever objective a mosaic's
-                    #   tiles were shot with, rather than requiring a separate manual calibration-
-                    #   imaging step each time -- NOT yet implemented (would touch a shared module used
-                    #   by every sample's boundary-from-mosaic derivation), pending the user's own
-                    #   confirmation of the exact mechanism/sign convention before changing shared,
-                    #   widely-used code. Step 3's real FOV-perimeter overlay (below) is what most
+                    #   in the "after" panel). Step 3's real FOV-perimeter overlay (below) is what most
                     #   clearly shows the CURRENT grid's own misalignment (as opposed to whether the
                     #   shift itself is right, which the zoomed composite above addresses). (3) overlays
                     #   the CURRENT (already-imaging) positions file's own FOV PERIMETERS (yellow
-                    #   squares, not center points) on the shifted low-mag-only canvas (real,
+                    #   squares, not center points) on the corrected low-mag-only canvas (real,
                     #   un-normalized values -- the same canvas segmentation reads in step 4) --
                     #   verified on real LT060_sample_04 data to show a clear, visible offset between
                     #   the current grid and the corrected tissue. (4) re-runs `segment_mosaic_tissue`
-                    #   on the shifted canvas with the exact parameters this sample's own local
+                    #   on the corrected canvas with the exact parameters this sample's own local
                     #   `02_create_boundary_from_mosaic.ipynb` was run with (copied verbatim, not
                     #   re-derived), then finds FOV positions in the new tissue boundary using the
                     #   SAME dense grid (`create_grid_positions`/`generate_scanning_path` centered on
@@ -1027,7 +1033,7 @@ notebooks/
                     #   positions file's own grid came from, filtered twice via `filter_scanning_path`
                     #   (once against the OLD boundary as a sanity check -- reproduced the real
                     #   current positions file's count exactly on LT060_sample_04 -- once against the
-                    #   NEW/shifted boundary) -- NOT an independently re-centered grid for the new
+                    #   NEW/corrected boundary) -- NOT an independently re-centered grid for the new
                     #   boundary, since the shift isn't an exact integer number of FOVs and a
                     #   fresh grid would share almost no exact coordinates with the current one even
                     #   where they truly overlap; (5) overlays the OLD vs. NEW tissue BOUNDARY outlines
@@ -1037,34 +1043,41 @@ notebooks/
                     #   off the corrected tissue) by EXACT coordinate membership (both filtered sets come
                     #   from the same dense grid, so a shared FOV is bit-identical, not just closely
                     #   overlapping -- no distance-based fuzzy matching needed), drawn as real FOV
-                    #   perimeter squares over both boundary outlines; verified on real data to isolate a
-                    #   coherent tissue-edge strip, not scattered noise. Section 10: an old-to-new FOV
-                    #   RENUMBERING table (`positions/fov_renumbering_{tag}.csv`) -- the alternative to
-                    #   appending missing FOVs (sections 11-12) is to image every remaining round
-                    #   directly from the NEW positions file instead, which changes which FOV INDEX a
-                    #   given physical location has; maps every OLD FOV index to its NEW index (or flags
-                    #   it dropped, for the UNNECESSARY ones) so already-imaged and newly-imaged rounds
-                    #   can still be combined under one consistent numbering later (e.g. for MERlin
-                    #   decoding). (7) re-orders just the missing subset into its own short-travel loop --
-                    #   tried and MEASURED (`get_path_stats`) two alternatives first: keeping the new
-                    #   grid's own filtered order, and a per-column boustrophedon re-sort of the subset
-                    #   alone, neither of which reliably beat the other (a single lattice column can
-                    #   itself contain more than one disconnected run of missing FOVs) -- a greedy
+                    #   perimeter squares over both boundary outlines on a blank background; verified on
+                    #   real data to isolate a coherent tissue-edge strip, not scattered noise. Section
+                    #   10 immediately redraws the SAME section-9 annotations on top of the real
+                    #   corrected mosaic image (`shifted_canvas`, converting every polygon/FOV coordinate
+                    #   to that canvas's own pixel space) instead of a blank background, since
+                    #   `old_boundary_polygon`/`new_tissue_polygon`/`new_grid_positions` all already
+                    #   share ONE real-stage-coordinate frame (the correction is exactly what brings
+                    #   mosaic-derived coordinates into it). Section 11: an old-to-new FOV RENUMBERING
+                    #   table (`positions/fov_renumbering_{tag}.csv`) -- the alternative to appending
+                    #   missing FOVs (sections 12-13) is to image every remaining round directly from
+                    #   the NEW positions file instead, which changes which FOV INDEX a given physical
+                    #   location has; maps every OLD FOV index to its NEW index (or flags it dropped,
+                    #   for the UNNECESSARY ones) so already-imaged and newly-imaged rounds can still be
+                    #   combined under one consistent numbering later (e.g. for MERlin decoding).
+                    #   (7) re-orders just the missing subset into its own short-travel loop -- tried
+                    #   and MEASURED (`get_path_stats`) two alternatives first: keeping the new grid's
+                    #   own filtered order, and a per-column boustrophedon re-sort of the subset alone,
+                    #   neither of which reliably beat the other (a single lattice column can itself
+                    #   contain more than one disconnected run of missing FOVs) -- a greedy
                     #   nearest-neighbor walk (starting from the point closest to the current positions
                     #   file's own last FOV, so the transit into the new loop is also short) won
                     #   decisively on real data; (8) appends the re-ordered missing FOVs after the
                     #   current positions and writes a NEW `_added`-suffixed positions file -- never
                     #   overwrites the file actually being imaged from.
-                    #   Sections 13-15, appended analyses (independent of the shift-correction pipeline
+                    #   Sections 14-17, appended analyses (independent of the shift-correction pipeline
                     #   above, reusing its already-loaded `current_positions`/`shifted_canvas`/
-                    #   `missing_coords`): (13) how many OLD FOVs are empty vs. have real tissue signal --
-                    #   reads each FOV's own cells-round frame ONCE (cached locally, since
-                    #   ExperimentMetadata's eager multi-round path resolution proved impractically slow
-                    #   here -- round_info.csv's `dir` column records a now-unreachable absolute path from
-                    #   a different machine, see `common/metadata.py`'s entry above -- so this section
-                    #   resolves the cells round's own file pattern directly against `SAMPLE_DIR` instead
-                    #   of constructing a full ExperimentMetadata), classifies via a threshold estimated
-                    #   from the per-FOV signal histogram's own bimodal structure (`acquisition.mosaic.
+                    #   `low_tiles_uncorrected`/`missing_coords`): (14) how many OLD FOVs are empty vs.
+                    #   have real tissue signal -- reads each FOV's own cells-round frame ONCE (cached
+                    #   locally, since ExperimentMetadata's eager multi-round path resolution proved
+                    #   impractically slow here -- round_info.csv's `dir` column records a
+                    #   now-unreachable absolute path from a different machine, see `common/
+                    #   metadata.py`'s entry above -- so this section resolves the cells round's own
+                    #   file pattern directly against `SAMPLE_DIR` instead of constructing a full
+                    #   ExperimentMetadata), classifies via a threshold estimated from the per-FOV
+                    #   signal histogram's own bimodal structure (`acquisition.mosaic.
                     #   _estimate_bimodal_threshold`, reused directly). Confirmed directly on real
                     #   LT060_sample_04 data that this peak/valley estimator can fail even on a genuinely
                     #   bimodal distribution when the two classes are very differently SIZED (a tall,
@@ -1074,21 +1087,29 @@ notebooks/
                     #   ran without error); the fallback is `skimage.filters.threshold_otsu` instead
                     #   (maximizes between-class variance directly, not shape-dependent), which produced a
                     #   visually well-justified threshold sitting right at the real valley. Either way,
-                    #   shown as a histogram for visual confirmation before trusting it; (14) for MISSING
-                    #   FOVs specifically (never actually imaged, so
-                    #   no real per-FOV data exists) -- samples the mean LOW-MAG MOSAIC intensity at each
-                    #   one's own footprint as a proxy, classified against the SAME `THRESHOLD` already
-                    #   used for tissue segmentation, for consistency; (15) if hybs 1-5 (bits 1-10) were
-                    #   lost, which LT2 codebook genes are affected and how many are error-correctable --
-                    #   parses `data/configs/merlin/codebooks/LT2v0_codebook.csv` using MERlin's own
-                    #   OLD-FORMAT codebook-loading logic (`merlin.data.codebook.Codebook.__init__`,
-                    #   copied from the real source, not guessed, since a plain `pandas.read_csv` can't
-                    #   parse this file's header), verifies directly (not assumed) that every barcode has
-                    #   weight 4 and the codebook's minimum pairwise Hamming distance is 4 (a genuine MHD4
-                    #   code), then classifies each gene by how many of its 4 "on" bits fall in the dead
-                    #   range: 0 = unaffected, exactly 1 = error-corrected (MERFISH's standard single-bit-
-                    #   dropout recovery, since distance-4 codewords guarantee a 1-bit-corrupted pattern is
-                    #   still closest to its true code), 2+ = lost.
+                    #   shown as a histogram for visual confirmation before trusting it. Section 15
+                    #   overlays every already-imaged (OLD) FOV's own perimeter (yellow dotted) plus the
+                    #   subset classified EMPTY at the current `EMPTY_THRESHOLD` (red dotted) on the OLD
+                    #   mosaic (`old_canvas`, built from `low_tiles_uncorrected` since `current_positions`
+                    #   lives in that same pre-fix, real-stage-coordinate frame, NOT the corrected frame
+                    #   `shifted_canvas` uses) -- self-contained (reuses `old_stats_df`'s already-cached
+                    #   per-FOV values, no re-read), so overriding `EMPTY_THRESHOLD` and re-running just
+                    #   this cell interactively finds which currently-imaged FOVs are unambiguously empty
+                    #   and safe to discard. (16) for MISSING FOVs specifically (never actually imaged,
+                    #   so no real per-FOV data exists) -- samples the mean LOW-MAG MOSAIC intensity at
+                    #   each one's own footprint as a proxy, classified against the SAME `THRESHOLD`
+                    #   already used for tissue segmentation, for consistency; (17) if hybs 1-5 (bits
+                    #   1-10) were lost, which LT2 codebook genes are affected and how many are
+                    #   error-correctable -- parses `data/configs/merlin/codebooks/LT2v0_codebook.csv`
+                    #   using MERlin's own OLD-FORMAT codebook-loading logic (`merlin.data.codebook.
+                    #   Codebook.__init__`, copied from the real source, not guessed, since a plain
+                    #   `pandas.read_csv` can't parse this file's header), verifies directly (not
+                    #   assumed) that every barcode has weight 4 and the codebook's minimum pairwise
+                    #   Hamming distance is 4 (a genuine MHD4 code), then classifies each gene by how
+                    #   many of its 4 "on" bits fall in the dead range: 0 = unaffected, exactly 1 =
+                    #   error-corrected (MERFISH's standard single-bit-dropout recovery, since
+                    #   distance-4 codewords guarantee a 1-bit-corrupted pattern is still closest to its
+                    #   true code), 2+ = lost.
                     #   Deployed to `S:\Leonardo\LT060_sample_04\merfish\MERci\notebooks\tests\` to run
                     #   interactively on the microscope; every figure saves to `SAMPLE_DIR/figures/` for
                     #   the user's own review before trusting the `_added` file -- in particular steps 1/2's

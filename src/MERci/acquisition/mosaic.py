@@ -35,17 +35,31 @@ otherwise documented)
 ------------------------------------------------------------------------
 * ``<name>.msc`` – plain text, one comma-separated record per line. An
   ``objective,<name>,<um_per_pix>,<x_offset>,<y_offset>`` line per configured
-  objective (informational only -- not used here, see below) and an
-  ``image,<filename>`` line per saved tile.
+  objective and an ``image,<filename>`` line per saved tile. The per-
+  objective ``(x_offset, y_offset)`` -- Steve's own record of that
+  objective's real parfocal/parcentric misalignment relative to whichever
+  objective it treats as this session's stage-position reference (always
+  ``0.00, 0.00`` on every real ``.msc`` file seen so far) -- IS used, by
+  :func:`load_steve_mosaic` (added after confirming directly, on real data,
+  that a previously-uncorrected mosaic/high-mag-alignment-tile discrepancy
+  exactly matched this already-recorded-but-ignored value); the
+  ``um_per_pix`` field in the same line is still NOT used for pixel size
+  (see below -- a separate, unrelated field in the same line).
 * ``<name>_<id>.stv`` – a ``pickle.dump`` of the tile's ``ImageItem.__dict__``
   (minus its Qt graphics item). The keys used here: ``numpy_data`` (the raw,
   already-oriented camera frame), ``x_um``/``y_um`` (stage position of the
   frame's *center*), and ``magnification``. The real per-tile pixel size is
   derived from the tile's own ``x_um``/``x_pix`` ratio and ``magnification``
-  rather than trusting the ``.msc`` objective line (which is rounded to 2
-  decimal places for display) or a hard-coded ``storm_control.steve.coord
-  .Point.pixels_to_um`` value (which is a mutable class attribute, not a
-  universal constant).
+  rather than trusting the ``.msc`` objective line's ``um_per_pix`` (which is
+  rounded to 2 decimal places for display) or a hard-coded
+  ``storm_control.steve.coord.Point.pixels_to_um`` value (which is a mutable
+  class attribute, not a universal constant). On a shared microscope where
+  objectives are physically removed/reinstalled between users, the
+  ``(x_offset, y_offset)`` above is NOT a fixed hardware constant either --
+  confirmed directly by comparing the same 10x-vs-60x pair's recorded offset
+  across several real experiment sessions on the identical scope: correct,
+  but different, values each time. It must always be read fresh from each
+  experiment's own ``.msc`` file.
 """
 from __future__ import annotations
 
@@ -62,7 +76,8 @@ from skimage import filters, measure, morphology
 
 from MERci.common.io import save_positions_array
 
-_MSC_IMAGE_PREFIX = "image,"
+_MSC_IMAGE_PREFIX     = "image,"
+_MSC_OBJECTIVE_PREFIX = "objective,"
 
 
 @dataclass
@@ -145,9 +160,57 @@ class MosaicSegmentation:
     threshold:       float
 
 
+def _parse_objective_offsets(msc_path: Path) -> "dict[str, Tuple[float, float]]":
+    """
+    Parse every ``objective,<name>,<um_per_pix>,<x_offset>,<y_offset>`` line
+    of a Steve ``.msc`` manifest into ``{name: (x_offset, y_offset)}``.
+
+    This offset is Steve's own record of the physical parfocal/parcentric
+    misalignment between that objective's optical axis and whichever
+    objective Steve treats as its stage-position reference for this session
+    (confirmed directly across several real experiments: the reference
+    objective's own line always reads ``0.00, 0.00``). On a shared
+    microscope where objectives are physically removed/reinstalled between
+    users, this offset is NOT a fixed hardware constant -- confirmed
+    directly by comparing the same 10x-vs-60x objective pair's recorded
+    offset across several real sessions on the identical scope (ST2):
+    correct, but different, values each time. Reading it fresh from each
+    experiment's own ``.msc`` file (never hardcoded) is therefore required.
+    """
+    offsets: "dict[str, Tuple[float, float]]" = {}
+    with msc_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line.startswith(_MSC_OBJECTIVE_PREFIX):
+                continue
+            fields = [f.strip() for f in line.split(",")]
+            if len(fields) < 5:
+                continue
+            _, name, _um_per_pix, x_offset, y_offset = fields[:5]
+            try:
+                offsets[name] = (float(x_offset), float(y_offset))
+            except ValueError:
+                continue
+    return offsets
+
+
 def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
     """
     Load every tile referenced by a Steve ``.msc`` mosaic manifest.
+
+    Every tile's ``x_um``/``y_um`` has its own objective's recorded
+    ``(x_offset, y_offset)`` (the ``.msc`` file's ``objective,...`` line,
+    see :func:`_parse_objective_offsets`) added before being returned, so
+    tiles shot with different objectives land in one consistent stage-
+    position frame without a separate manual calibration/correction step --
+    a real, previously-uncorrected discrepancy between a mosaic's low-mag
+    scanning objective and its high-mag alignment tiles was confirmed
+    directly on real data (see ``notebooks/tests/fix_mosaic_shift_missing_
+    fovs.ipynb`` and its ``prompt_history`` for the investigation) to
+    exactly match this already-recorded-but-previously-unused offset. An
+    objective with no matching ``objective,`` line (or a manifest with none
+    at all) gets ``(0, 0)`` -- unchanged from the previous, uncorrected
+    behavior.
 
     Parameters
     ----------
@@ -160,6 +223,8 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
     """
     msc_path = Path(msc_path)
     directory = msc_path.parent
+
+    objective_offsets = _parse_objective_offsets(msc_path)
 
     tile_files = []
     with msc_path.open() as fh:
@@ -179,10 +244,12 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
         pixels_to_um = d["x_um"] / d["x_pix"] if d["x_pix"] else 1.0
         pixel_size_um = pixels_to_um / d["magnification"]
 
+        x_offset, y_offset = objective_offsets.get(d["objective_name"], (0.0, 0.0))
+
         tiles.append(SteveTile(
             image=d["numpy_data"],
-            x_um=d["x_um"],
-            y_um=d["y_um"],
+            x_um=d["x_um"] + x_offset,
+            y_um=d["y_um"] + y_offset,
             pixel_size_um=pixel_size_um,
             objective_name=d["objective_name"],
             zvalue=d["zvalue"],
