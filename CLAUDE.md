@@ -962,45 +962,63 @@ notebooks/
                     #   offset, shifts the low-mag mosaic by that offset, THEN derives the tissue
                     #   boundary/FOV grid -- if the shift is skipped or applied too late (the
                     #   boundary already saved from the un-shifted mosaic), every FOV grid built
-                    #   from it ends up offset from where the tissue actually is. (1) plots every
-                    #   tile's own position, low-mag vs. high-mag (`acquisition.mosaic.
+                    #   from it ends up offset from where the tissue actually is.
+                    #   (1)/(2) composite BOTH objectives together (`acquisition.mosaic.
                     #   load_steve_mosaic`'s own mixed-objective support, cached locally --
-                    #   `analysis/cache/fix_mosaic_shift_missing_fovs/steve_tiles.pkl` -- since
+                    #   `analysis/cache/fix_mosaic_shift_missing_fovs/steve_tiles.pkl`, since
                     #   reading many small per-tile files over a network acquisition drive is slow
-                    #   regardless of total data volume); (2) the real alignment test: assembles
-                    #   ONLY the low-mag tiles near the high-mag patch (finer `ZOOM_PIXEL_UM` than
-                    #   the whole-mosaic canvas) and draws the high-mag patch's own bounding box as
-                    #   a dashed outline on top -- a purely SPATIAL check (does the real footprint
-                    #   sit on continuous tissue texture?), not a shared-pixel-value overlay, since
-                    #   the two objectives' very different exposures made a painted overlay
-                    #   unreadable on its own merits; done BEFORE and AFTER applying the known
-                    #   `(SHIFT_DX_UM, SHIFT_DY_UM)` (the high-mag tiles are the fixed calibration
-                    #   reference and never move) for direct comparison -- inherently a call that
-                    #   needs the user's own visual judgment of the real tissue anatomy, not
-                    #   something this notebook (or Claude inspecting its output) can assert on its
-                    #   own; (3) overlays the CURRENT (already-imaging) positions file on the
-                    #   shifted mosaic to show the real-world misalignment directly; (4) re-runs
-                    #   `segment_mosaic_tissue`/`build_boundary_path` on the shifted mosaic with the
-                    #   exact parameters this sample's own local `02_create_boundary_from_mosaic.
-                    #   ipynb`/`02_create_positions_from_boundaries.ipynb` were run with (copied
-                    #   verbatim, not re-derived); (5) overlays OLD vs. NEW FOV positions; (6)
-                    #   classifies every NEW FOV as already-covered or MISSING by nearest-OLD-FOV
-                    #   tile-overlap fraction (`OVERLAP_THRESHOLD`, default 50%) via a KD-tree,
-                    #   verified on real LT060_sample_04 data to isolate a coherent tissue-edge
-                    #   strip (182/1166 FOVs), not scattered noise; (7) re-orders just the missing
-                    #   subset into its own short-travel loop -- tried and MEASURED (`get_path_stats`)
-                    #   two alternatives first: keeping the new grid's own boustrophedon subsequence
-                    #   order, and a per-column boustrophedon re-sort of the subset alone, neither of
-                    #   which reliably beat the other (a single lattice column can itself contain
-                    #   more than one disconnected run of missing FOVs) -- a greedy nearest-neighbor
-                    #   walk (starting from the point closest to the current positions file's own
-                    #   last FOV, so the transit into the new loop is also short) won decisively on
-                    #   real data (55 mm vs. 96-98 mm total travel); (8) appends the re-ordered
-                    #   missing FOVs after the current positions and writes a NEW `_added`-suffixed
-                    #   positions file -- never overwrites the file actually being imaged from.
-                    #   Deployed to `S:\Leonardo\LT060_sample_04\merfish\MERci\notebooks\tests\` to
-                    #   run interactively on the microscope; every figure saves to `SAMPLE_DIR/
-                    #   figures/` for the user's own review before trusting the `_added` file.
+                    #   regardless of total data volume) at the whole-mosaic scale, unshifted then
+                    #   with the known `(SHIFT_DX_UM, SHIFT_DY_UM)` applied to the low-mag tiles only
+                    #   (high-mag is the fixed calibration reference); `normalize_tile_intensities`
+                    #   independently rescales each objective's own tiles onto a shared display range
+                    #   first (`LOW_MAG_DISPLAY_PCT`/`HIGH_MAG_DISPLAY_PCT`), since the two objectives'
+                    #   very different exposures make a shared-percentile stretch over raw values
+                    #   unreadable (the high-mag patch saturates). **Known limitation, confirmed by
+                    #   directly comparing the two rendered images**: at `WORKING_PIXEL_UM` (matching
+                    #   the segmentation canvas), a shift of a few hundred um is visually
+                    #   imperceptible against the whole mosaic's own scale -- these two steps read as
+                    #   confirmatory context, not the decisive evidence; step 3's real FOV-perimeter
+                    #   overlay (below) is what actually shows the misalignment clearly. (3) overlays
+                    #   the CURRENT (already-imaging) positions file's own FOV PERIMETERS (yellow
+                    #   squares, not center points) on the shifted low-mag-only canvas (real,
+                    #   un-normalized values -- the same canvas segmentation reads in step 4) --
+                    #   verified on real LT060_sample_04 data to show a clear, visible offset between
+                    #   the current grid and the corrected tissue. (4) re-runs `segment_mosaic_tissue`
+                    #   on the shifted canvas with the exact parameters this sample's own local
+                    #   `02_create_boundary_from_mosaic.ipynb` was run with (copied verbatim, not
+                    #   re-derived), then finds FOV positions in the new tissue boundary using the
+                    #   SAME dense grid (`create_grid_positions`/`generate_scanning_path` centered on
+                    #   the OLD boundary's own bounding box, sized to cover both regions) the CURRENT
+                    #   positions file's own grid came from, filtered twice via `filter_scanning_path`
+                    #   (once against the OLD boundary as a sanity check -- reproduced the real
+                    #   current positions file's count exactly on LT060_sample_04 -- once against the
+                    #   NEW/shifted boundary) -- NOT an independently re-centered grid for the new
+                    #   boundary, since the shift isn't an exact integer number of FOVs and a
+                    #   fresh grid would share almost no exact coordinates with the current one even
+                    #   where they truly overlap; (5) overlays the OLD vs. NEW tissue BOUNDARY outlines
+                    #   (not FOV points -- a shape-level sanity check); (6) classifies every NEW FOV as
+                    #   already-covered or MISSING by EXACT coordinate membership in the OLD filtered
+                    #   set (both come from the same dense grid, so a shared FOV is bit-identical, not
+                    #   just closely overlapping -- no more distance-based fuzzy matching needed),
+                    #   drawn as real FOV perimeter squares over both boundary outlines; verified on
+                    #   real data to isolate a coherent tissue-edge strip, not scattered noise; (7)
+                    #   re-orders just the missing subset into its own short-travel loop -- tried and
+                    #   MEASURED (`get_path_stats`) two alternatives first: keeping the new grid's own
+                    #   filtered order, and a per-column boustrophedon re-sort of the subset alone,
+                    #   neither of which reliably beat the other (a single lattice column can itself
+                    #   contain more than one disconnected run of missing FOVs) -- a greedy
+                    #   nearest-neighbor walk (starting from the point closest to the current positions
+                    #   file's own last FOV, so the transit into the new loop is also short) won
+                    #   decisively on real data; (8) appends the re-ordered missing FOVs after the
+                    #   current positions and writes a NEW `_added`-suffixed positions file -- never
+                    #   overwrites the file actually being imaged from. Deployed to `S:\Leonardo\
+                    #   LT060_sample_04\merfish\MERci\notebooks\tests\` to run interactively on the
+                    #   microscope; every figure saves to `SAMPLE_DIR/figures/` for the user's own
+                    #   review before trusting the `_added` file -- in particular steps 1/2's own
+                    #   stated scale limitation above means the shift's correctness is better judged
+                    #   from step 3 (does the current grid visibly sit off the corrected tissue) and
+                    #   step 6 (does MISSING trace a plausible tissue-edge strip) than from steps 1/2
+                    #   alone.
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
