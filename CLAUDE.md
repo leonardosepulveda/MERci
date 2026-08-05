@@ -950,6 +950,57 @@ notebooks/
                                                    #   meta.n_rounds, since different rounds can have
                                                    #   different color/z-sweep configurations. Saves a
                                                    #   per-FOV trim CSV.
+  tests/           # Diagnostic/recovery notebooks built to investigate or fix ONE specific
+                    #   real issue on a real experiment, kept afterward as a worked-example
+                    #   template for the same class of problem elsewhere -- not part of the
+                    #   numbered prepare_imaging pipeline or a standing analysis tool. Two
+                    #   levels deep like analysis/misc/during_imaging (MERCI_DIR = ...parent.parent).
+    fix_mosaic_shift_missing_fovs.ipynb            # recovers from a skipped/mistimed 10x-vs-real-
+                    #   imaging-objective calibration shift: the usual workflow scans a low-mag
+                    #   (e.g. "10x") Steve mosaic, images a handful of FOVs at the real imaging
+                    #   objective (e.g. "60x") over part of it to measure a fixed stage-calibration
+                    #   offset, shifts the low-mag mosaic by that offset, THEN derives the tissue
+                    #   boundary/FOV grid -- if the shift is skipped or applied too late (the
+                    #   boundary already saved from the un-shifted mosaic), every FOV grid built
+                    #   from it ends up offset from where the tissue actually is. (1) plots every
+                    #   tile's own position, low-mag vs. high-mag (`acquisition.mosaic.
+                    #   load_steve_mosaic`'s own mixed-objective support, cached locally --
+                    #   `analysis/cache/fix_mosaic_shift_missing_fovs/steve_tiles.pkl` -- since
+                    #   reading many small per-tile files over a network acquisition drive is slow
+                    #   regardless of total data volume); (2) the real alignment test: assembles
+                    #   ONLY the low-mag tiles near the high-mag patch (finer `ZOOM_PIXEL_UM` than
+                    #   the whole-mosaic canvas) and draws the high-mag patch's own bounding box as
+                    #   a dashed outline on top -- a purely SPATIAL check (does the real footprint
+                    #   sit on continuous tissue texture?), not a shared-pixel-value overlay, since
+                    #   the two objectives' very different exposures made a painted overlay
+                    #   unreadable on its own merits; done BEFORE and AFTER applying the known
+                    #   `(SHIFT_DX_UM, SHIFT_DY_UM)` (the high-mag tiles are the fixed calibration
+                    #   reference and never move) for direct comparison -- inherently a call that
+                    #   needs the user's own visual judgment of the real tissue anatomy, not
+                    #   something this notebook (or Claude inspecting its output) can assert on its
+                    #   own; (3) overlays the CURRENT (already-imaging) positions file on the
+                    #   shifted mosaic to show the real-world misalignment directly; (4) re-runs
+                    #   `segment_mosaic_tissue`/`build_boundary_path` on the shifted mosaic with the
+                    #   exact parameters this sample's own local `02_create_boundary_from_mosaic.
+                    #   ipynb`/`02_create_positions_from_boundaries.ipynb` were run with (copied
+                    #   verbatim, not re-derived); (5) overlays OLD vs. NEW FOV positions; (6)
+                    #   classifies every NEW FOV as already-covered or MISSING by nearest-OLD-FOV
+                    #   tile-overlap fraction (`OVERLAP_THRESHOLD`, default 50%) via a KD-tree,
+                    #   verified on real LT060_sample_04 data to isolate a coherent tissue-edge
+                    #   strip (182/1166 FOVs), not scattered noise; (7) re-orders just the missing
+                    #   subset into its own short-travel loop -- tried and MEASURED (`get_path_stats`)
+                    #   two alternatives first: keeping the new grid's own boustrophedon subsequence
+                    #   order, and a per-column boustrophedon re-sort of the subset alone, neither of
+                    #   which reliably beat the other (a single lattice column can itself contain
+                    #   more than one disconnected run of missing FOVs) -- a greedy nearest-neighbor
+                    #   walk (starting from the point closest to the current positions file's own
+                    #   last FOV, so the transit into the new loop is also short) won decisively on
+                    #   real data (55 mm vs. 96-98 mm total travel); (8) appends the re-ordered
+                    #   missing FOVs after the current positions and writes a NEW `_added`-suffixed
+                    #   positions file -- never overwrites the file actually being imaged from.
+                    #   Deployed to `S:\Leonardo\LT060_sample_04\merfish\MERci\notebooks\tests\` to
+                    #   run interactively on the microscope; every figure saves to `SAMPLE_DIR/
+                    #   figures/` for the user's own review before trusting the `_added` file.
 data/
   configs/
     hal/            # hal-config-{mic}.xml — HAL config templates (one per microscope)
