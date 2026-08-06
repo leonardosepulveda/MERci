@@ -1,4 +1,33 @@
 {
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(mamba *)",
+      "Bash(conda *)",
+      "Bash(python *)",
+      "Bash(pip *)",
+      "Bash(jupyter *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(where.exe *)",
+      "PowerShell(Get-ChildItem*)",
+      "PowerShell(Get-Command*)",
+      "PowerShell(Test-Path*)",
+      "PowerShell(git *)",
+      "PowerShell(mamba *)",
+      "PowerShell(conda *)",
+      "PowerShell(python *)",
+      "PowerShell(jupyter *)"
+    ],
+    "additionalDirectories": [
+      ".."
+    ]
+  },
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -18,7 +47,7 @@
           {
             "type": "command",
             "shell": "powershell",
-            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"c:\\Users\\Leonardo\\Dropbox\\research\\analysis\\LineageTracing\\251225_LT027_saving_time\\MERci\\.claude\\hooks\\save_verbatim.ps1\"",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\save_verbatim.ps1\"",
             "timeout": 30,
             "statusMessage": "Saving verbatim response"
           }
