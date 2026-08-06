@@ -32,7 +32,7 @@ mamba activate merci_env
 jupyter lab
 ```
 
-Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `prepare_imaging/` (pre-experiment setup), `analysis/` (online monitoring), and `misc/` (ad-hoc utilities). Open notebooks from their subfolder so that `SAMPLE_DIR` is auto-detected correctly — each notebook resolves `MERCI_DIR = Path(os.getcwd()).parent.parent` and `SAMPLE_DIR = MERCI_DIR.parent`, which assumes it is run from a second-level subfolder (`MERci/notebooks/<group>/`).
+Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `before_imaging/` (pre-experiment setup), `after_imaging/` (online monitoring), and `misc/` (ad-hoc utilities). Open notebooks from their subfolder so that `SAMPLE_DIR` is auto-detected correctly — each notebook resolves `MERCI_DIR = Path(os.getcwd()).parent.parent` and `SAMPLE_DIR = MERCI_DIR.parent`, which assumes it is run from a second-level subfolder (`MERci/notebooks/<group>/`).
 
 ### Updating an existing clone without overwriting your notebooks
 
@@ -58,18 +58,18 @@ SAMPLE_DIR/                          e.g.  D:\experiments\my_sample\
   positions/
     boundary_positions.txt           ← tissue boundary (from microscope operator)
     hole*.txt                        ← exclusion regions (from microscope operator)
-    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of prepare_imaging/02)
+    positions_{SAMPLE_NAME}.txt      ← FOV grid (output of before_imaging/02)
   metadata/
-    frame_table_{name}.csv           ← frame sequence table (output of prepare_imaging/01)
-    shutter_sequence_{name}.png      ← visual summary (output of prepare_imaging/01)
-    round_info.csv                   ← per-round imaging metadata (output of prepare_imaging/03)
-    round_bit_color_map.csv          ← round → bit → color mapping (output of prepare_imaging/04)
-    data_organization_{mic}_{name}.csv  ← MERlin data-organization file (output of prepare_imaging/04)
+    frame_table_{name}.csv           ← frame sequence table (output of before_imaging/01)
+    shutter_sequence_{name}.png      ← visual summary (output of before_imaging/01)
+    round_info.csv                   ← per-round imaging metadata (output of before_imaging/03)
+    round_bit_color_map.csv          ← round → bit → color mapping (output of before_imaging/04)
+    data_organization_{mic}_{name}.csv  ← MERlin data-organization file (output of before_imaging/04)
   settings/
-    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of prepare_imaging/01)
-    shutter-{name}.xml               ← HAL shutter config (output of prepare_imaging/01)
-    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of prepare_imaging/03)
-  readouts.csv                       ← codebook readout table (user-provided, required by prepare_imaging/04)
+    hal-config-{mic}-{name}.xml      ← HAL imaging config (output of before_imaging/01)
+    shutter-{name}.xml               ← HAL shutter config (output of before_imaging/01)
+    dave-{mic}-{N}bits-{name}.xml    ← Dave recipe (output of before_imaging/03)
+  readouts.csv                       ← codebook readout table (user-provided, required by before_imaging/04)
   data/                              ← raw image files; exact subfolder structure is defined in
                                         round_info.csv via the `dir` column (written by HAL)
   analysis/                          ← outputs of the online-analysis schedulers
@@ -84,11 +84,11 @@ SAMPLE_DIR/                          e.g.  D:\experiments\my_sample\
 
 ## Pre-experiment workflow
 
-Run the four `prepare_imaging/` notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/prepare_imaging/`), so no paths need to be changed.
+Run the four `before_imaging/` notebooks in order before starting the microscope.  Each notebook auto-detects `SAMPLE_DIR` from its own location (`MERci/notebooks/before_imaging/`), so no paths need to be changed.
 
 ### Notebook 01 — HAL configs and shutter files
 
-`notebooks/prepare_imaging/01_create_hal_config_and_shutters.ipynb`
+`notebooks/before_imaging/01_create_hal_config_and_shutters.ipynb`
 
 Defines the per-frame imaging sequence and writes the HAL configuration files.
 
@@ -123,7 +123,7 @@ The HAL template is auto-detected from `MERci/data/configs/hal/` by matching the
 
 ### Notebook 02 — FOV positions
 
-`notebooks/prepare_imaging/02_create_positions_from_tissue_boundary.ipynb`
+`notebooks/before_imaging/02_create_positions_from_tissue_boundary.ipynb`
 
 Builds a regular boustrophedon FOV grid within the tissue boundary.
 
@@ -144,7 +144,7 @@ Reads `boundary_positions.txt` and any `hole*.txt` files from `SAMPLE_DIR/positi
 
 ### Notebook 03 — Dave recipe
 
-`notebooks/prepare_imaging/03_create_dave_config.ipynb`
+`notebooks/before_imaging/03_create_dave_config.ipynb`
 
 Generates the `round_info.csv` table and the Dave experiment recipe XML.
 
@@ -180,7 +180,7 @@ Final fluidics:    Cleave direct
 
 ### Notebook 04 — MERlin data organization
 
-`notebooks/prepare_imaging/04_create_data_organization.ipynb`
+`notebooks/before_imaging/04_create_data_organization.ipynb`
 
 Generates the MERlin `data_organization_*.csv` file that maps each bit to its images, z-positions, and fiducial frames.  Also annotates the Dave XML produced by notebook 03 with per-round bit information.
 
@@ -205,15 +205,15 @@ Frame tables and series patterns are auto-detected from `metadata/frame_table_*.
 
 During the experiment, run the analysis notebooks in separate JupyterLab tabs to monitor quality in real time:
 
-- `notebooks/analysis/01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
-- `notebooks/analysis/02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
-- `notebooks/analysis/03_view_mosaics.ipynb` — displays per-color mosaics as they are built
-- `notebooks/analysis/04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
+- `notebooks/after_imaging/01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
+- `notebooks/after_imaging/02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
+- `notebooks/after_imaging/03_view_mosaics.ipynb` — displays per-color mosaics as they are built
+- `notebooks/after_imaging/04_view_intensity_stats.ipynb` — plots per-frame intensity statistics over rounds
 
 Standalone utility notebooks are also provided under `notebooks/misc/`:
 - `MF2_60XSil1.3_zcorrection.ipynb` — z-correction for the MF2 60× silicone objective.
-- `reconstruct_frame_table_from_configs.ipynb` — inverse of `prepare_imaging/01`: rebuild a `frame_table_*.csv` from an existing HAL config + its shutter file (recover a lost frame table or verify HAL/shutter consistency).
-- `align_fovs_across_microscopes.ipynb` — transfer FOV positions to a second microscope after moving the stage insert. **Part 1** overlaps the two tissue-boundary polygons to fit an isotropic transform (scale + translation + optional x/y flips, no rotation). **Part 2** (optional) refines per-FOV residual drift from fiducial-bead images. Two methods (`METHOD`): `"phase"` = image `phase_cross_correlation` (the coarse-alignment primitive from [fishtank](https://github.com/jweissmanlab/fishtank); needs the two images to look alike), or `"beads"` = detect bead centroids in each image and register the point sets by consensus voting (modality-robust; each FOV gets a `score` = inlier fraction, low ⇒ the two images share no common beads, e.g. different focal planes). It writes drift-corrected positions plus diagnostic figures: a spatial per-FOV vector (quiver) plot, a drift x/y scatter + distance histogram, a drift-corrected FOV-layout plot (boundary + positions, à la `prepare_imaging/02`), and source-vs-target bead overlays (full FOV + center zoom) for FOVs sampled near the 10/25/50/75/90th drift percentiles.
+- `reconstruct_frame_table_from_configs.ipynb` — inverse of `before_imaging/01`: rebuild a `frame_table_*.csv` from an existing HAL config + its shutter file (recover a lost frame table or verify HAL/shutter consistency).
+- `align_fovs_across_microscopes.ipynb` — transfer FOV positions to a second microscope after moving the stage insert. **Part 1** overlaps the two tissue-boundary polygons to fit an isotropic transform (scale + translation + optional x/y flips, no rotation). **Part 2** (optional) refines per-FOV residual drift from fiducial-bead images. Two methods (`METHOD`): `"phase"` = image `phase_cross_correlation` (the coarse-alignment primitive from [fishtank](https://github.com/jweissmanlab/fishtank); needs the two images to look alike), or `"beads"` = detect bead centroids in each image and register the point sets by consensus voting (modality-robust; each FOV gets a `score` = inlier fraction, low ⇒ the two images share no common beads, e.g. different focal planes). It writes drift-corrected positions plus diagnostic figures: a spatial per-FOV vector (quiver) plot, a drift x/y scatter + distance histogram, a drift-corrected FOV-layout plot (boundary + positions, à la `before_imaging/02`), and source-vs-target bead overlays (full FOV + center zoom) for FOVs sampled near the 10/25/50/75/90th drift percentiles.
 - `extract_source_bead_frames.ipynb` — run at the **source** microscope before Part 2: writes a compact per-FOV `.tiff` containing only the full-resolution fiducial-bead frames (≈2 of ~30 frames) plus a matching compact frame table, so only the small bead files need to cross the NAS to the target microscope.
 
 ### How it works

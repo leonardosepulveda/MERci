@@ -70,7 +70,7 @@ def load_boundary_polygon(path: Path) -> Polygon:
     Parameters
     ----------
     path : boundary file (e.g. ``boundary_positions_mf4.txt``); same format as
-           the operator-supplied boundaries used by ``prepare_imaging/02``.
+           the operator-supplied boundaries used by ``before_imaging/02``.
 
     Returns
     -------

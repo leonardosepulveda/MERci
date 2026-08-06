@@ -113,7 +113,7 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
 # ST2 (2304-px sensors) image at 0.0878 µm/px; the MF-series (MF2-MF5, 2048-px)
 # at 0.108 µm/px. Together with the sensor size this fixes the FOV footprint
 # (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning grid
-# in prepare_imaging/02.
+# in before_imaging/02.
 _CAMERA_PIXEL_SIZE_UM: Dict[str, float] = {
     "MF2": 0.108, "MF3": 0.108, "MF4": 0.108, "MF5": 0.108,
     "MFX": 0.0878, "ST2": 0.0878,
@@ -143,7 +143,7 @@ def get_fov_geometry(microscope: Optional[str]) -> FOVGeometry:
     Return the FOV geometry ``(pixel_size_um, image_size_px)`` for *microscope*.
 
     Bundles :func:`get_camera_pixel_size_um` and the sensor size from
-    :func:`get_camera_frame_size` so ``prepare_imaging/02`` can derive the scanning
+    :func:`get_camera_frame_size` so ``before_imaging/02`` can derive the scanning
     grid from the microscope alone instead of hard-coding both numbers:
 
     * MFX, ST2 → ``(0.0878 µm/px, 2304 px)``

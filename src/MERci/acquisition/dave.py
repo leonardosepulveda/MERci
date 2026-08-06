@@ -311,7 +311,7 @@ def create_round_info_multitissue(
 
     Each imaging round visits the acquisition-order segments built by
     :func:`MERci.acquisition.positions.group_boundaries_by_path_mode` (the
-    same function ``notebooks/prepare_imaging/02`` uses to decide what it
+    same function ``notebooks/before_imaging/02`` uses to decide what it
     actually writes to ``positions/``): a tissue's own consecutive boundaries
     are merged into ONE segment when ``tissue_path_mode(tissue) == "legacy"``
     (no transit within that tissue), otherwise each boundary keeps its own
@@ -1218,7 +1218,7 @@ def annotate_dave_with_round_info(
     (no bits), so it normally has no entry here; the bits comments attach to the
     ``Hyb NN Fluidics`` loops for rounds 2…N+1.  The ``round_1indexed`` values
     passed in must therefore be **imaging-round** indices (bits start at 2), not
-    bit/hyb indices — see ``notebooks/prepare_imaging/04``.
+    bit/hyb indices — see ``notebooks/before_imaging/04``.
 
     Parameters
     ----------
