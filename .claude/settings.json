@@ -25,6 +25,10 @@
       "Bash(head *)",
       "Bash(tail *)",
       "Bash(where.exe *)",
+      "Bash(sort *)",
+      "Bash(which *)",
+      "Bash(date *)",
+      "Bash(uname *)",
       "PowerShell(Get-ChildItem*)",
       "PowerShell(Get-Command*)",
       "PowerShell(Test-Path*)",
@@ -32,7 +36,17 @@
       "PowerShell(mamba *)",
       "PowerShell(conda *)",
       "PowerShell(python *)",
-      "PowerShell(jupyter *)"
+      "PowerShell(jupyter *)",
+      "PowerShell(Get-Content*)",
+      "PowerShell(Get-Item*)",
+      "PowerShell(ConvertFrom-Json*)",
+      "PowerShell(ConvertTo-Json*)",
+      "PowerShell(Select-Object*)",
+      "PowerShell(Where-Object*)",
+      "PowerShell(ForEach-Object*)",
+      "PowerShell(Select-String*)",
+      "PowerShell(Format-List*)",
+      "PowerShell(Out-Null*)"
     ],
     "additionalDirectories": [
       ".."
