@@ -804,6 +804,47 @@ notebooks/
                                                    #   call (`show_round_mosaic`'s new `save_full_res` param),
                                                    #   bounding on-disk staleness without paying the expensive
                                                    #   write on every tile.
+    fast_spot_quantification.ipynb                 # per-bit hybridization-reagent QC: for a handful of
+                                                   #   SELECTED_FOVS, measures each detected focus's
+                                                   #   background-subtracted peak intensity, per (round,
+                                                   #   color) -- a round whose reagent degraded shows up as
+                                                   #   a visibly lower/tighter intensity distribution than
+                                                   #   its neighbours, catchable while there's still time to
+                                                   #   re-image/re-hybridize. For each color, resolves
+                                                   #   N_Z_SAMPLES frame indices evenly spaced across that
+                                                   #   round's real z-sweep (acquisition.configs.
+                                                   #   get_all_color_frame_indices, same convention
+                                                   #   round_mosaics.ipynb's own Section 3 uses for its
+                                                   #   single nearest-z frame, generalized to a configurable
+                                                   #   sample count here) so an out-of-focus plane doesn't
+                                                   #   miss real foci; EXCLUDED_COLORS defaults to
+                                                   #   [405, 488] (cells/DAPI + bead/focus-lock reference --
+                                                   #   neither is a hybridization bit). Each sampled FOV/
+                                                   #   round/color reads only its own CROP_SIZE x CROP_SIZE
+                                                   #   square centered on the FOV (avoids the illumination
+                                                   #   vignetting that gets worse toward frame edges biasing
+                                                   #   the round-to-round comparison), max-projects the
+                                                   #   sampled z-planes, then detects foci via
+                                                   #   analysis.spot_localization.detect_beads_2d (the same
+                                                   #   Gaussian-smoothed-background + local-maxima primitive
+                                                   #   this repo already uses for bead/fiducial detection,
+                                                   #   reused here for real hybridization foci instead of
+                                                   #   calibration beads) -- FOCI_MIN_DIST_PX/
+                                                   #   FOCI_THRESH_SIGMA are tuned by eye against a
+                                                   #   diagnostic detected-foci overlay, not calibrated
+                                                   #   against ground truth. Each focus's intensity is its
+                                                   #   peak pixel value minus the crop's own background
+                                                   #   median. Caches one CSV per (round, color, FOV) to
+                                                   #   analysis/fast_spot_quantification/ (an explicit,
+                                                   #   persistent per-experiment output location, not
+                                                   #   NOTEBOOK_GUIDELINES.md #2's generic analysis/cache/
+                                                   #   <notebook_name>/ recompute cache) -- re-running the
+                                                   #   notebook as more rounds/hybs are imaged only computes
+                                                   #   what's new; OVERWRITE_OUTPUT (default False) forces
+                                                   #   recomputation. Final plot: one row per real bit color
+                                                   #   found in the cached data, x = round number, one
+                                                   #   alpha=0.5 violin per round pooling every
+                                                   #   SELECTED_FOVS FOV's foci together.
   misc/             # Ad-hoc utilities
     MF2_60XSil1.3_zcorrection.ipynb                # z-correction helper for the MF2 60x silicone objective
     reconstruct_frame_table_from_configs.ipynb     # inverse of before_imaging/01: hal+shutter XML -> frame_table CSV
