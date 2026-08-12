@@ -812,3 +812,31 @@ def save_boundary_from_mosaic(segmentation: MosaicSegmentation, positions_dir: P
             written.append(island_fname)
 
     return written
+
+
+def save_mosaic_canvas(canvas: MosaicCanvas, path: Path) -> None:
+    """
+    Save a :class:`MosaicCanvas` to a single compressed ``.npz`` file.
+
+    Generalizes the ad-hoc ``image``/``covered``/``origin_um``/``pixel_size_um``
+    round-trip that ``02_create_positions_from_boundaries.ipynb``'s own local
+    cache cell already builds by hand -- one shared implementation, reused by
+    that per-experiment cache and by bundled example canvases under
+    ``MERci/data/mosaic_canvas_examples/`` (see :func:`load_mosaic_canvas`).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        image=canvas.image, covered=canvas.covered,
+        origin_um=np.array(canvas.origin_um), pixel_size_um=canvas.pixel_size_um,
+    )
+
+
+def load_mosaic_canvas(path: Path) -> MosaicCanvas:
+    """Load a :class:`MosaicCanvas` written by :func:`save_mosaic_canvas`."""
+    npz = np.load(Path(path))
+    return MosaicCanvas(
+        image=npz["image"], covered=npz["covered"],
+        origin_um=tuple(npz["origin_um"]), pixel_size_um=float(npz["pixel_size_um"]),
+    )

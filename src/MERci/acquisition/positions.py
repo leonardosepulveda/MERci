@@ -979,11 +979,12 @@ def build_boundary_path(
 @dataclass
 class GridOffsetCandidate:
     """One evaluated grid phase and the metrics of the path it produces."""
-    offset:           Tuple[float, float]
-    n_fovs:           int
-    waste_area_um2:   float
-    total_length_um:  float
-    max_step_um:      float
+    offset:              Tuple[float, float]
+    n_fovs:               int
+    waste_area_um2:       float
+    total_length_um:      float
+    max_step_um:          float
+    n_low_coverage_fovs:  int
 
 
 @dataclass
@@ -1002,13 +1003,15 @@ def optimize_grid_offset(
     direction:        str                 = "vertical",
     return_side:      Optional[str]       = None,
     n_samples:        int                 = 9,
-    priority:         Tuple[str, ...]     = ("waste_area_um2", "total_length_um", "n_fovs"),
+    priority:         Tuple[str, ...]     = ("n_low_coverage_fovs", "waste_area_um2", "total_length_um", "n_fovs"),
+    low_coverage_fraction: float          = 0.5,
 ) -> GridOffsetResult:
     """
     Search the grid's phase (offset within one *step_size* period) for the
-    one that best minimises wasted (non-tissue) imaged area, scan travel
-    length, and FOV count -- without touching the hard parity constraint
-    :func:`create_grid_positions` already enforces for a short return leg.
+    one that best minimises the count of near-empty FOVs, wasted (non-tissue)
+    imaged area, scan travel length, and FOV count -- without touching the
+    hard parity constraint :func:`create_grid_positions` already enforces for
+    a short return leg.
 
     Only the grid's *offset* varies across candidates; *step_size* and
     *direction* stay fixed (per the parity rule they'd otherwise break), so
@@ -1017,17 +1020,31 @@ def optimize_grid_offset(
     fixed in space, so ``[-step_size/2, step_size/2)`` in each axis covers
     every distinct phase.
 
+    ``n_low_coverage_fovs`` (a FOV whose camera square overlaps
+    *effective_tissue* by less than *low_coverage_fraction* of its own area
+    -- :func:`filter_scanning_path`'s own keep rule is coverage-blind, so
+    these near-empty FOVs already survive filtering) is a genuinely distinct
+    objective from ``waste_area_um2``: per-FOV acquisition time is roughly
+    fixed regardless of how much tissue a FOV actually contains, so a
+    count-based objective targets wasted imaging *time* directly, while
+    ``waste_area_um2`` (a continuous area sum, dominated by whichever FOVs
+    happen to be biggest/most wasteful) targets wasted *area* -- related but
+    not the same, and a phase that minimises one need not minimise the
+    other. It is listed first in the default *priority* since minimising
+    wasted imaging time is this search's primary motivation.
+
     Parameters
     ----------
     boundary_polygon : the tissue boundary for this segment
     hole_polygons    : exclusion polygons (applied to this boundary) -- also
                        subtracted from the boundary when computing wasted
-                       area below, since a hole-covered pixel is just as
-                       much non-tissue as one outside the boundary entirely
-                       (unlike :func:`filter_scanning_path`, which only
-                       drops FOVs a hole *fully* contains -- a partially
-                       hole-overlapping FOV survives filtering, and its
-                       hole-covered area still counts as waste here)
+                       area/coverage below, since a hole-covered pixel is
+                       just as much non-tissue as one outside the boundary
+                       entirely (unlike :func:`filter_scanning_path`, which
+                       only drops FOVs a hole *fully* contains -- a
+                       partially hole-overlapping FOV survives filtering,
+                       and its hole-covered area still counts as waste/
+                       low-coverage here)
     step_size        : grid spacing (µm)
     fov_size_um      : camera FOV side length (µm)
     direction        : boustrophedon direction, forwarded to
@@ -1041,9 +1058,13 @@ def optimize_grid_offset(
                        ``(0, 0)`` centred grid as one candidate
     priority         : ``GridOffsetCandidate`` field names, most important
                        first, used to lexicographically rank candidates
-                       (each minimised). Default matches the order the
-                       objectives are usually stated in: wasted area, then
+                       (each minimised). Default: low-coverage FOV count
+                       first (wasted imaging time), then wasted area, then
                        travel length, then FOV count.
+    low_coverage_fraction : a FOV counts as "low coverage" when its own
+                       tissue-overlap fraction (tissue-overlap area / FOV
+                       area) is strictly below this threshold. Default 0.5
+                       (less than half the FOV is real tissue).
 
     Returns
     -------
@@ -1060,6 +1081,7 @@ def optimize_grid_offset(
         effective_tissue = boundary_polygon
 
     half   = fov_size_um / 2.0
+    fov_area = fov_size_um * fov_size_um
     offsets = np.linspace(-step_size / 2.0, step_size / 2.0, n_samples, endpoint=False)
 
     candidates: List[GridOffsetCandidate] = []
@@ -1073,19 +1095,23 @@ def optimize_grid_offset(
             if return_side is not None and len(filtered) > 1:
                 filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
 
-            waste_area_um2 = 0.0
+            waste_area_um2      = 0.0
+            n_low_coverage_fovs = 0
             for x, y in filtered:
                 fov_poly        = shapely_box(x - half, y - half, x + half, y + half)
                 tissue_overlap  = fov_poly.intersection(effective_tissue).area
                 waste_area_um2 += fov_poly.area - tissue_overlap
+                if tissue_overlap / fov_area < low_coverage_fraction:
+                    n_low_coverage_fovs += 1
 
             total_length_um, max_step_um = get_path_stats(filtered)
             candidates.append(GridOffsetCandidate(
-                offset          = (float(dx), float(dy)),
-                n_fovs          = len(filtered),
-                waste_area_um2  = waste_area_um2,
-                total_length_um = total_length_um,
-                max_step_um     = max_step_um,
+                offset              = (float(dx), float(dy)),
+                n_fovs              = len(filtered),
+                waste_area_um2       = waste_area_um2,
+                total_length_um      = total_length_um,
+                max_step_um          = max_step_um,
+                n_low_coverage_fovs  = n_low_coverage_fovs,
             ))
 
     def _sort_key(c: GridOffsetCandidate) -> Tuple[float, ...]:
@@ -1113,7 +1139,8 @@ def build_boundary_path_optimized(
     direction:        str             = "vertical",
     return_side:      Optional[str]   = None,
     n_samples:        int             = 9,
-    priority:         Tuple[str, ...] = ("waste_area_um2", "total_length_um", "n_fovs"),
+    priority:         Tuple[str, ...] = ("n_low_coverage_fovs", "waste_area_um2", "total_length_um", "n_fovs"),
+    low_coverage_fraction: float      = 0.5,
 ) -> np.ndarray:
     """
     Drop-in replacement for :func:`build_boundary_path` that additionally
@@ -1127,5 +1154,6 @@ def build_boundary_path_optimized(
         boundary_polygon, hole_polygons, step_size, fov_size_um,
         direction=direction, return_side=return_side,
         n_samples=n_samples, priority=priority,
+        low_coverage_fraction=low_coverage_fraction,
     )
     return result.coords
