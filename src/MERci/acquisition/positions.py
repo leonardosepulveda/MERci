@@ -274,19 +274,34 @@ def filter_scanning_path(
     boundary_polygon: Polygon,
     hole_polygons:    List[Polygon],
     fov_size_um:      float,
+    min_coverage_fraction: float = 0.0,
 ) -> np.ndarray:
     """
     Keep FOVs whose camera frame overlaps the tissue boundary; exclude any
     that are fully contained within a hole region.
 
     Each FOV is modelled as a square of side *fov_size_um* centred at its
-    stage coordinate (``pixel_size_um × image_size_px``).  A FOV is kept when:
+    stage coordinate (``pixel_size_um × image_size_px``).  With the default
+    *min_coverage_fraction* (``0.0``), a FOV is kept when:
 
     * its square has **any** overlap with *boundary_polygon*, **and**
     * no hole polygon **fully contains** its square.
 
     A FOV that only partially overlaps a hole is kept — it still captures
     tissue outside the hole.
+
+    Setting *min_coverage_fraction* > 0 replaces BOTH of those rules with
+    one unified, symmetric test instead: keep the FOV only if its real
+    tissue-overlap fraction (overlap with *boundary_polygon* **minus every
+    hole**, divided by the FOV's own area) is at least *min_coverage_fraction*.
+    This is a genuinely different, stricter policy -- it actually DROPS
+    low-coverage boundary/hole-edge tissue from the imaging plan instead of
+    merely re-phasing the grid around it (contrast with
+    :func:`optimize_grid_offset`'s ``n_low_coverage_fovs`` metric, which only
+    re-ranks grid PHASES and never drops a FOV) -- a real coverage/
+    completeness trade-off, not just an efficiency one: whatever real
+    tissue sits in a dropped FOV is never imaged. The default (``0.0``)
+    preserves the original two-rule behaviour above exactly, unchanged.
 
     Parameters
     ----------
@@ -295,6 +310,10 @@ def filter_scanning_path(
     hole_polygons    : list of Shapely Polygons to exclude
     fov_size_um      : camera FOV side length in stage units
                        (``pixel_size_um × image_size_px``)
+    min_coverage_fraction : ``0.0`` (default) keeps the original any-overlap/
+                       hole-full-containment rule exactly. A value > 0
+                       switches to the stricter unified tissue-overlap-
+                       fraction test described above.
 
     Returns
     -------
@@ -303,15 +322,26 @@ def filter_scanning_path(
     coords = np.asarray(coords, dtype=float)
     half   = fov_size_um / 2.0
 
+    if min_coverage_fraction <= 0.0:
+        kept = []
+        for x, y in coords:
+            fov_poly = shapely_box(x - half, y - half, x + half, y + half)
+            if not fov_poly.intersects(boundary_polygon):
+                continue
+            if any(hole.contains(fov_poly) for hole in hole_polygons):
+                continue
+            kept.append((x, y))
+        return np.array(kept) if kept else np.empty((0, 2))
+
+    effective_tissue = (boundary_polygon.difference(unary_union(hole_polygons))
+                        if hole_polygons else boundary_polygon)
+    fov_area = fov_size_um * fov_size_um
     kept = []
     for x, y in coords:
         fov_poly = shapely_box(x - half, y - half, x + half, y + half)
-        if not fov_poly.intersects(boundary_polygon):
-            continue
-        if any(hole.contains(fov_poly) for hole in hole_polygons):
-            continue
-        kept.append((x, y))
-
+        coverage = fov_poly.intersection(effective_tissue).area / fov_area
+        if coverage >= min_coverage_fraction:
+            kept.append((x, y))
     return np.array(kept) if kept else np.empty((0, 2))
 
 
@@ -940,6 +970,7 @@ def build_boundary_path(
     fov_size_um:      float,
     direction:        str            = "vertical",
     return_side:      Optional[str]  = None,
+    min_coverage_fraction: float     = 0.0,
 ) -> np.ndarray:
     """
     Build the ordered FOV path for a single boundary.
@@ -961,6 +992,11 @@ def build_boundary_path(
                        points to the end; if ``None`` (default) the raw snake
                        order is kept — preferred in the multi-boundary layout,
                        where the transit segments handle travel between boundaries
+    min_coverage_fraction : forwarded to :func:`filter_scanning_path` --
+                       ``0.0`` (default) keeps every boundary-overlapping FOV
+                       as before; > 0 additionally drops real low-coverage
+                       tissue instead of just imaging it (see that
+                       function's docstring).
 
     Returns
     -------
@@ -968,7 +1004,8 @@ def build_boundary_path(
     """
     grid, _, _ = create_grid_positions(boundary_polygon, step_size, direction=direction)
     path       = generate_scanning_path(grid, direction=direction)
-    filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+    filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
+                                       min_coverage_fraction=min_coverage_fraction)
     if return_side is not None and len(filtered) > 1:
         filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
     return filtered
@@ -1005,6 +1042,7 @@ def optimize_grid_offset(
     n_samples:        int                 = 9,
     priority:         Tuple[str, ...]     = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float          = 0.5,
+    min_coverage_fraction: float          = 0.0,
 ) -> GridOffsetResult:
     """
     Search the grid's phase (offset within one *step_size* period) for the
@@ -1074,7 +1112,23 @@ def optimize_grid_offset(
     low_coverage_fraction : a FOV counts as "low coverage" when its own
                        tissue-overlap fraction (tissue-overlap area / FOV
                        area) is strictly below this threshold. Default 0.5
-                       (less than half the FOV is real tissue).
+                       (less than half the FOV is real tissue). Purely a
+                       reporting/ranking metric -- never drops a FOV.
+    min_coverage_fraction : forwarded to :func:`filter_scanning_path` --
+                       ``0.0`` (default) keeps every boundary-overlapping
+                       FOV, matching every candidate evaluated here to that
+                       function's original behaviour. Setting this > 0
+                       actually DROPS low-coverage FOVs from every
+                       candidate instead of just counting them (see that
+                       function's docstring) -- a real coverage/
+                       completeness trade-off, not just a ranking change.
+                       When active, ``n_low_coverage_fovs`` (computed AFTER
+                       filtering) trends toward 0 as *min_coverage_fraction*
+                       approaches *low_coverage_fraction*, since few/no
+                       surviving FOVs can then fall below that threshold --
+                       the two parameters answer different questions
+                       (report vs. actually exclude) and are not meant to
+                       be tuned to the same value as a matter of course.
 
     Returns
     -------
@@ -1101,7 +1155,8 @@ def optimize_grid_offset(
                 boundary_polygon, step_size, direction=direction, offset=(dx, dy),
             )
             path     = generate_scanning_path(grid, direction=direction)
-            filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+            filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
+                                             min_coverage_fraction=min_coverage_fraction)
             if return_side is not None and len(filtered) > 1:
                 filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
 
@@ -1134,7 +1189,8 @@ def optimize_grid_offset(
         boundary_polygon, step_size, direction=direction, offset=best.offset,
     )
     path     = generate_scanning_path(grid, direction=direction)
-    filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um)
+    filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
+                                     min_coverage_fraction=min_coverage_fraction)
     if return_side is not None and len(filtered) > 1:
         filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
 
@@ -1151,6 +1207,7 @@ def build_boundary_path_optimized(
     n_samples:        int             = 9,
     priority:         Tuple[str, ...] = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float      = 0.5,
+    min_coverage_fraction: float      = 0.0,
 ) -> np.ndarray:
     """
     Drop-in replacement for :func:`build_boundary_path` that additionally
@@ -1165,5 +1222,6 @@ def build_boundary_path_optimized(
         direction=direction, return_side=return_side,
         n_samples=n_samples, priority=priority,
         low_coverage_fraction=low_coverage_fraction,
+        min_coverage_fraction=min_coverage_fraction,
     )
     return result.coords
