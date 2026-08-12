@@ -812,6 +812,123 @@ def plot_mosaic_segmentation(canvas: MosaicCanvas, segmentation: MosaicSegmentat
     return ax
 
 
+def normalize_tiles_for_display(
+    tiles:           List[SteveTile],
+    low_percentile:  float = 1.0,
+    high_percentile: float = 99.0,
+) -> List[SteveTile]:
+    """
+    Return a copy of *tiles* with each objective's own pixel values
+    independently rescaled onto a shared ``[0, 1]`` display range.
+
+    For DISPLAY/verification only -- e.g. compositing a low-mag scan
+    together with its high-mag alignment tiles onto one canvas so both are
+    actually visible at once (see :func:`plot_objective_alignment_check`).
+    A shared-percentile stretch over raw values from mixed objectives is
+    otherwise unreadable: real per-objective exposure/gain differences mean
+    the high-mag patch saturates (or the low-mag one vanishes) under a
+    single shared range. Never use the result for real segmentation --
+    :func:`segment_mosaic_tissue` needs each tile's real intensity values,
+    not a display-normalized copy.
+
+    Parameters
+    ----------
+    tiles : from :func:`load_steve_mosaic` (or a filtered/composed subset).
+    low_percentile, high_percentile : percentile bounds -- computed by
+        pooling every tile sharing one ``objective_name`` together, then
+        mapped to ``[0, 1]`` -- so tiles of the same objective stay mutually
+        comparable while different objectives each get their own range.
+
+    Returns
+    -------
+    New list of :class:`SteveTile`, same order, each with a rescaled
+    ``.image`` (float64, clipped to ``[0, 1]``).
+    """
+    from dataclasses import replace
+
+    by_objective: dict = {}
+    for t in tiles:
+        by_objective.setdefault(t.objective_name, []).append(t)
+
+    bounds = {}
+    for objective, obj_tiles in by_objective.items():
+        pooled = np.concatenate([t.image.ravel() for t in obj_tiles])
+        lo, hi = np.percentile(pooled, [low_percentile, high_percentile])
+        bounds[objective] = (lo, hi if hi > lo else lo + 1.0)
+
+    normalized = []
+    for t in tiles:
+        lo, hi = bounds[t.objective_name]
+        img = np.clip((t.image.astype(np.float64) - lo) / (hi - lo), 0.0, 1.0)
+        normalized.append(replace(t, image=img))
+    return normalized
+
+
+def plot_objective_alignment_check(
+    tiles_all:         List[SteveTile],
+    verify_objectives: Optional[List[str]] = None,
+    working_pixel_um:  float = 5.0,
+    low_percentile:    float = 1.0,
+    high_percentile:   float = 99.0,
+    ax=None,
+):
+    """
+    Composite two (or more) objectives together, independently normalized
+    for display, as a visual corroboration that :func:`load_steve_mosaic`'s
+    per-objective ``.msc``-recorded ``(x_offset, y_offset)`` calibration
+    shift is actually landing the objectives' real tissue content in the
+    same place -- not just a numerically-claimed correction. Typical use:
+    a low-mag scan plus a handful of high-mag alignment/reference tiles
+    deliberately overlapping it -- if the shift is correct, the two
+    objectives' shared tissue features line up continuously across the
+    overlap; if not, there is a visible discontinuity/offset.
+
+    This is a DIAGNOSTIC composite only, never the canvas used for real
+    tissue segmentation (:func:`segment_mosaic_tissue` needs
+    :func:`assemble_mosaic_canvas`'s real-intensity canvas, built from
+    :func:`filter_tiles_by_objective`'s single-objective tile list --
+    mixing objectives there is documented to hurt thresholding).
+
+    Parameters
+    ----------
+    tiles_all : every tile from :func:`load_steve_mosaic` (all objectives)
+        -- already includes each tile's real, ``.msc``-corrected stage
+        position, so no additional shift needs to be applied here.
+    verify_objectives : which ``objective_name``(s) to composite; ``None``
+        (default) composites every objective present in *tiles_all*.
+    working_pixel_um : forwarded to :func:`assemble_mosaic_canvas`.
+    low_percentile, high_percentile : forwarded to
+        :func:`normalize_tiles_for_display`.
+    ax : existing matplotlib Axes to draw into; ``None`` creates a new figure.
+
+    Returns
+    -------
+    (ax, canvas) : the Axes drawn into, and the assembled (display-
+    normalized) :class:`MosaicCanvas` -- e.g. to crop/zoom further on a
+    specific overlap region.
+    """
+    import matplotlib.pyplot as plt
+
+    tiles = tiles_all if verify_objectives is None else [
+        t for t in tiles_all if t.objective_name in verify_objectives
+    ]
+    if not tiles:
+        raise ValueError(f"No tiles match verify_objectives={verify_objectives!r}")
+
+    normalized = normalize_tiles_for_display(tiles, low_percentile, high_percentile)
+    canvas = assemble_mosaic_canvas(normalized, working_pixel_um=working_pixel_um)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(canvas.image, cmap="gray", vmin=0.0, vmax=1.0)
+    objectives_present = sorted({t.objective_name for t in tiles})
+    ax.set_title(
+        f"Objective alignment check: {', '.join(objectives_present)} "
+        "(each independently normalized for display)", fontsize=11,
+    )
+    return ax, canvas
+
+
 def save_boundary_from_mosaic(segmentation: MosaicSegmentation, positions_dir: Path) -> List[str]:
     """
     Write ``segmentation``'s polygons as ``boundary_positions*.txt``/``hole*.txt``,
