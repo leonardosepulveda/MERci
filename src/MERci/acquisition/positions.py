@@ -1003,7 +1003,7 @@ def optimize_grid_offset(
     direction:        str                 = "vertical",
     return_side:      Optional[str]       = None,
     n_samples:        int                 = 9,
-    priority:         Tuple[str, ...]     = ("n_low_coverage_fovs", "waste_area_um2", "total_length_um", "n_fovs"),
+    priority:         Tuple[str, ...]     = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float          = 0.5,
 ) -> GridOffsetResult:
     """
@@ -1030,8 +1030,18 @@ def optimize_grid_offset(
     ``waste_area_um2`` (a continuous area sum, dominated by whichever FOVs
     happen to be biggest/most wasteful) targets wasted *area* -- related but
     not the same, and a phase that minimises one need not minimise the
-    other. It is listed first in the default *priority* since minimising
-    wasted imaging time is this search's primary motivation.
+    other.
+
+    Default *priority* leads with ``n_fovs`` itself -- the simplest, most
+    direct proxy for total imaging time (every FOV costs roughly the same
+    fixed acquisition time regardless of content), chosen deliberately over
+    leading with ``n_low_coverage_fovs`` after a full sweep of every
+    priority ordering on a real benchmark
+    (``notebooks/tests/compare_fov_coverage_constraint.ipynb``) showed the
+    two only trade off by a handful of FOVs either way (e.g. 1152 FOVs/214
+    low-coverage vs. 1161 FOVs/209 low-coverage on that benchmark) -- no
+    ordering dominates the other, so the simpler, more directly-motivated
+    objective was preferred.
 
     Parameters
     ----------
@@ -1058,9 +1068,9 @@ def optimize_grid_offset(
                        ``(0, 0)`` centred grid as one candidate
     priority         : ``GridOffsetCandidate`` field names, most important
                        first, used to lexicographically rank candidates
-                       (each minimised). Default: low-coverage FOV count
-                       first (wasted imaging time), then wasted area, then
-                       travel length, then FOV count.
+                       (each minimised). Default: FOV count first (the
+                       simplest direct proxy for imaging time), then wasted
+                       area, then travel length, then low-coverage FOV count.
     low_coverage_fraction : a FOV counts as "low coverage" when its own
                        tissue-overlap fraction (tissue-overlap area / FOV
                        area) is strictly below this threshold. Default 0.5
@@ -1139,7 +1149,7 @@ def build_boundary_path_optimized(
     direction:        str             = "vertical",
     return_side:      Optional[str]   = None,
     n_samples:        int             = 9,
-    priority:         Tuple[str, ...] = ("n_low_coverage_fovs", "waste_area_um2", "total_length_um", "n_fovs"),
+    priority:         Tuple[str, ...] = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float      = 0.5,
 ) -> np.ndarray:
     """
