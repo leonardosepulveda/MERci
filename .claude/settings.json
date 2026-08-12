@@ -1,6 +1,5 @@
 {
   "permissions": {
-    "defaultMode": "auto",
     "allow": [
       "Read",
       "Glob",
@@ -46,8 +45,12 @@
       "PowerShell(ForEach-Object*)",
       "PowerShell(Select-String*)",
       "PowerShell(Format-List*)",
-      "PowerShell(Out-Null*)"
+      "PowerShell(Out-Null*)",
+      "Bash(python -c ' *)",
+      "PowerShell(Get-Command python, python3, py -ErrorAction SilentlyContinue)",
+      "PowerShell(& mamba env list 2>$null)"
     ],
+    "defaultMode": "auto",
     "additionalDirectories": [
       ".."
     ]
@@ -58,8 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "bash",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"Reminder: per CLAUDE.md, log this request to prompt_history/ as {YYYY_MM_DD_HH_MM}_{short_description}.md with YAML frontmatter (date, title, files_modified, status) and Prompt / Plan / Summary sections. Create/update it before ending the turn.\"}}'",
+            "shell": "bash",
             "timeout": 10
           }
         ]
@@ -70,8 +73,8 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "powershell",
             "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\save_verbatim.ps1\"",
+            "shell": "powershell",
             "timeout": 30,
             "statusMessage": "Saving verbatim response"
           }
