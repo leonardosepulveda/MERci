@@ -387,6 +387,8 @@ def segment_mosaic_tissue(
     min_hole_area_um2:    float = 500.0,
     min_island_area_um2:  float = 1000.0,
     simplify_tol_um:      float = 15.0,
+    near_fragment_max_distance_um: float = 0.0,
+    min_near_fragment_area_um2:    float = 0.0,
 ) -> MosaicSegmentation:
     """
     Threshold a mosaic canvas into tissue and hole polygons.
@@ -419,10 +421,35 @@ def segment_mosaic_tissue(
        hole polygon (``shapely.geometry.Polygon(exterior, holes=[...])``),
        so the island area is correctly excluded *from* the hole (i.e. still
        imaged) instead of being silently swallowed into a solid disk.
-    7. Drop components below ``min_tissue_area_um2``/``min_hole_area_um2``,
+    7. Drop tissue components below ``min_tissue_area_um2`` -- UNLESS
+       ``near_fragment_max_distance_um`` > 0 and the component is within
+       that distance of an already-kept (large) component AND at least
+       ``min_near_fragment_area_um2`` in its own area, in which case it is
+       kept anyway (see below). Drop holes below ``min_hole_area_um2``,
        drop islands below ``min_island_area_um2``, and simplify each
        polygon by ``simplify_tol_um`` (marching squares otherwise produces
        one vertex per canvas pixel of perimeter).
+
+    **Recovering small real tissue fragments near an already-kept piece**
+    (``near_fragment_max_distance_um``, default ``0.0`` = disabled, exactly
+    reproducing the original single-threshold behaviour above). A single
+    global ``min_tissue_area_um2`` cannot distinguish a genuine small piece
+    of tissue near the edge of a larger kept piece (e.g. a torn/frayed bit,
+    or a fragment near a hole) from a background dust speck of similar
+    size -- confirmed directly on a real mosaic: both populations spanned
+    a near-identical small-area range, so simply lowering the area
+    threshold recovers real fragments at roughly a 10-to-1 cost in
+    reintroduced background noise. Distance to an already-kept piece is a
+    much stronger discriminator: a component sitting right at a real
+    tissue's edge is very likely real tissue too, while one sitting alone
+    far out in empty background is very likely debris, regardless of their
+    similar areas. When ``near_fragment_max_distance_um`` > 0, any
+    component below ``min_tissue_area_um2`` is still kept if (a) its
+    nearest pixel is within this distance of an already-kept (>=
+    ``min_tissue_area_um2``) tissue component, AND (b) its own area is at
+    least ``min_near_fragment_area_um2`` (default ``0.0`` -- any size, so
+    long as it clears the distance test; raise this to also require a
+    minimum size even for near-boundary recovery).
 
     Parameters
     ----------
@@ -438,6 +465,12 @@ def segment_mosaic_tissue(
         becoming spurious interior rings; a genuine tissue island is
         typically well above this.
     simplify_tol_um : Shapely ``simplify`` tolerance, in microns.
+    near_fragment_max_distance_um : ``0.0`` (default) disables fragment
+        recovery entirely. > 0 recovers small tissue components within this
+        distance (um) of an already-kept piece -- see above.
+    min_near_fragment_area_um2 : minimum area (um^2) for a recovered
+        fragment (only checked when ``near_fragment_max_distance_um`` > 0).
+        Default ``0.0`` -- no additional size floor beyond the distance test.
 
     Returns
     -------
@@ -463,6 +496,36 @@ def segment_mosaic_tissue(
 
     tissue_labels, n_tissue = ndimage.label(filled)
     hole_labels, n_holes = ndimage.label(holes_mask)
+
+    # Which tissue label ids to keep, before contour tracing -- normally
+    # just the ones clearing min_tissue_area_um2, optionally expanded by the
+    # near-fragment recovery pass described above.
+    min_tissue_area_px = min_tissue_area_um2 / (px * px)
+    tissue_areas_px = (
+        ndimage.sum(np.ones_like(tissue_labels), tissue_labels, index=np.arange(1, n_tissue + 1))
+        if n_tissue else np.array([])
+    )
+    primary_ids = set(int(i) for i in np.arange(1, n_tissue + 1)[tissue_areas_px >= min_tissue_area_px])
+
+    if near_fragment_max_distance_um > 0 and n_tissue and primary_ids:
+        primary_mask = np.isin(tissue_labels, list(primary_ids))
+        dist_to_primary_px = ndimage.distance_transform_edt(~primary_mask)
+        min_dist_px_per_label = ndimage.minimum(
+            dist_to_primary_px, tissue_labels, index=np.arange(1, n_tissue + 1)
+        )
+        min_near_fragment_area_px = min_near_fragment_area_um2 / (px * px)
+        recovered_ids = {
+            int(lid) for lid, area_px, dist_px in zip(
+                np.arange(1, n_tissue + 1), tissue_areas_px, np.atleast_1d(min_dist_px_per_label)
+            )
+            if lid not in primary_ids
+            and area_px >= min_near_fragment_area_px
+            and dist_px * px <= near_fragment_max_distance_um
+        }
+    else:
+        recovered_ids = set()
+
+    keep_tissue_ids = primary_ids | recovered_ids
 
     def _contour_polygon(
         label_img:              np.ndarray,
@@ -507,12 +570,14 @@ def segment_mosaic_tissue(
             poly = poly.buffer(0)
         return poly if (not poly.is_empty and poly.area > 0) else None
 
-    min_tissue_area_px = min_tissue_area_um2 / (px * px)
     min_hole_area_px = min_hole_area_um2 / (px * px)
 
+    # min_area_px=0 below: inclusion was already decided above (keep_tissue_ids
+    # is primary_ids | recovered_ids), so _contour_polygon's own area gate
+    # would otherwise re-exclude every recovered sub-threshold fragment.
     tissue_polygons = [
-        p.simplify(simplify_tol_um) for lid in range(1, n_tissue + 1)
-        if (p := _contour_polygon(tissue_labels, lid, min_tissue_area_px)) is not None
+        p.simplify(simplify_tol_um) for lid in sorted(keep_tissue_ids)
+        if (p := _contour_polygon(tissue_labels, lid, 0)) is not None
     ]
     hole_polygons = [
         p.simplify(simplify_tol_um) for lid in range(1, n_holes + 1)
