@@ -1606,6 +1606,22 @@ heading if no buffer content exists for this request (e.g. very old entries
 predating the buffer).>
 ```
 
+**Never fabricate the filename/frontmatter timestamp.** The `{YYYY_MM_DD_HH_MM}`
+in the filename and the `date:` field in the frontmatter must come from an
+actually-queried current time — the `UserPromptSubmit` hook's own injected
+`Current local date/time: … (epoch N)` line when it's present in context, or
+otherwise a direct tool call (`date "+%Y-%m-%d %H:%M"` in Bash, or
+`Get-Date` in PowerShell) run before naming the file. Do not estimate,
+round, reuse a "plausible-looking" value, or space consecutive entries at a
+suspiciously regular interval (e.g. every 15 minutes). This exact failure
+mode already happened once before (`prompt_history/
+2026_06_18_1749_global_no_fabrication_rule.md`) and was fixed there with a
+global rule in `~/.claude/CLAUDE.md` — that global file was lost at some
+point (confirmed missing on this machine as of 2026-08-12, most likely
+during a computer migration) and the rule regressed as a result; this repo
+copy is the reinforcement going forward. If genuinely no time source is
+available, say so in the entry rather than inventing one.
+
 The `UserPromptSubmit` date/time hook injects `Current local date/time: … (epoch N)`
 on every prompt. Compute **`elapsed`** (written just before `status`) as the finish
 time minus that submit epoch: run `date +%s` (bash) or
