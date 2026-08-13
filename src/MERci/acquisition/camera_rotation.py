@@ -651,6 +651,8 @@ def _connected_components(correspondences: List[NeighborCorrespondence]) -> List
 def fit_global_positions(
     correspondences:  List[NeighborCorrespondence],
     nominal_positions: Dict[int, Tuple[float, float]],
+    lsqr_atol:         float = 1.0e-12,
+    lsqr_btol:         float = 1.0e-12,
 ) -> GlobalPositionCorrection:
     """
     Jointly solve for every measured FOV's own real position from all kept
@@ -710,6 +712,30 @@ def fit_global_positions(
     would need denser/overlapping sampling to provide redundant constraints
     per FOV.
 
+    ``lsqr``'s own default convergence tolerances are too loose once this IS
+    run on a dense, overlapping correspondence set (e.g. every FOV of a
+    several-hundred-FOV grid measured against most/all of its real
+    neighbours, as `notebooks/tests/compare_stitching_correction_methods.
+    ipynb` does) -- confirmed directly on real data (BC555_sample_05/epi,
+    476 FOVs, 1662 kept correspondences, one connected component): calling
+    ``lsqr`` with no explicit ``atol``/``btol`` (i.e. scipy's own defaults)
+    declared convergence with ``residual_rms_um`` = 81.6 -- roughly 25x the
+    real ~3um signal this whole method exists to resolve -- while
+    ``atol=btol=1e-12`` on the exact same input converges properly
+    (``istop`` 1 or 2, a genuine "good enough" stop, not an iteration-limit
+    cutoff) to 0.025um, a two-thousand-fold tighter, far more physically
+    plausible residual. The small, sparse-star components this function was
+    originally written for never exposed this: a handful of unknowns
+    converges to any reasonable tolerance in a few iterations regardless, so
+    the default tolerance being loose never mattered until a large, densely
+    connected system was actually solved. Do not loosen these below their
+    own defaults without re-confirming convergence the same way (``istop``
+    close to 1/2, not 7 (iteration limit) or 3/4 (ill-conditioned) --
+    raising ``PIN_WEIGHT`` far past its current value chases the same
+    convergence problem: at ``1e8`` on this same dataset, ``lsqr`` hit
+    ``istop=3`` (excessive condition number) after only 5 iterations and the
+    residual got WORSE (206.8), not better).
+
     Parameters
     ----------
     correspondences   : from :func:`sample_neighbor_correspondences`,
@@ -720,6 +746,10 @@ def fit_global_positions(
                         correspondence's ANCHOR's own nominal position,
                         which isn't stored on the correspondence itself --
                         only the neighbour's is)
+    lsqr_atol, lsqr_btol : passed straight through to
+                        ``scipy.sparse.linalg.lsqr`` for both the x and y
+                        solves -- see the convergence note above before
+                        loosening these.
 
     Returns
     -------
@@ -772,7 +802,7 @@ def fit_global_positions(
             A[row, fov_to_idx[pin_fov]] = PIN_WEIGHT
             b[row] = PIN_WEIGHT * nominal_positions[pin_fov][axis]
 
-        solution = lsqr(A.tocsr(), b)[0]
+        solution = lsqr(A.tocsr(), b, atol=lsqr_atol, btol=lsqr_btol)[0]
         return solution
 
     x_solution = _solve_axis(0)
@@ -796,3 +826,184 @@ def fit_global_positions(
         positions=positions, anchor_fovs=anchor_fovs, n_fovs_solved=len(positions),
         n_correspondences=n_corr, n_components=len(components), residual_rms_um=residual_rms_um,
     )
+
+
+@dataclass
+class LocalPositionCorrection:
+    """
+    Per-FOV positions from a GREEDY, most-reliable-direction-first
+    spanning-tree walk outward from a fixed root FOV (see
+    :func:`greedy_local_positions`) -- an alternative to
+    :func:`fit_global_positions`'s joint least-squares solve, for a densely
+    (not sparsely) sampled correspondence set where every FOV has several
+    real 4-connected measurements and a genuine choice of which one to trust.
+
+    Attributes
+    ----------
+    positions        : ``{fov_id: (x, y)}`` (µm) -- every id appearing in
+                       *nominal_positions* or the correspondence graph;
+                       unreached FOVs fall back to their own nominal position
+    root_fov          : the FOV held fixed at its own nominal position
+    n_fovs_placed     : FOVs actually reached via the spanning-tree walk
+                       (excludes root_fov and any fallback-to-nominal FOV)
+    n_fovs_unreached  : FOVs with no path to *root_fov* through the kept
+                       correspondence graph -- fell back to nominal position
+    n_correspondences : how many correspondences fed the walk
+    """
+    positions:         Dict[int, Tuple[float, float]]
+    root_fov:          int
+    n_fovs_placed:     int
+    n_fovs_unreached:  int
+    n_correspondences: int
+
+
+def greedy_local_positions(
+    correspondences:       List[NeighborCorrespondence],
+    nominal_positions:     Dict[int, Tuple[float, float]],
+    direction_reliability: Optional[Dict[str, float]] = None,
+    root_fov:              int = 0,
+) -> LocalPositionCorrection:
+    """
+    Place every FOV by walking outward from *root_fov*, at each step always
+    taking the highest-priority (most reliable direction) correspondence
+    that reaches a not-yet-placed FOV from an already-placed one -- Prim's
+    algorithm for a maximum-priority spanning tree, where "weight" is a
+    whole DIRECTION's own reliability (e.g. that direction's std of
+    ``measured - nominal`` deviation across many independent
+    correspondences), not any single measurement's own noise.
+
+    Contrast with :func:`fit_global_positions`: that function uses every
+    kept correspondence AT ONCE and lets disagreements average out via least
+    squares -- principled, but blind to "this whole direction is generally
+    noisier" (it only sees per-measurement disagreement, and with one
+    measurement per FOV -- the common sparse-sampling case -- there is
+    nothing to average against at all). This function instead uses exactly
+    ONE correspondence to place any given FOV -- whichever available one
+    belongs to the currently-most-reliable direction -- and simply never
+    uses any other correspondence that also reaches that FOV (a "cut" edge).
+    Well-suited to a DENSE, exhaustive correspondence set (every FOV
+    measured against most/all of its real neighbours) where a genuine,
+    informative choice between directions exists at almost every step;
+    degrades to plain BFS (first-reached wins) if *direction_reliability* is
+    ``None``.
+
+    Parameters
+    ----------
+    correspondences        : from :func:`sample_neighbor_correspondences`,
+                              ideally already passed through
+                              :func:`filter_correspondence_outliers`
+    nominal_positions       : ``{fov_id: (x, y)}`` -- the full grid's nominal
+                              positions; used to look up each
+                              correspondence's ANCHOR's own nominal position
+                              (needed to recover the real relative offset,
+                              same as :func:`fit_global_positions`), and as
+                              the fallback position for any FOV this walk
+                              never reaches
+        direction_reliability : ``{direction: score}``, LOWER = more reliable
+                              (e.g. that direction's own std of
+                              ``measured - nominal`` deviation, from a
+                              reliability scatter plot). ``None`` (default)
+                              treats every direction equally.
+    root_fov                : the FOV held fixed at its own nominal position
+                              (default 0)
+
+    Returns
+    -------
+    LocalPositionCorrection
+    """
+    import heapq
+
+    # Bidirectional adjacency: correspondence anchor->neighbor with measured
+    # relative offset r = measured_xy(neighbor) - nominal_xy(anchor) implies
+    # neighbor's position = anchor's position + r (forward), or equally
+    # anchor's position = neighbor's position - r (reverse) -- same
+    # correspondence, usable to place either endpoint from the other.
+    adjacency: Dict[int, List[Tuple[int, Tuple[float, float], str]]] = {}
+    for c in correspondences:
+        r = (
+            c.measured_xy[0] - nominal_positions[c.anchor_fov][0],
+            c.measured_xy[1] - nominal_positions[c.anchor_fov][1],
+        )
+        adjacency.setdefault(c.anchor_fov, []).append((c.neighbor_fov, r, c.direction))
+        adjacency.setdefault(c.neighbor_fov, []).append((c.anchor_fov, (-r[0], -r[1]), c.direction))
+
+    def _priority(direction: str) -> float:
+        if direction_reliability is None:
+            return 0.0
+        return direction_reliability.get(direction, float("inf"))
+
+    positions: Dict[int, Tuple[float, float]] = {root_fov: nominal_positions[root_fov]}
+    heap: List[Tuple[float, int, int, int, Tuple[float, float]]] = []
+    counter = 0   # stable tie-break within equal priority, insertion order
+
+    def _push_frontier(fov: int) -> None:
+        nonlocal counter
+        for nb, r, direction in adjacency.get(fov, []):
+            if nb in positions:
+                continue
+            counter += 1
+            heapq.heappush(heap, (_priority(direction), counter, fov, nb, r))
+
+    _push_frontier(root_fov)
+    while heap:
+        _, _, frm, to, r = heapq.heappop(heap)
+        if to in positions:
+            continue   # already placed via a higher-priority path since this was queued
+        frm_pos = positions[frm]
+        positions[to] = (frm_pos[0] + r[0], frm_pos[1] + r[1])
+        _push_frontier(to)
+
+    n_unreached = 0
+    for fov in set(nominal_positions) | set(adjacency):
+        if fov not in positions:
+            positions[fov] = nominal_positions[fov]
+            n_unreached += 1
+
+    return LocalPositionCorrection(
+        positions=positions, root_fov=root_fov,
+        n_fovs_placed=len(positions) - n_unreached - 1,   # exclude root_fov itself
+        n_fovs_unreached=n_unreached,
+        n_correspondences=len(correspondences),
+    )
+
+
+def overlap_correlation(
+    anchor_img:       np.ndarray,
+    neighbor_img:     np.ndarray,
+    direction:        str,
+    overlap_fraction: float,
+    extra_shift_um:   Tuple[float, float] = (0.0, 0.0),
+    pixel_size_um:    float = 1.0,
+) -> float:
+    """
+    Pearson correlation between an anchor/neighbour pair's overlap-band
+    crops, optionally shifting the neighbour's crop by *extra_shift_um*
+    (an ``(dx, dy)`` offset BEYOND the nominal-grid alignment
+    :func:`crop_overlap` already assumes) before correlating.
+
+    Unlike :func:`register_neighbor_pair`, this does not itself measure a
+    shift via phase correlation -- it evaluates agreement AT a shift already
+    decided elsewhere (zero, for the raw nominal grid; a fitted affine
+    transform's own implied residual; a position-solve's own implied
+    residual; ...), so several candidate position sets can be compared
+    against each other on equal footing using the same real image content.
+
+    Returns ``0.0`` (not ``NaN``) for a degenerate (constant) crop -- a
+    zero-variance crop has no real correlation to report, and ``NaN`` would
+    silently corrupt any downstream mean.
+    """
+    from scipy.ndimage import shift as ndi_shift
+
+    a_crop, n_crop = crop_overlap(anchor_img, neighbor_img, direction, overlap_fraction)
+    a_crop = remove_hot_pixels(a_crop).astype(np.float64)
+    n_crop = remove_hot_pixels(n_crop).astype(np.float64)
+
+    dx_px = extra_shift_um[0] / pixel_size_um
+    dy_px = extra_shift_um[1] / pixel_size_um
+    if dx_px != 0.0 or dy_px != 0.0:
+        n_crop = ndi_shift(n_crop, shift=(dy_px, dx_px), order=1, mode="nearest")
+
+    a_flat, n_flat = a_crop.ravel(), n_crop.ravel()
+    if a_flat.std() == 0.0 or n_flat.std() == 0.0:
+        return 0.0
+    return float(np.corrcoef(a_flat, n_flat)[0, 1])
