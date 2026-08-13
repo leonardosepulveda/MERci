@@ -15,6 +15,9 @@ read_image              – format-agnostic dispatcher for the three formats abo
 get_dax_shape           – read .dax shape without loading pixel data
 discover_image_files    – scan a directory for stable image files
                           (handles flat files and .zarr directory stores)
+is_path_stable          – single-path stability check (used by
+                          discover_image_files and by callers that already
+                          have one specific path, not a directory to scan)
 path_mtime              – effective last-write mtime of a file OR a directory
                           store (max mtime of its contents, zarr-aware)
 read_dax_frames/read_zarr_frames/read_tiff_frames/read_image_frames
@@ -608,27 +611,38 @@ def discover_image_files(
                 pass
         return stable
 
-    stable = []
-    for p in candidates:
-        try:
-            if p.is_dir():
-                # Directory store (zarr): measure total content size
-                s0 = _dir_content_size(p)
-                if s0 == 0:
-                    continue
-                time.sleep(stability_delay)
-                s1 = _dir_content_size(p)
-            else:
-                s0 = p.stat().st_size
-                if s0 == 0:
-                    continue
-                time.sleep(stability_delay)
-                s1 = p.stat().st_size
-            if s0 == s1:
-                stable.append(p)
-        except FileNotFoundError:
-            pass
-    return stable
+    return [p for p in candidates if is_path_stable(p, stability_delay)]
+
+
+def is_path_stable(path: Path, stability_delay: float = 0.1) -> bool:
+    """
+    True iff *path* -- a flat file or a directory store (e.g. ``.zarr``) --
+    has not changed size in the last *stability_delay* seconds, i.e. it looks
+    done being written rather than still being actively written to (HAL
+    writes are incremental, so an image file/store can already ``exist()``
+    -- and even already hold some real frames -- well before every frame of
+    its stack has landed on disk).
+
+    False (not True) for a path that doesn't exist, or a zero-size/empty one
+    -- "can't confirm it's stable" should never be treated as "stable."
+    """
+    path = Path(path)
+    try:
+        if path.is_dir():
+            s0 = _dir_content_size(path)
+            if s0 == 0:
+                return False
+            time.sleep(stability_delay)
+            s1 = _dir_content_size(path)
+        else:
+            s0 = path.stat().st_size
+            if s0 == 0:
+                return False
+            time.sleep(stability_delay)
+            s1 = path.stat().st_size
+        return s0 == s1
+    except FileNotFoundError:
+        return False
 
 
 def _dir_content_size(path: Path) -> int:
