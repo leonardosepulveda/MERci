@@ -443,6 +443,7 @@ def create_slurm_submit_script(
     conda_pkgs_dir:            str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/pkgs",
     conda_envs_path:           str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/envs",
     allow_ragged_z_stacks:     bool   = False,
+    analysis_name:             Optional[str] = None,
 ) -> Path:
     """
     Write the sbatch script that runs ``merlin`` for one experiment.
@@ -493,6 +494,16 @@ def create_slurm_submit_script(
                      ``prompt_history/2026_07_16_1015_variable_z_per_fov_
                      storm_control_investigation.md``); ``False`` (default)
                      leaves the generated script identical to before.
+    analysis_name  : passes ``-x <analysis_name>`` to ``merlin``, so its
+                     analysis/output folder is ``analysisHome/<analysis_name>``
+                     (e.g. ``"$SAMPLE_DIR/merlin/output"``) instead of
+                     ``analysisHome/<folder_name>`` -- MERlin otherwise mirrors
+                     the raw-data folder's own (possibly deep/nested) path
+                     under the analysis home. Requires a MERlin checkout with
+                     the ``-x``/``--analysis-name`` flag (``~/Software/
+                     merlin_cc`` as of this writing; NOT present in the older
+                     ``merlin_cp4_env`` fork). ``None`` (default) omits the
+                     flag, leaving the generated script identical to before.
     """
     output_path = Path(output_path)
     if slurm_out_path is None:
@@ -502,6 +513,7 @@ def create_slurm_submit_script(
 
     sample_dir = sample_dir.rstrip("/")
     ragged_flag = " \\\n       --allow-ragged-z-stacks" if allow_ragged_z_stacks else ""
+    analysis_name_flag = f' \\\n       -x "{analysis_name}"' if analysis_name else ""
 
     script = f"""#!/bin/bash
 #SBATCH -n 1
@@ -533,7 +545,7 @@ merlin -k "$SAMPLE_DIR/{parameters_file}" \\
        -m "$SAMPLE_DIR/{microscope_file}" \\
        -n 1000 \\
        -e {data_home} \\
-       -s "$SAMPLE_DIR/merlin"{ragged_flag} \\
+       -s "$SAMPLE_DIR/merlin"{analysis_name_flag}{ragged_flag} \\
        {folder_name}
 
 date +'Finished at %R.'
