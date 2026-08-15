@@ -651,6 +651,11 @@ class MerlinAnalysisSpec:
     include_segmentation:  bool = False
     segmentation_method:   str  = "CellPoseSegment3D"   # or "CellPoseSegmentSAM"
     segmentation_params:   Dict[str, Any] = field(default_factory=dict)
+    include_smfish:        bool = False   # smFISH spot detection on sequential (non-barcode) bits
+    smfish_channel_names:  List[str] = field(default_factory=list)
+    smfish_params:         Dict[str, Any] = field(default_factory=dict)
+    include_sum_signal:    bool = False   # simple summed per-cell intensity on sequential bits
+    sum_signal_params:     Dict[str, Any] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:
         path = Path(path)
@@ -689,7 +694,14 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
     segmentation chain (``include_segmentation``): CellPoseSegment3D or
     CellPoseSegmentSAM -> CleanCellBoundaries -> CombineCleanedBoundaries ->
     RefineCellDatabases -> PartitionBarcodes -> ExportPartitionedBarcodes ->
-    ExportCellMetadata (matches ``merlin_analysis_BC522.json``'s tail).
+    ExportCellMetadata (matches ``merlin_analysis_BC522.json``'s tail) -- and
+    finally two independent optional tail steps for sequential (non-barcode)
+    bits: ``include_smfish`` (SmfishSignal spot detection) and
+    ``include_sum_signal`` (SumSignal + ExportSumSignals, simple summed
+    per-cell intensity). Both read the bits MERlin considers "sequential"
+    from the data-organization file itself (any ``readoutName`` absent from
+    the codebook's ``bit_names``) -- see ``merlin.data.dataorganization.
+    DataOrganization.get_sequential_rounds``.
 
     Building this programmatically (rather than copying and hand-editing, as
     before) also avoids a real bug present in the live ``merlin_analysis_
@@ -793,6 +805,32 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
             "ExportCellMetadata", "merlin.analysis.segment",
             {"segment_task": "RefineCellDatabases"},
         ))
+
+    if spec.include_smfish:
+        if not spec.smfish_channel_names:
+            raise ValueError("include_smfish=True requires smfish_channel_names.")
+        smfish_params = {
+            "warp_task": "FiducialCorrelationWarp",
+            "global_align_task": "SimpleGlobalAlignment",
+            "channel_names": list(spec.smfish_channel_names),
+            **({"segment_task": "RefineCellDatabases"} if spec.include_segmentation else {}),
+            **spec.smfish_params,
+        }
+        tasks.append(_task("SmfishSignal", "merlin.analysis.sequential", smfish_params))
+
+    if spec.include_sum_signal:
+        if not spec.include_segmentation:
+            raise ValueError("include_sum_signal=True requires include_segmentation=True "
+                              "(SumSignal needs a segment_task).")
+        sum_signal_params = {
+            "warp_task": "FiducialCorrelationWarp",
+            "global_align_task": "SimpleGlobalAlignment",
+            "segment_task": "RefineCellDatabases",
+            **spec.sum_signal_params,
+        }
+        tasks.append(_task("SumSignal", "merlin.analysis.sequential", sum_signal_params, "SumSignal"))
+        tasks.append(_task("ExportSumSignals", "merlin.analysis.sequential",
+                            {"sequential_task": "SumSignal"}))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
