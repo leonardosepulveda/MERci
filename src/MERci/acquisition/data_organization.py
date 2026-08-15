@@ -10,7 +10,7 @@ frame carries the fiducial (bead) reference.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -26,6 +26,7 @@ def create_data_organization(
     cells_series:      str,
     include_dapi:      bool = True,
     dapi_bit_number:   int  = 47,
+    sequential_gene_names: Optional[Dict[int, str]] = None,
 ) -> pd.DataFrame:
     """
     Build the MERlin data-organization DataFrame.
@@ -41,6 +42,14 @@ def create_data_organization(
     cells_series      : series pattern for cells, e.g. ``"hal-mf3-cells_{fov:03d}"``
     include_dapi      : whether to append a DAPI row from the cells frame table
     dapi_bit_number   : bit number assigned to DAPI (default 47)
+    sequential_gene_names : optional ``{bit_number: gene_name}`` map for
+                        sequential (non-barcode) bits — e.g. ``{17: "S100a9"}``.
+                        Bits present in this map get that gene name as their
+                        ``channelName`` (so downstream MERlin sequential-bit
+                        tasks like ``SmfishSignal``/``SumSignal`` can reference
+                        them by gene); any bit absent from the map (including
+                        all bits when this is ``None``) keeps the default
+                        ``bitNN`` channelName, unchanged from before.
 
     Returns
     -------
@@ -62,7 +71,7 @@ def create_data_organization(
     for round_1idx, bit, color_nm in round_bit_color:
         rows.append({
             "readoutName":         readout_name_map[bit],
-            "channelName":         f"bit{bit:02d}",
+            "channelName":         (sequential_gene_names or {}).get(bit, f"bit{bit:02d}"),
             "imageType":           bits_image_type,
             "imageRegExp":         bits_regexp,
             "bitNumber":           bit,
