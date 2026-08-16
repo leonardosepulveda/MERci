@@ -561,8 +561,23 @@ date +'Finished at %R.'
 # against 4 real files: merlin_analysis_LT048.json (== merlin_analysis_
 # ref_no_cells.json byte-for-byte -- the no-segmentation baseline these
 # defaults are copied from), merlin_analysis_BC522.json (baseline + reporting
-# + full CellPoseSegment3D chain), and analysis_cellposeSAM_Dark_only.json
-# (the lighter CellPoseSegmentSAM variant).
+# + full CellPoseSegment3D chain), analysis_cellposeSAM_Dark_only.json
+# (the lighter CellPoseSegmentSAM variant), and analysis_decode_v2_
+# aaron_260816.json (same overall task chain -- FiducialCorrelationWarp ->
+# DeconvolutionPreprocess -> chained OptimizeIteration -> Decode ->
+# GenerateAdaptiveThreshold -> AdaptiveFilterBarcodes -> ExportBarcodes ->
+# PlotPerformance -- with a global-alignment task in the mix).
+
+# The global-alignment task used everywhere below. LeastSquaresGlobalAlignment
+# (`merlin.analysis.globalalign`, same module as SimpleGlobalAlignment) is
+# merlin_cc's current implementation -- corrects each fov's nominal position
+# via a joint sparse least-squares solve over real pairwise image-registration
+# measurements, instead of trusting the nominal stage position outright as
+# SimpleGlobalAlignment (used by the older analysis_decode_v2_aaron_260816.json
+# reference) does. See that class's own docstring in `merlin/analysis/
+# globalalign.py` (`~/Software/merlin_cc`) for why this correction needs a
+# joint per-fov solve rather than one global affine transform.
+_GLOBAL_ALIGN_TASK = "LeastSquaresGlobalAlignment"
 
 _WARP_DEFAULTS = {
     "highpass_sigma": 20,
@@ -686,10 +701,13 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 
     Assembles, in order: FiducialCorrelationWarp, DeconvolutionPreprocess,
     ``n_optimize_iterations`` chained OptimizeIteration tasks, Decode,
-    SimpleGlobalAlignment, GenerateAdaptiveThreshold, AdaptiveFilterBarcodes,
+    LeastSquaresGlobalAlignment, GenerateAdaptiveThreshold, AdaptiveFilterBarcodes,
     ExportBarcodes — the verified no-segmentation baseline (matches
     ``merlin_analysis_ref_no_cells.json``/``merlin_analysis_LT048.json``
-    exactly when every ``*_params`` override is empty) — then, if requested,
+    exactly when every ``*_params`` override is empty, aside from the global-
+    alignment task -- those two reference files, like
+    ``analysis_decode_v2_aaron_260816.json``, still use the older
+    ``SimpleGlobalAlignment``) — then, if requested,
     PlotPerformance + SlurmReport (``include_reporting``), then a full
     segmentation chain (``include_segmentation``): CellPoseSegment3D or
     CellPoseSegmentSAM -> CleanCellBoundaries -> CombineCleanedBoundaries ->
@@ -713,7 +731,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
                           **spec.preprocess_params}
     decode_params     = {**_DECODE_DEFAULTS, "preprocess_task": "DeconvolutionPreprocess",
                           "optimize_task": f"Optimize{spec.n_optimize_iterations:02d}",
-                          "global_align_task": "SimpleGlobalAlignment",
+                          "global_align_task": _GLOBAL_ALIGN_TASK,
                           **spec.decode_params}
     filter_params     = {**_FILTER_DEFAULTS, "decode_task": "Decode",
                           "adaptive_task": "GenerateAdaptiveThreshold", **spec.filter_params}
@@ -737,7 +755,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
         tasks.append(_task("OptimizeIteration", "merlin.analysis.optimize", params, name))
 
     tasks.append(_task("Decode", "merlin.analysis.decode", decode_params, "Decode"))
-    tasks.append(_task("SimpleGlobalAlignment", "merlin.analysis.globalalign"))
+    tasks.append(_task(_GLOBAL_ALIGN_TASK, "merlin.analysis.globalalign"))
     tasks.append(_task(
         "GenerateAdaptiveThreshold", "merlin.analysis.filterbarcodes",
         {"decode_task": "Decode", "run_after_task": "Decode"},
@@ -766,11 +784,11 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
         method = spec.segmentation_method
         if method == "CellPoseSegment3D":
             seg_params = {"warp_task": "FiducialCorrelationWarp",
-                          "global_align_task": "SimpleGlobalAlignment",
+                          "global_align_task": _GLOBAL_ALIGN_TASK,
                           **_SEGMENT_3D_DEFAULTS, **spec.segmentation_params}
         elif method == "CellPoseSegmentSAM":
             seg_params = {"warp_task": "FiducialCorrelationWarp",
-                          "global_align_task": "SimpleGlobalAlignment",
+                          "global_align_task": _GLOBAL_ALIGN_TASK,
                           **_SEGMENT_SAM_DEFAULTS, **spec.segmentation_params}
         else:
             raise ValueError(
@@ -780,7 +798,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
         tasks.append(_task(method, "merlin.analysis.segment", seg_params))
         tasks.append(_task(
             "CleanCellBoundaries", "merlin.analysis.segment",
-            {"segment_task": method, "global_align_task": "SimpleGlobalAlignment"},
+            {"segment_task": method, "global_align_task": _GLOBAL_ALIGN_TASK},
         ))
         tasks.append(_task(
             "CombineCleanedBoundaries", "merlin.analysis.segment",
@@ -793,7 +811,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
         tasks.append(_task(
             "PartitionBarcodes", "merlin.analysis.partition",
             {"filter_task": "AdaptiveFilterBarcodes", "assignment_task": "RefineCellDatabases",
-             "alignment_task": "SimpleGlobalAlignment", "codebook_index": 0},
+             "alignment_task": _GLOBAL_ALIGN_TASK, "codebook_index": 0},
             "PartitionBarcodes",
         ))
         tasks.append(_task(
@@ -811,7 +829,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
             raise ValueError("include_smfish=True requires smfish_channel_names.")
         smfish_params = {
             "warp_task": "FiducialCorrelationWarp",
-            "global_align_task": "SimpleGlobalAlignment",
+            "global_align_task": _GLOBAL_ALIGN_TASK,
             "channel_names": list(spec.smfish_channel_names),
             **({"segment_task": "RefineCellDatabases"} if spec.include_segmentation else {}),
             **spec.smfish_params,
@@ -824,7 +842,7 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
                               "(SumSignal needs a segment_task).")
         sum_signal_params = {
             "warp_task": "FiducialCorrelationWarp",
-            "global_align_task": "SimpleGlobalAlignment",
+            "global_align_task": _GLOBAL_ALIGN_TASK,
             "segment_task": "RefineCellDatabases",
             **spec.sum_signal_params,
         }
