@@ -37,7 +37,13 @@ def create_data_organization(
     cells_frame_table : frame table for the cells round
     round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples
     readouts          : readouts.csv DataFrame; must have columns
-                        ``"Bit number"`` and ``"Name"`` (e.g. ``"b1-RS0015"``)
+                        ``"Bit number"`` and ``"Probe name"`` (e.g. ``"RS0015"``).
+                        ``readoutName`` is built from the bare probe name, not
+                        ``"Name"`` (which carries a ``bN-`` prefix, e.g.
+                        ``"b1-RS0015"``) — MERlin's
+                        ``DataOrganization.get_data_channel_for_bit`` matches
+                        codebook bit names exactly and codebooks use the bare
+                        name.
     bits_series       : series pattern for bits, e.g. ``"hal-mf3_01_{fov:03d}"``
     cells_series      : series pattern for cells, e.g. ``"hal-mf3-cells_{fov:03d}"``
     include_dapi      : whether to append a DAPI row from the cells frame table
@@ -63,7 +69,7 @@ def create_data_organization(
     fid_frame_cells  = _fiducial_frame(cells_frame_table)
 
     readout_name_map = dict(
-        zip(readouts["Bit number"].astype(int), readouts["Name"].astype(str))
+        zip(readouts["Bit number"].astype(int), readouts["Probe name"].astype(str))
     )
 
     rows: list[dict] = []
