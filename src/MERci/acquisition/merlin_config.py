@@ -345,7 +345,7 @@ def create_snakemake_parameters(
 # the sample name. Extend this for other projects -- see
 # resolve_cluster_sample_dir.
 _PROJECT_CLUSTER_ROOTS: Dict[str, str] = {
-    "BC": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/breast_cancer/experiments",
+    "BC": "/n/holylfs05/LABS/zhuang_lab/Lab/shared/projects/breast_cancer/experiments",
     "LT": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/lineage_tracing/experiments",
 }
 
