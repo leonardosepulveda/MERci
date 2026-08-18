@@ -16,6 +16,8 @@ create_microscope_parameters_json — MERlin's per-scope calibration JSON
 create_codebook_csv               — MERlin's gene/barcode codebook CSV
 create_cluster_resource_allocation — per-task slurm resource overrides
 create_snakemake_parameters       — snakemake's top-level parameters JSON
+short_experiment_name             — (sample_name, imaging_dir) -> short,
+    SLURM-job-name-safe prefix (job_name_prefix for create_snakemake_parameters)
 resolve_cluster_sample_dir        — this experiment's acquisition root as
     addressed from the Linux cluster, whether generated on Windows (predicted
     from the sample name) or on the cluster itself (its own real path)
@@ -37,6 +39,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -298,10 +301,16 @@ def create_snakemake_parameters(
     output_path:          Path,
     nodes:                int = 1000,
     restart_times:        int = 2,
+    job_name_prefix:      Optional[str] = None,
 ) -> Path:
     """
     Write snakemake's top-level parameters JSON. Format verified against a
     real generated file (``parameters_LT048.json``).
+
+    job_name_prefix : optional SLURM job-name prefix (MERlin's
+        ``run_with_snakemake`` defaults to ``"merlin"`` when this key is
+        absent) -- see :func:`short_experiment_name` to derive one from
+        ``(sample_name, imaging_dir)``.
     """
     config = {
         "cluster": (
@@ -314,6 +323,8 @@ def create_snakemake_parameters(
         "nodes": nodes,
         "restart_times": restart_times,
     }
+    if job_name_prefix is not None:
+        config["job_name_prefix"] = job_name_prefix
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -330,6 +341,58 @@ _PROJECT_CLUSTER_ROOTS: Dict[str, str] = {
     "BC": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/breast_cancer/experiments",
     "LT": "/n/holylfs06/LABS/zhuang_lab/Lab/shared/Leonardo/projects/lineage_tracing/experiments",
 }
+
+
+def short_experiment_name(sample_name: str, imaging_dir: str) -> str:
+    """
+    Turn ``(sample_name, imaging_dir)`` -- the same two values
+    :func:`resolve_cluster_sample_dir` takes -- into a short,
+    SLURM-job-name-safe string, for use as ``job_name_prefix`` in
+    :func:`create_snakemake_parameters`.
+
+    Inferred from only two real examples -- verify/extend against more real
+    sample names before relying on it beyond MERlin job-name prefixes:
+
+    ============================  ===========  ===========
+    sample_name                   imaging_dir  short name
+    ============================  ===========  ===========
+    BC553_sample_02_test          epi          s2-BC553e-t
+    LT060_sample_05               merfish      s5-LT060m
+    ============================  ===========  ===========
+
+    Rule, for *sample_name* matching ``{exp_id}_sample_{NN}[_{suffix}]``:
+
+    1. ``sample_{NN}`` -> ``s{int(NN)}`` (leading zeros stripped)
+    2. ``{exp_id}`` + first letter of *imaging_dir* -> ``{exp_id}{c}``
+       (no separator; omitted when *imaging_dir* is ``""``)
+    3. optional trailing ``_{suffix}`` -> ``-{first letter of suffix}``
+    4. join non-empty parts with ``-``: ``s{N}-{exp_id}{c}[-{suffix_letter}]``
+
+    Falls back to *sample_name* unchanged when it doesn't match the
+    ``{exp_id}_sample_{NN}[_{suffix}]`` pattern -- SLURM job names already
+    accept any alphanumeric/underscore/hyphen string (enforced by
+    ``snakemake-executor-plugin-slurm``), so this is always safe, just not
+    necessarily short.
+
+    Parameters
+    ----------
+    sample_name : experiment id, e.g. ``"LT048_sample_26"``
+    imaging_dir : acquisition-type subfolder name, e.g. ``"epi"``/``"merfish"``;
+        ``""`` when this acquisition isn't split into its own subfolder
+
+    Returns
+    -------
+    str : short SLURM-job-name-safe string
+    """
+    match = re.match(r"^(?P<exp_id>.+)_sample_(?P<nn>\d+)(?:_(?P<suffix>.+))?$", sample_name)
+    if match is None:
+        return sample_name
+
+    exp_part = match["exp_id"] + (imaging_dir[0] if imaging_dir else "")
+    parts = [f"s{int(match['nn'])}", exp_part]
+    if match["suffix"]:
+        parts.append(match["suffix"][0])
+    return "-".join(parts)
 
 
 def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: str) -> str:
