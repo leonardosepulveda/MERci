@@ -1,0 +1,16 @@
+# Atomic MERlin analysis-task definition -- one task's own tunable defaults
+# only. Structural cross-references (warp_task/preprocess_task/optimize_task/
+# previous_iteration/global_align_task/segment_task/decode_task/filter_task/
+# .../random_seed) are injected by build_merlin_analysis_parameters()
+# (src/MERci/acquisition/merlin_config.py) based on which atoms are actually
+# in the recipe -- never hardcode them here.
+task: CellPoseSegment3D
+module: merlin.analysis.segment
+parameters:
+  diameter: 50
+  channel_1_name: DAPI
+  cellpose_2D_3D_stitching: true
+  stitch_threshold: 0.2
+  dump_segmented_masks: true
+  dump_segmented_images: true
+  dump_rgb_masks: true
