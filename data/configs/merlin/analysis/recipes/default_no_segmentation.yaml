@@ -1,0 +1,15 @@
+# Explicit ordered list of atomic task names (data/configs/merlin/analysis/tasks/)
+# to assemble into one MERlin analysis-tasks JSON -- see
+# build_merlin_analysis_parameters() (src/MERci/acquisition/merlin_config.py).
+n_optimize_iterations: 10
+tasks:
+- fiducial_correlation_warp
+- deconvolution_preprocess
+- optimize_iteration
+- decode
+- global_align_least_squares
+- generate_adaptive_threshold
+- adaptive_filter_barcodes
+- export_barcodes
+- plot_performance
+- slurm_report

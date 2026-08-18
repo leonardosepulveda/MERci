@@ -34,6 +34,13 @@ MerlinAnalysisSpec / create_merlin_analysis_parameters — build MERlin's
     warp/optimize/decode/segment task-parameters JSON from a compact spec
     (which steps to include), instead of copying and hand-editing a prior
     experiment's file.
+build_merlin_analysis_parameters — the notebooks' DEFAULT analysis-JSON
+    builder: assembles the same task-parameters JSON from atomic per-task
+    YAML files (data/configs/merlin/analysis/tasks/) plus an explicit
+    ordered recipe YAML (data/configs/merlin/analysis/recipes/) naming which
+    tasks to include, instead of MerlinAnalysisSpec's Python dataclass/
+    booleans -- see that function's own docstring and the module comment
+    above it for the recipe/atom format and how its defaults were chosen.
 """
 from __future__ import annotations
 
@@ -912,6 +919,200 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
         tasks.append(_task("SumSignal", "merlin.analysis.sequential", sum_signal_params, "SumSignal"))
         tasks.append(_task("ExportSumSignals", "merlin.analysis.sequential",
                             {"sequential_task": "SumSignal"}))
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as fh:
+        json.dump({"analysis_tasks": tasks}, fh, indent=4)
+    return output_path
+
+
+# ── MERlin analysis-parameters JSON, atomic-task/recipe path (default) ──────
+# Replaces the MerlinAnalysisSpec/create_merlin_analysis_parameters path above
+# as the notebooks' default: each MERlin task's own tunable defaults live in
+# its own small YAML file under data/configs/merlin/analysis/tasks/ (one file
+# per literal MERlin task, including pure cross-reference "wiring" tasks that
+# carry no independent tunables), and a "recipe" YAML under
+# data/configs/merlin/analysis/recipes/ names the explicit, ordered list of
+# task-file names to assemble -- replacing the old include_reporting/
+# include_segmentation/include_smfish/include_sum_signal boolean toggles with
+# a literal, editable list. Structural cross-references between tasks
+# (warp_task, preprocess_task, optimize_task, previous_iteration,
+# global_align_task, segment_task, ...) are NEVER stored in an atom file --
+# build_merlin_analysis_parameters() injects them, resolved from whichever
+# atoms are actually present in the recipe (e.g. global_align_task points at
+# whichever of global_align_simple/global_align_least_squares was included).
+#
+# Default recipe values (data/configs/merlin/analysis/recipes/default_*.yaml)
+# were built to match analysis_decode_v2_aaron_260816.json (`~/Software/
+# merfish-parameters/analysis/`) field-for-field for every task it defines
+# (warp, preprocess, optimize, decode, filter, export, plot) -- explicit user
+# choice, verified real difference from the OLDER MerlinAnalysisSpec Python
+# defaults above (those trace to merlin_analysis_LT048.json/BC522 instead):
+# n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5), highpass_sigma
+# 3 (not 20), crop_width 100 (not 106); several fields that reference file
+# doesn't set at all (median_filter, percentile_pixel_to_keep,
+# edge_width_to_remove, min_barcodes_for_refactoring, use_gpu,
+# remove_z_duplicated_barcodes) are likewise left unset here -- confirmed
+# directly against merlin_cc's own source (warp.py/optimize.py/decode.py/
+# filterbarcodes.py) that MERlin's own internal defaults then apply, matching
+# analysis_decode_v2_aaron_260816.json's real runtime behavior exactly, NOT a
+# regression from the old explicit values. Two deliberate departures from
+# that reference file (explicit user choice): the global-alignment atom is
+# global_align_least_squares (LeastSquaresGlobalAlignment) instead of that
+# file's SimpleGlobalAlignment, and slurm_report (absent from that file) is
+# included. chromatic_correction_file (that file sets an absolute path under
+# a different user's home directory) is deliberately left unset in
+# optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
+# shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
+# reference file entirely) keep the older MerlinAnalysisSpec defaults' values
+# (BC522/analysis_cellposeSAM_Dark_only.json-derived), since there's nothing
+# in analysis_decode_v2_aaron_260816.json to match them against.
+
+# Atom names that name ONE of several mutually-exclusive alternatives for the
+# same structural role -- build_merlin_analysis_parameters uses whichever one
+# is actually present in the recipe's task list to fill every OTHER task's
+# global_align_task/segment_task reference.
+_ALIGN_ATOM_NAMES = ("global_align_simple", "global_align_least_squares")
+_SEGMENT_ATOM_NAMES = ("cellpose_segment_3d", "cellpose_segment_sam")
+
+
+def _load_task_atom(name: str, tasks_dir: Path) -> dict:
+    path = Path(tasks_dir) / f"{name}.yaml"
+    with open(path, "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def build_merlin_analysis_parameters(
+    recipe_path:            Path,
+    tasks_dir:               Path,
+    output_path:             Path,
+    overrides:                Optional[Dict[str, Dict[str, Any]]] = None,
+    extra_tasks:              Optional[List[str]] = None,
+    n_optimize_iterations:    Optional[int] = None,
+) -> Path:
+    """
+    Build MERlin's ``analysis_tasks`` JSON from a recipe (explicit ordered
+    list of atomic task-file names -- see the module comment above) instead
+    of a :class:`MerlinAnalysisSpec`.
+
+    Parameters
+    ----------
+    recipe_path : YAML file with ``n_optimize_iterations`` and an ordered
+        ``tasks`` list of atom names (files under *tasks_dir*, without the
+        ``.yaml`` extension) -- e.g. ``data/configs/merlin/analysis/recipes/
+        default_no_segmentation.yaml``.
+    tasks_dir   : directory holding the atom YAML files (``data/configs/
+        merlin/analysis/tasks/`` in this repo).
+    overrides   : optional ``{atom_name: {param: value}}`` -- merged OVER
+        that atom's own YAML parameters (and over any structural
+        cross-reference this function injects), for per-experiment tuning
+        without editing the shared atom/recipe files. ``smfish_signal``
+        needs ``channel_names`` supplied this way (no sane shared default);
+        ``optimize_iteration`` overrides apply identically to every
+        iteration.
+    extra_tasks : optional atom names appended after the recipe's own
+        ``tasks`` list (e.g. ``["smfish_signal"]``), for opt-in tails the
+        shared default recipe doesn't include.
+    n_optimize_iterations : overrides the recipe file's own value if given
+        (mirrors ``MerlinAnalysisSpec.n_optimize_iterations``, e.g. sourced
+        from ``experiment_info.yaml``'s ``extra.n_opt``).
+
+    Returns
+    -------
+    Path : *output_path*, unchanged
+    """
+    with open(recipe_path, "r", encoding="utf-8") as fh:
+        recipe = yaml.safe_load(fh) or {}
+    n_opt = n_optimize_iterations if n_optimize_iterations is not None else recipe.get("n_optimize_iterations", 1)
+    task_names = list(recipe.get("tasks", [])) + list(extra_tasks or [])
+    overrides = overrides or {}
+    tasks_dir = Path(tasks_dir)
+
+    if "smfish_signal" in task_names and not overrides.get("smfish_signal", {}).get("channel_names"):
+        raise ValueError("smfish_signal requires overrides={'smfish_signal': {'channel_names': [...]}}.")
+    if "sum_signal" in task_names and "cellpose_segment_3d" not in task_names and "cellpose_segment_sam" not in task_names:
+        raise ValueError("sum_signal requires a segmentation atom (cellpose_segment_3d/cellpose_segment_sam) "
+                          "in the recipe -- SumSignal needs a segment_task.")
+
+    align_atom = next((n for n in task_names if n in _ALIGN_ATOM_NAMES), None)
+    segment_atom = next((n for n in task_names if n in _SEGMENT_ATOM_NAMES), None)
+    align_task_name = _load_task_atom(align_atom, tasks_dir)["task"] if align_atom else None
+    segment_task_name = _load_task_atom(segment_atom, tasks_dir)["task"] if segment_atom else None
+
+    tasks = []
+    for name in task_names:
+        atom = _load_task_atom(name, tasks_dir)
+
+        if name == "optimize_iteration":
+            for i in range(1, n_opt + 1):
+                params = {
+                    **atom.get("parameters", {}),
+                    "preprocess_task": "DeconvolutionPreprocess",
+                    "warp_task": "FiducialCorrelationWarp",
+                    "random_seed": i,
+                }
+                if i > 1:
+                    params["previous_iteration"] = f"Optimize{i - 1:02d}"
+                params.update(overrides.get(name, {}))
+                tasks.append(_task("OptimizeIteration", atom["module"], params, f"Optimize{i:02d}"))
+            continue
+
+        params = dict(atom.get("parameters", {}))
+        if name == "deconvolution_preprocess":
+            params["warp_task"] = "FiducialCorrelationWarp"
+        elif name == "decode":
+            params["preprocess_task"] = "DeconvolutionPreprocess"
+            params["optimize_task"] = f"Optimize{n_opt:02d}"
+            params["global_align_task"] = align_task_name
+        elif name == "generate_adaptive_threshold":
+            params["decode_task"] = "Decode"
+            params["run_after_task"] = "Decode"
+        elif name == "adaptive_filter_barcodes":
+            params["decode_task"] = "Decode"
+            params["adaptive_task"] = "GenerateAdaptiveThreshold"
+        elif name == "export_barcodes":
+            params["filter_task"] = "AdaptiveFilterBarcodes"
+        elif name == "plot_performance":
+            params["preprocess_task"] = "DeconvolutionPreprocess"
+            params["optimize_task"] = f"Optimize{n_opt:02d}"
+            params["decode_task"] = "Decode"
+            params["filter_task"] = "AdaptiveFilterBarcodes"
+        elif name == "slurm_report":
+            params["run_after_task"] = "ExportBarcodes"
+        elif name in _SEGMENT_ATOM_NAMES:
+            params["warp_task"] = "FiducialCorrelationWarp"
+            params["global_align_task"] = align_task_name
+        elif name == "clean_cell_boundaries":
+            params["segment_task"] = segment_task_name
+            params["global_align_task"] = align_task_name
+        elif name == "combine_cleaned_boundaries":
+            params["cleaning_task"] = "CleanCellBoundaries"
+        elif name == "refine_cell_databases":
+            params["segment_task"] = segment_task_name
+            params["combine_cleaning_task"] = "CombineCleanedBoundaries"
+        elif name == "partition_barcodes":
+            params["filter_task"] = "AdaptiveFilterBarcodes"
+            params["assignment_task"] = "RefineCellDatabases"
+            params["alignment_task"] = align_task_name
+        elif name == "export_partitioned_barcodes":
+            params["partition_task"] = "PartitionBarcodes"
+        elif name == "export_cell_metadata":
+            params["segment_task"] = "RefineCellDatabases"
+        elif name == "smfish_signal":
+            params["warp_task"] = "FiducialCorrelationWarp"
+            params["global_align_task"] = align_task_name
+            if segment_atom:
+                params["segment_task"] = "RefineCellDatabases"
+        elif name == "sum_signal":
+            params["warp_task"] = "FiducialCorrelationWarp"
+            params["global_align_task"] = align_task_name
+            params["segment_task"] = "RefineCellDatabases"
+        elif name == "export_sum_signals":
+            params["sequential_task"] = "SumSignal"
+
+        params.update(overrides.get(name, {}))
+        tasks.append(_task(atom["task"], atom["module"], params if params else None, atom.get("analysis_name")))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
