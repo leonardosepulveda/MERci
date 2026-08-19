@@ -255,6 +255,22 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
             zvalue=d["zvalue"],
         ))
 
+    # Print exactly what offset was applied to each objective's tiles --
+    # explicit, not just claimed, so a caller can directly confirm from this
+    # output (before ever looking at the assembled canvas) that the returned
+    # tiles' x_um/y_um already include the .msc-recorded shift, rather than
+    # trusting it silently. Printed per objective actually present (not per
+    # tile -- a mosaic can have 100+ tiles of one objective), including
+    # objectives with no matching ``objective,`` line in the .msc (shown as
+    # "no .msc line" rather than a silent (0.00, 0.00)), since that's the
+    # other real way this ends up applying no shift.
+    for name in sorted({t.objective_name for t in tiles}):
+        n = sum(1 for t in tiles if t.objective_name == name)
+        x_off, y_off = objective_offsets.get(name, (0.0, 0.0))
+        source = ".msc-recorded" if name in objective_offsets else "no .msc line for this objective -- defaulted"
+        print(f"load_steve_mosaic: '{name}' tiles ({n}) shifted by "
+              f"(x={x_off:+.2f}, y={y_off:+.2f}) um [{source}]")
+
     return tiles
 
 
