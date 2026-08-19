@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -316,6 +316,68 @@ def _is_cells_series(s: SeriesInfo) -> bool:
     return "cells" in s.name.lower()
 
 
+def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
+    """
+    Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a real path
+    on THIS machine.
+
+    ``dir`` is written by whichever machine generated ``round_info.csv``
+    (normally the microscope's own Windows PC, via ``before_imaging``'s
+    generators) and is an absolute path there -- but a Windows-style
+    absolute path (``V:\\Leonardo\\...\\data\\focus_test`` or
+    ``D:/Leonardo/.../data/hybs/H01``, either slash direction) is NEVER
+    absolute once read back with ``pathlib.Path`` on POSIX (Linux/mac):
+    ``Path.is_absolute()`` requires a leading ``/``, which a drive letter
+    never has. This silently fell into the "relative -- resolve under this
+    machine's own SAMPLE_DIR" branch, but a backslash-separated string
+    parses as ONE opaque path component under POSIX `Path` (backslash isn't
+    a separator there), so joining it onto SAMPLE_DIR just produced one
+    bogus, nonexistent nested directory -- confirmed directly against a
+    real experiment transferred to the cluster: every round except
+    "cells" (saved only by its own unrelated dual-fallback) resolved 0
+    imaged FOVs even though every real file was present, right there, the
+    whole time. A forward-slash Windows path decomposes into real path
+    parts under POSIX `Path` but is still wrong (the drive + every
+    directory above ``data/`` gets appended onto SAMPLE_DIR verbatim,
+    still never a real path) -- so this isn't just a backslash bug.
+
+    Fixed by parsing *dir_str* with :class:`PureWindowsPath` (recognizes
+    both slash directions and drive letters regardless of the OS actually
+    running this code), and -- whenever that reveals a genuine Windows
+    drive letter, meaning the original ``is_absolute()``/join logic could
+    never have been right on this machine -- keeping only the path's tail
+    from its last literal ``"data"`` segment onward and re-rooting that
+    under THIS machine's own *data_dir* (``SAMPLE_DIR/data``). Every real
+    ``dir`` value in this repo's own convention points somewhere under
+    ``.../data/...`` (``data/cells``, ``data/hybs/H01``, ``data/
+    focus_test``, ``data/tissue_1/hybs/H01``, ...), so that tail is exactly
+    the sub-path this machine's own ``data_dir`` needs.
+
+    A genuinely POSIX-absolute *dir_str* (this machine's own convention, or
+    an experiment that has always lived on Linux) is returned unchanged, as
+    before. A real relative path (no drive letter) still resolves against
+    ``data_dir.parent`` (SAMPLE_DIR), also as before.
+    """
+    p = Path(dir_str)
+    if p.is_absolute():
+        return p
+
+    wp = PureWindowsPath(dir_str)
+    if wp.drive:
+        parts = wp.parts
+        if "data" in parts:
+            tail = parts[parts.index("data") + 1:]
+            return data_dir.joinpath(*tail)
+        log.warning(
+            "round_info.csv dir %r looks like a Windows absolute path but "
+            "has no 'data' segment to re-root under this machine's own "
+            "data_dir (%s) -- falling back to the (likely still wrong) "
+            "raw join.", dir_str, data_dir,
+        )
+
+    return data_dir.parent / p
+
+
 def _dedupe_paths(paths: List[Path]) -> List[Path]:
     """Return *paths* with duplicates removed, preserving first-seen order."""
     seen: set = set()
@@ -463,12 +525,13 @@ def _build_metadata(
         # to live in either the top-level ``data/`` or a ``data/cells`` subfolder,
         # so it gets both as fallbacks regardless of what round_info.csv recorded.
         #
-        # ``dir`` is normally an absolute path (e.g. ``D:/.../data/hybs/H01``)
-        # -- resolved as-is. A relative ``data/...`` sub-path (e.g. from a
-        # manually relocated experiment folder) is resolved relative to
-        # *this machine's own* SAMPLE_DIR (``data_dir``'s parent) instead.
+        # See _resolve_series_dir's own docstring for why this isn't just
+        # "absolute -> use as-is, else resolve under SAMPLE_DIR": a Windows
+        # ``dir`` value (this repo's normal case -- written by the
+        # microscope's own Windows PC) needs its own handling to resolve
+        # correctly once read back on POSIX.
         if s.data_dir is not None:
-            primary = s.data_dir if s.data_dir.is_absolute() else (data_dir.parent / s.data_dir)
+            primary = _resolve_series_dir(str(s.data_dir), data_dir)
         else:
             primary = data_dir
         if _is_cells_series(s):
