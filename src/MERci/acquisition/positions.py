@@ -4,15 +4,18 @@ Generate FOV grids and optimised scanning paths for stage-based MERFISH imaging.
 
 Typical workflow
 ----------------
-1. Define the tissue boundary and any excluded regions (holes).
+1. Define the tissue boundary and any excluded regions (holes) or whitelisted
+   regions (subsets).
 2. ``create_grid_positions`` – build a regular ``(H, W, 2)`` grid centred on the
    midpoint of the boundary bounding box; the traversal axis (columns for
    direction="vertical", rows for "horizontal") is forced even for a short
    scan-path return leg, the other axis odd for a centred cell (see its docstring).
 3. ``generate_scanning_path`` – order grid points in a boustrophedon pattern.
-4. ``load_hole_polygons`` – load polygon masks for excluded areas.
+4. ``load_hole_polygons``/``load_subset_polygons`` – load polygon masks for
+   excluded (hole) or whitelisted-only (subset) areas.
 5. ``filter_scanning_path`` – keep FOVs whose camera frame overlaps the boundary;
-   remove FOVs whose camera frame overlaps any hole.
+   remove FOVs whose camera frame overlaps any hole; if any subsets are given,
+   also remove FOVs that don't overlap the subset area.
 6. ``close_scanning_path`` – move the "return" points to the end of the path.
 7. ``get_path_stats`` – inspect total travel distance and largest single step.
 8. ``MERci.common.io.save_positions_array`` – write positions.txt.
@@ -267,6 +270,55 @@ def load_hole_polygons(
     return polygons
 
 
+def load_subset_polygons(
+    boundary_dir: Path,
+    pattern:      str = "subset*.txt",
+) -> List[Polygon]:
+    """
+    Load whitelist region polygons from a directory -- the inverse of
+    :func:`load_hole_polygons`: FOVs are kept only if they overlap one of
+    these, instead of being dropped when a hole fully contains them.
+
+    Each ``subset{n}.txt`` file matching *pattern* must be a comma-separated
+    ``x,y`` file (one vertex per line, same format as ``boundary_positions*
+    .txt``/``hole*.txt``); files with fewer than three vertices are skipped.
+    Naming convention: ``subset1.txt``, ``subset2.txt``, etc. Like holes,
+    subsets are global -- :func:`filter_scanning_path` applies the union of
+    every loaded subset to every boundary alike. No result (the default) means
+    no subset restriction at all, so existing layouts without any
+    ``subset*.txt`` file are entirely unaffected.
+
+    Returns
+    -------
+    List of valid Shapely :class:`~shapely.geometry.Polygon` objects.
+    """
+    boundary_dir = Path(boundary_dir)
+    subset_re    = re.compile(r"^subset(\d+)\.txt$", re.IGNORECASE)
+    polygons: List[Polygon] = []
+
+    for path in sorted(boundary_dir.glob(pattern)):
+        if not subset_re.match(path.name):
+            continue
+
+        coords = _read_xy_file(path)
+        if len(coords) < 3:
+            log.warning(
+                "%s has fewer than 3 valid points – skipping.", path.name
+            )
+            continue
+
+        poly = Polygon(coords)
+        if poly.is_empty or not poly.is_valid:
+            log.warning(
+                "%s produced an invalid Shapely polygon – skipping.", path.name
+            )
+            continue
+
+        polygons.append(poly)
+
+    return polygons
+
+
 # ── Path filtering ─────────────────────────────────────────────────────────────
 
 def filter_scanning_path(
@@ -275,6 +327,7 @@ def filter_scanning_path(
     hole_polygons:    List[Polygon],
     fov_size_um:      float,
     min_coverage_fraction: float = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
 ) -> np.ndarray:
     """
     Keep FOVs whose camera frame overlaps the tissue boundary; exclude any
@@ -303,6 +356,13 @@ def filter_scanning_path(
     tissue sits in a dropped FOV is never imaged. The default (``0.0``)
     preserves the original two-rule behaviour above exactly, unchanged.
 
+    *subset_polygons*, if given and non-empty, adds one more independent
+    requirement on top of the two/one rule(s) above: the FOV's square must
+    also **intersect** the union of *subset_polygons* (a whitelist, the
+    opposite sense of *hole_polygons*' blacklist -- see
+    :func:`load_subset_polygons`). ``None``/empty (default) keeps every
+    other rule's result unchanged -- no subset restriction.
+
     Parameters
     ----------
     coords           : ``(N, 2)`` candidate stage coordinates
@@ -314,6 +374,8 @@ def filter_scanning_path(
                        hole-full-containment rule exactly. A value > 0
                        switches to the stricter unified tissue-overlap-
                        fraction test described above.
+    subset_polygons  : optional whitelist region(s) -- only FOVs overlapping
+                       their union are kept, on top of every other rule.
 
     Returns
     -------
@@ -321,6 +383,10 @@ def filter_scanning_path(
     """
     coords = np.asarray(coords, dtype=float)
     half   = fov_size_um / 2.0
+    subset_union = unary_union(subset_polygons) if subset_polygons else None
+
+    def _in_subset(fov_poly) -> bool:
+        return subset_union is None or fov_poly.intersects(subset_union)
 
     if min_coverage_fraction <= 0.0:
         kept = []
@@ -329,6 +395,8 @@ def filter_scanning_path(
             if not fov_poly.intersects(boundary_polygon):
                 continue
             if any(hole.contains(fov_poly) for hole in hole_polygons):
+                continue
+            if not _in_subset(fov_poly):
                 continue
             kept.append((x, y))
         return np.array(kept) if kept else np.empty((0, 2))
@@ -340,7 +408,7 @@ def filter_scanning_path(
     for x, y in coords:
         fov_poly = shapely_box(x - half, y - half, x + half, y + half)
         coverage = fov_poly.intersection(effective_tissue).area / fov_area
-        if coverage >= min_coverage_fraction:
+        if coverage >= min_coverage_fraction and _in_subset(fov_poly):
             kept.append((x, y))
     return np.array(kept) if kept else np.empty((0, 2))
 
@@ -718,9 +786,15 @@ def group_boundaries_by_path_mode(
 
     A tissue's own boundaries (a contiguous run in *boundaries*, since it is
     sorted by tissue then boundary -- see :func:`discover_boundary_files`)
-    are merged into ONE segment when ``tissue_path_mode(tissue) == "legacy"``
-    and it has more than one boundary; otherwise (``"transit"``, or a tissue
-    with only one boundary) each boundary keeps its own segment.
+    are merged into ONE segment when ``tissue_path_mode(tissue)`` is
+    ``"legacy"`` OR ``"union"`` and it has more than one boundary; otherwise
+    (``"transit"``, or a tissue with only one boundary) each boundary keeps
+    its own segment. "legacy" and "union" group identically here -- they only
+    differ in HOW the merged segment's own FOV coordinates get built
+    (``02_create_positions_from_boundaries.ipynb`` concatenates each piece's
+    own independently-built path for "legacy", vs. building one shared grid
+    over :func:`merge_union_tissue_boundaries`'s unioned polygon for "union"
+    -- see that function's docstring), which this function never touches.
 
     This is the single source of truth for that grouping decision, shared by
     ``02_create_positions_from_boundaries.ipynb`` (which attaches the actual
@@ -728,7 +802,10 @@ def group_boundaries_by_path_mode(
     :func:`MERci.acquisition.dave.create_round_info_multitissue` (which only
     needs the resulting segment/label structure to build ``round_info.csv``
     rows matching whatever notebook 02 actually wrote to ``positions/``) --
-    so the two can never disagree about which positions files exist.
+    so the two can never disagree about which positions files exist, whether
+    or not the caller has actually applied :func:`merge_union_tissue_boundaries`
+    to its *boundaries* first (dave.py's caller does not -- it only needs the
+    label/count agreement, not the coordinates).
 
     This function does NOT add transit segments between the groups it
     returns -- callers insert those uniformly (bridging every consecutive
@@ -742,7 +819,7 @@ def group_boundaries_by_path_mode(
     mode             : ``"multi"``, ``"single"`` or ``"legacy"`` (from the
                        same discovery call) -- selects the merged-segment
                        label (``"T{t}"`` for multi, ``""`` otherwise)
-    tissue_path_mode : tissue index -> ``"legacy"`` or ``"transit"``
+    tissue_path_mode : tissue index -> ``"legacy"``, ``"transit"`` or ``"union"``
 
     Returns
     -------
@@ -758,7 +835,7 @@ def group_boundaries_by_path_mode(
             j += 1
         run_len = j - i
 
-        if tissue_path_mode(t) == "legacy" and run_len > 1:
+        if tissue_path_mode(t) in ("legacy", "union") and run_len > 1:
             label = f"T{t}" if mode == "multi" else ""
             groups.append(BoundaryGroup(t, label, tuple(range(i, j))))
         elif run_len > 1:   # tissue_path_mode(t) == "transit"
@@ -768,6 +845,79 @@ def group_boundaries_by_path_mode(
             groups.append(BoundaryGroup(t, spec.label, (i,)))
         i = j
     return groups
+
+
+def merge_union_tissue_boundaries(
+    boundaries:        List[BoundarySpec],
+    boundary_polygons: List[Polygon],
+    mode:               str,
+    tissue_path_mode:   Callable[[int], str],
+) -> Tuple[List[BoundarySpec], List[Polygon]]:
+    """
+    Collapse each ``"union"``-path-mode tissue's own multiple boundary
+    pieces into ONE pseudo-boundary (their union polygon) up front.
+
+    A tissue with several disjoint boundary pieces (e.g. one tissue section
+    split by a real gap on the coverslip) normally gets a separate,
+    independently-phased FOV grid per piece ("legacy"/"transit" modes,
+    concatenated or transit-bridged). ``"union"`` mode instead images every
+    piece with ONE shared grid and ONE continuous boustrophedon snake,
+    which naturally threads through the gap between pieces (FOVs over the
+    gap are simply dropped by the normal boundary-overlap filter, just as
+    they would be for any other non-tissue area) instead of stitching
+    separate per-piece paths together.
+
+    Calling this BEFORE any other per-boundary grouping/grid/plotting logic
+    (in particular, before :func:`group_boundaries_by_path_mode`) collapses
+    a "union" tissue's *boundaries*/*boundary_polygons* entries down to
+    exactly one each -- so every other multi-boundary code path, which
+    already only has to handle "one boundary per tissue", needs no changes
+    at all: :func:`create_grid_positions`/:func:`generate_scanning_path`/
+    :func:`filter_scanning_path` are all Shapely Polygon/MultiPolygon-
+    agnostic, so building the usual single-boundary FOV path (e.g. via
+    :func:`build_boundary_path`/:func:`optimize_grid_offset`) against the
+    merged (Multi)Polygon just works.
+
+    Parameters
+    ----------
+    boundaries        : from :func:`discover_boundary_files` (sorted by
+                        tissue, then boundary)
+    boundary_polygons : each entry's own polygon, same order (one
+                        :func:`load_boundary_polygon` call per entry)
+    mode              : ``"multi"``, ``"single"`` or ``"legacy"`` (from the
+                        same discovery call) -- selects the merged pseudo-
+                        boundary's label (``"T{t}"`` for multi, ``""``
+                        otherwise), matching :func:`group_boundaries_by_path_mode`'s
+                        own merged-segment label convention exactly
+    tissue_path_mode  : tissue index -> ``"legacy"``, ``"transit"`` or ``"union"``
+
+    Returns
+    -------
+    (boundaries, boundary_polygons) : same shapes/order contract as the
+        inputs -- each "union" tissue's own run of >1 entries replaced by
+        one merged entry (``boundary=1``, ``path`` = its first piece's own
+        file, ``label`` matching the convention above); every other tissue
+        (or a "union" tissue with only one boundary piece to begin with)
+        passes through unchanged.
+    """
+    n = len(boundaries)
+    merged_boundaries: List[BoundarySpec] = []
+    merged_polygons:   List[Polygon]      = []
+    i = 0
+    while i < n:
+        t = boundaries[i].tissue
+        j = i
+        while j < n and boundaries[j].tissue == t:
+            j += 1
+        if tissue_path_mode(t) == "union" and j - i > 1:
+            label = f"T{t}" if mode == "multi" else ""
+            merged_boundaries.append(BoundarySpec(t, 1, boundaries[i].path, label))
+            merged_polygons.append(unary_union(boundary_polygons[i:j]))
+        else:
+            merged_boundaries.extend(boundaries[i:j])
+            merged_polygons.extend(boundary_polygons[i:j])
+        i = j
+    return merged_boundaries, merged_polygons
 
 
 def has_boundary_files(positions_dir: Path) -> bool:
@@ -971,6 +1121,7 @@ def build_boundary_path(
     direction:        str            = "vertical",
     return_side:      Optional[str]  = None,
     min_coverage_fraction: float     = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
 ) -> np.ndarray:
     """
     Build the ordered FOV path for a single boundary.
@@ -982,7 +1133,11 @@ def build_boundary_path(
 
     Parameters
     ----------
-    boundary_polygon : the tissue boundary for this segment
+    boundary_polygon : the tissue boundary for this segment -- a Polygon or
+                       MultiPolygon (e.g. from :func:`merge_union_tissue_
+                       boundaries`, for a "union"-mode tissue's several
+                       disjoint pieces sharing one grid); every Shapely call
+                       this function makes is Multi-geometry-agnostic
     hole_polygons    : exclusion polygons (applied to this boundary)
     step_size        : grid spacing (µm)
     fov_size_um      : camera FOV side length (µm)
@@ -997,6 +1152,9 @@ def build_boundary_path(
                        as before; > 0 additionally drops real low-coverage
                        tissue instead of just imaging it (see that
                        function's docstring).
+    subset_polygons  : forwarded to :func:`filter_scanning_path` -- optional
+                       whitelist region(s); ``None``/empty (default) keeps
+                       every boundary-overlapping FOV as before.
 
     Returns
     -------
@@ -1005,7 +1163,8 @@ def build_boundary_path(
     grid, _, _ = create_grid_positions(boundary_polygon, step_size, direction=direction)
     path       = generate_scanning_path(grid, direction=direction)
     filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
-                                       min_coverage_fraction=min_coverage_fraction)
+                                       min_coverage_fraction=min_coverage_fraction,
+                                       subset_polygons=subset_polygons)
     if return_side is not None and len(filtered) > 1:
         filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
     return filtered
@@ -1043,6 +1202,7 @@ def optimize_grid_offset(
     priority:         Tuple[str, ...]     = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float          = 0.5,
     min_coverage_fraction: float          = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
 ) -> GridOffsetResult:
     """
     Search the grid's phase (offset within one *step_size* period) for the
@@ -1129,6 +1289,13 @@ def optimize_grid_offset(
                        the two parameters answer different questions
                        (report vs. actually exclude) and are not meant to
                        be tuned to the same value as a matter of course.
+    subset_polygons  : forwarded to :func:`filter_scanning_path` -- optional
+                       whitelist region(s), applied to every candidate offset.
+                       Also intersected into ``effective_tissue`` (the area
+                       ``waste_area_um2``/``n_low_coverage_fovs`` are measured
+                       against) so those metrics reflect the subset-restricted
+                       tissue actually being imaged, not the full boundary.
+                       ``None``/empty (default) leaves both unaffected.
 
     Returns
     -------
@@ -1143,6 +1310,8 @@ def optimize_grid_offset(
         effective_tissue = boundary_polygon.difference(unary_union(hole_polygons))
     else:
         effective_tissue = boundary_polygon
+    if subset_polygons:
+        effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
 
     half   = fov_size_um / 2.0
     fov_area = fov_size_um * fov_size_um
@@ -1156,7 +1325,8 @@ def optimize_grid_offset(
             )
             path     = generate_scanning_path(grid, direction=direction)
             filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
-                                             min_coverage_fraction=min_coverage_fraction)
+                                             min_coverage_fraction=min_coverage_fraction,
+                                             subset_polygons=subset_polygons)
             if return_side is not None and len(filtered) > 1:
                 filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
 
@@ -1190,7 +1360,8 @@ def optimize_grid_offset(
     )
     path     = generate_scanning_path(grid, direction=direction)
     filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
-                                     min_coverage_fraction=min_coverage_fraction)
+                                     min_coverage_fraction=min_coverage_fraction,
+                                     subset_polygons=subset_polygons)
     if return_side is not None and len(filtered) > 1:
         filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
 
@@ -1208,6 +1379,7 @@ def build_boundary_path_optimized(
     priority:         Tuple[str, ...] = ("n_fovs", "waste_area_um2", "total_length_um", "n_low_coverage_fovs"),
     low_coverage_fraction: float      = 0.5,
     min_coverage_fraction: float      = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
 ) -> np.ndarray:
     """
     Drop-in replacement for :func:`build_boundary_path` that additionally
@@ -1223,5 +1395,6 @@ def build_boundary_path_optimized(
         n_samples=n_samples, priority=priority,
         low_coverage_fraction=low_coverage_fraction,
         min_coverage_fraction=min_coverage_fraction,
+        subset_polygons=subset_polygons,
     )
     return result.coords
