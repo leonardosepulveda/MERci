@@ -313,9 +313,10 @@ def create_round_info_multitissue(
     :func:`MERci.acquisition.positions.group_boundaries_by_path_mode` (the
     same function ``notebooks/before_imaging/02`` uses to decide what it
     actually writes to ``positions/``): a tissue's own consecutive boundaries
-    are merged into ONE segment when ``tissue_path_mode(tissue) == "legacy"``
-    (no transit within that tissue), otherwise each boundary keeps its own
-    segment; a transit segment always bridges consecutive top-level segments
+    are merged into ONE segment when ``tissue_path_mode(tissue)`` is
+    ``"legacy"`` or ``"union"`` (no transit within that tissue), otherwise
+    each boundary keeps its own segment; a transit segment always bridges
+    consecutive top-level segments
     (wrapping the last back to the first) whenever there is more than one.
     This produces **one row per (round, segment)** — so each round has
     several movies: a boundary movie (cells/bits HAL config) per segment and
@@ -354,8 +355,13 @@ def create_round_info_multitissue(
     mode               : ``"multi"``, ``"single"`` or ``"legacy"`` (from the same
                          discovery call); selects the data-folder layout
     sample_name        : experiment name used in the positions filenames
-    tissue_path_mode   : tissue index -> ``"legacy"`` or ``"transit"`` (see
-                         :func:`MERci.acquisition.positions.group_boundaries_by_path_mode`).
+    tissue_path_mode   : tissue index -> ``"legacy"``, ``"transit"`` or
+                         ``"union"`` (see :func:`MERci.acquisition.positions.
+                         group_boundaries_by_path_mode`) -- "legacy" and
+                         "union" group identically here (this function only
+                         needs the resulting segment/label structure, not
+                         how notebook 02 actually built each segment's FOV
+                         coordinates).
                          MUST match whatever notebook 02 actually used to write
                          ``positions/`` (same convention as this notebook already
                          has to agree with notebook 02 on ``BOUNDARY_SOURCE``),
