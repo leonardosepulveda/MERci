@@ -497,6 +497,77 @@ def close_scanning_path(
     return coords[new_order], side_idxs
 
 
+def determine_return_side(
+    coords:     np.ndarray,
+    fixed_axis: str,
+    step_size:  float,
+) -> Tuple[str, str]:
+    """
+    Pick which of the two natural cross-axis sides :func:`close_scanning_path`
+    should move to the end, automatically, from the raw path's own
+    start/end geometry -- instead of a hardcoded guess.
+
+    Only meaningful for the natural ``(fixed_axis, return_side)`` pairing
+    that keeps :func:`close_scanning_path`'s quantised ``_side_indices``
+    selection valid for a single-axis-adaptive irregular grid (see
+    :func:`build_irregular_boundary_path`): ``fixed_axis="y"`` ->
+    ``"left"``/``"right"``, ``fixed_axis="x"`` -> ``"top"``/``"bottom"``.
+    The reverse pairing groups by the cross axis, which is not a shared
+    lattice across bands, and is not supported here.
+
+    Checks which side of ITS OWN row/column the raw (pre-closure) path's
+    start point and end point each sit on (reusing ``_side_indices``, the
+    same primitive :func:`close_scanning_path` itself uses) -- if both
+    agree on one side, that side is returned directly, since the path
+    already naturally begins/ends there (no new jump needed to close it).
+    If they disagree (e.g. an odd fixed-axis position count, or a boundary
+    shape that breaks the same-side guarantee), falls back to actually
+    trying both sides and keeping whichever gives the smaller
+    ``max_step_um`` -- an empirical tie-break, not a second guess. Verified
+    (``notebooks/tests/test_irregular_grid_boustrophedon_return_path.ipynb``)
+    to never pick the worse of the two natural sides, on a real benchmark.
+
+    Parameters
+    ----------
+    coords     : ``(N, 2)`` ordered stage coordinates (pre-closure)
+    fixed_axis : ``"y"`` or ``"x"`` -- which axis is the regular lattice
+                (see :func:`build_irregular_bands`)
+    step_size  : grid spacing (µm)
+
+    Returns
+    -------
+    (side, reason) : the chosen ``return_side``, and ``"start/end agree"``
+        or ``"fallback: shorter max_step_um"`` for how it was decided.
+    """
+    if fixed_axis not in ("x", "y"):
+        raise ValueError("fixed_axis must be 'x' or 'y'")
+
+    side_a, side_b = {"y": ("left", "right"), "x": ("top", "bottom")}[fixed_axis]
+    ix, iy = _grid_indices(coords, step_size)
+    idxs_a = set(_side_indices(coords, ix, iy, side_a).tolist())
+    idxs_b = set(_side_indices(coords, ix, iy, side_b).tolist())
+
+    def _side_of(idx):
+        in_a, in_b = idx in idxs_a, idx in idxs_b
+        if in_a and not in_b:
+            return side_a
+        if in_b and not in_a:
+            return side_b
+        return None   # on neither/both -- ambiguous (e.g. a single-point row/column)
+
+    start_side, end_side = _side_of(0), _side_of(len(coords) - 1)
+    if start_side is not None and start_side == end_side:
+        return start_side, "start/end agree"
+
+    best_side, best_max_step = None, None
+    for side in (side_a, side_b):
+        closed, _ = close_scanning_path(coords, step_size, return_side=side)
+        _, max_step_um = get_path_stats(closed)
+        if best_max_step is None or max_step_um < best_max_step:
+            best_side, best_max_step = side, max_step_um
+    return best_side, "fallback: shorter max_step_um"
+
+
 # ── Path statistics ────────────────────────────────────────────────────────────
 
 def get_path_stats(coords: np.ndarray) -> Tuple[float, float]:
@@ -1398,3 +1469,420 @@ def build_boundary_path_optimized(
         subset_polygons=subset_polygons,
     )
     return result.coords
+
+
+# ── Irregular (single-axis-adaptive) grid ──────────────────────────────────────
+#
+# An alternative to the regular create_grid_positions/generate_scanning_path
+# pipeline above: one axis (fixed_axis) stays on a single regular lattice
+# (needed so adjacent rows/columns share a phase and therefore overlap); the
+# other (cross) axis is rebuilt independently per fixed-axis position, snug
+# to that row/column's own local tissue extent -- fewer wasted FOVs on an
+# irregularly-shaped tissue than a plain regular grid, at the cost of a
+# weaker (not globally phase-locked) cross-axis overlap margin.
+#
+# Validated against the production regular-grid pipeline in
+# notebooks/tests/test_irregular_grid_boustrophedon_return_path.ipynb,
+# notebooks/tests/test_irregular_grid_downstream_qc_tools.ipynb, and
+# notebooks/tests/test_irregular_grid_column_overlap_correction.ipynb --
+# see each notebook's own Takeaways for the validated numbers this code was
+# ported from.
+#
+# Typical workflow (mirrors the regular-grid one at the top of this module):
+#   1. build_irregular_bands            - per-fixed-axis-position cross-axis lists
+#   2. fix_overlap_clusters             - REQUIRED per-band post-processing --
+#                                          corrects a real construction defect
+#                                          (see its own docstring) before path
+#                                          ordering
+#   3. generate_irregular_scanning_path - order into a boustrophedon path
+#   4. filter_scanning_path             - same production filter as the regular grid
+#   5. determine_return_side + close_scanning_path - optional loop closure
+#   (build_irregular_boundary_path / optimize_irregular_grid wrap 1-5.)
+
+def build_irregular_bands(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    fixed_axis:       str   = "y",
+    min_width_frac:   float = 0.1,
+    fixed_offset:     float = 0.0,
+    force_parity:     bool  = True,
+) -> List[Tuple[float, np.ndarray]]:
+    """
+    Build per-band (fixed_axis regular-lattice) cross-axis position lists.
+
+    One axis (*fixed_axis*) is a single regular lattice spanning the whole
+    boundary's bounding box, built with :func:`_spaced_coords` -- same as
+    :func:`create_grid_positions`'s own traversal axis. For each fixed-axis
+    lattice position, the tissue is intersected with a strip one FOV tall/
+    wide centred on it; this can split into several disjoint pieces (e.g.
+    either side of a hole) -- each piece gets its OWN cross-axis lattice,
+    centred on and spanning just that piece's own extent
+    (:func:`_spaced_coords` with ``even=False``, one centred piece per
+    contiguous strip of tissue).
+
+    Returns a list of ``(fixed_value, cross_array_ascending)``, one entry
+    per fixed-axis lattice position, in ASCENDING ``fixed_value`` order --
+    the exact contract :func:`generate_irregular_scanning_path` expects. A
+    band with no real tissue in its strip is still included, with an empty
+    cross array (so band INDEX still lines up with the fixed-axis lattice
+    position for that function's alternation logic; empty bands simply
+    contribute no points).
+
+    A band with multiple disjoint pieces can produce two adjacent points
+    (the last of one piece, the first of the next) much closer together
+    than *step_size* whenever the gap between pieces is narrower than
+    *step_size* -- each piece's lattice is centred independently, with no
+    awareness of its neighbour's phase. Call :func:`fix_overlap_clusters` on
+    each band's cross array before building the scanning path to correct
+    this (see that function's own docstring); it is not applied here so
+    that this function's own output stays inspectable on its own (e.g. for
+    diagnosing exactly which bands are affected).
+
+    Parameters
+    ----------
+    boundary_polygon : the tissue boundary
+    hole_polygons    : exclusion polygons
+    step_size        : lattice spacing (µm) for the fixed axis and for each
+                       piece's own cross-axis lattice
+    fov_size_um      : camera FOV side length (µm) -- sets the strip height/
+                       width and the minimum-piece-width cutoff below
+    fixed_axis       : ``"y"`` (rows regular, columns/x adaptive per row) or
+                       ``"x"`` (columns regular, rows/y adaptive per column)
+    min_width_frac   : drop any local tissue piece narrower than
+                       ``min_width_frac * fov_size_um`` along the cross axis
+    fixed_offset     : shift the fixed axis's lattice phase away from the
+                       boundary bbox's own midpoint (µm) -- see
+                       :func:`optimize_irregular_grid`, which searches this
+    force_parity     : force the fixed axis to an EVEN position count (the
+                       same short-return-leg parity rule
+                       :func:`create_grid_positions` applies to its own
+                       traversal axis -- see its docstring). Default
+                       ``True``; ``False`` uses the plain smallest-span-
+                       covering count instead, whatever parity results.
+
+    Returns
+    -------
+    List of ``(fixed_value, cross_array_ascending)``.
+    """
+    if fixed_axis not in ("x", "y"):
+        raise ValueError("fixed_axis must be 'x' or 'y'")
+
+    tissue = (boundary_polygon.difference(unary_union(hole_polygons))
+              if hole_polygons else boundary_polygon)
+    xmin, ymin, xmax, ymax = boundary_polygon.bounds
+    half_h = fov_size_um / 2.0
+    min_width_um = min_width_frac * fov_size_um
+
+    if fixed_axis == "y":
+        fixed_min, fixed_max, cross_min, cross_max = ymin, ymax, xmin, xmax
+    else:
+        fixed_min, fixed_max, cross_min, cross_max = xmin, xmax, ymin, ymax
+
+    fixed_center = (fixed_min + fixed_max) / 2.0 + fixed_offset
+    if force_parity:
+        fixed_positions = _spaced_coords(fixed_center, fixed_min, fixed_max, step_size, even=True)
+    else:
+        span = fixed_max - fixed_min
+        n = max(1, int(np.ceil(span / step_size)))
+        fixed_positions = fixed_center + (np.arange(n) - (n - 1) / 2.0) * step_size
+
+    bands = []
+    for f in fixed_positions:
+        lo_f, hi_f = f - half_h, f + half_h
+        strip = (shapely_box(cross_min - 1.0, lo_f, cross_max + 1.0, hi_f) if fixed_axis == "y"
+                 else shapely_box(lo_f, cross_min - 1.0, hi_f, cross_max + 1.0))
+        inter = tissue.intersection(strip)
+        cross_vals: List[float] = []
+        if not inter.is_empty:
+            pieces = list(inter.geoms) if hasattr(inter, "geoms") else [inter]
+            pieces.sort(key=lambda p: p.bounds[0] if fixed_axis == "y" else p.bounds[1])
+            for piece in pieces:
+                if piece.is_empty:
+                    continue
+                pxmin, pymin, pxmax, pymax = piece.bounds
+                lo, hi = (pxmin, pxmax) if fixed_axis == "y" else (pymin, pymax)
+                if (hi - lo) < min_width_um:
+                    continue
+                piece_positions = _spaced_coords((lo + hi) / 2.0, lo, hi, step_size, even=False)
+                cross_vals.extend(piece_positions.tolist())
+        bands.append((float(f), np.array(sorted(cross_vals))))
+    return bands
+
+
+def fix_overlap_clusters(
+    cross_vals:       np.ndarray,
+    fov_size_um:      float,
+    step_size:        float,
+    bad_overlap_frac: float = 0.3,
+) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
+    """
+    Redistribute one band's cross-axis positions to remove piece-boundary
+    overlap clusters -- REQUIRED post-processing for
+    :func:`build_irregular_bands`'s output (see its docstring) before
+    :func:`generate_irregular_scanning_path`.
+
+    When a band's tissue strip splits into several disjoint pieces (a hole/
+    notch narrower than *step_size*), :func:`build_irregular_bands` gives
+    each piece its own independently-centred lattice -- the last point of
+    one piece and the first of the next can then end up much closer
+    together than *step_size*, while every OTHER gap in the band (within
+    one piece) stays exactly *step_size* by construction. This produces a
+    real defect: a few anomalously close/overlapping FOVs concentrated at
+    piece boundaries, confirmed on a real benchmark (see
+    ``notebooks/tests/test_irregular_grid_column_overlap_correction.ipynb``:
+    18/36 columns affected, worst pairwise overlap fraction 0.997).
+
+    A **sub-band** is a maximal run of consecutive points bounded by either
+    the band's own ends or a TRUE zero-overlap gap (``overlap_frac <= 0``,
+    footprints that don't touch at all -- a real hole, never redistributed
+    across). If a sub-band contains at least one "bad" gap
+    (``overlap_frac > bad_overlap_frac``, well above the nominal design
+    overlap), ALL of that sub-band's points -- not just the two touching
+    the bad gap, which is a silent no-op for a 2-point cluster (tried
+    first, confirmed broken) -- are re-spaced evenly between the sub-band's
+    own first and last position via ``linspace``, spreading the excess
+    overlap across every gap instead of leaving it concentrated in one
+    place. If the reclaimed span doesn't actually need that many FOVs at
+    the standard *step_size* pitch, the surplus is dropped.
+
+    A total no-op on a band with no bad gaps (in particular, a plain
+    rectangular tissue with no holes) -- verified in the notebook above.
+
+    Parameters
+    ----------
+    cross_vals       : one band's cross-axis positions (any order; sorted
+                       internally) -- one entry of a
+                       :func:`build_irregular_bands` result
+    fov_size_um      : camera FOV side length (µm)
+    step_size        : nominal lattice spacing (µm) -- used both to judge
+                       "bad" gaps and to size each corrected sub-band
+    bad_overlap_frac : a gap counts as "bad" when its implied pairwise
+                       overlap fraction exceeds this (default 0.3, well
+                       above a typical ~0.10 nominal design overlap)
+
+    Returns
+    -------
+    (new_cross_vals, applied) : corrected, sorted cross-axis positions, and
+        a list of ``(lo_idx, hi_idx, n_before, n_after)`` for every
+        sub-band actually redistributed (indices into the ORIGINAL sorted
+        *cross_vals*) -- empty when nothing needed fixing.
+    """
+    cross_vals = np.array(sorted(cross_vals), dtype=float)
+    n = len(cross_vals)
+    if n < 2:
+        return cross_vals.copy(), []
+
+    gaps = np.diff(cross_vals)
+    overlap_frac = np.clip((fov_size_um - gaps) / fov_size_um, 0.0, None)
+    disjoint = overlap_frac <= 0.0   # a TRUE gap -- never redistribute across this
+    is_bad   = overlap_frac > bad_overlap_frac
+
+    sub_ranges = []
+    start = 0
+    for i, d in enumerate(disjoint):
+        if d:
+            sub_ranges.append((start, i))
+            start = i + 1
+    sub_ranges.append((start, n - 1))
+
+    fixed:   List[float] = []
+    applied: List[Tuple[int, int, int, int]] = []
+    for lo, hi in sub_ranges:
+        seg_bad = is_bad[lo:hi] if hi > lo else np.array([], dtype=bool)
+        if hi == lo or not seg_bad.any():
+            fixed.extend(cross_vals[lo:hi + 1].tolist())
+            continue
+        span = cross_vals[hi] - cross_vals[lo]
+        n_before = hi - lo + 1
+        expected_n = max(2, int(round(span / step_size)) + 1)
+        n_after = min(n_before, expected_n)
+        fixed.extend(np.linspace(cross_vals[lo], cross_vals[hi], n_after).tolist())
+        applied.append((lo, hi, n_before, n_after))
+    return np.array(sorted(fixed)), applied
+
+
+def generate_irregular_scanning_path(
+    bands:      List[Tuple[float, np.ndarray]],
+    fixed_axis: str,
+) -> np.ndarray:
+    """
+    Order per-band cross-axis positions into a boustrophedon path.
+
+    Generalises :func:`generate_scanning_path` to variable-length bands
+    instead of a fixed-width ``(H, W)`` grid, replicating that function's
+    own traversal/alternation loop structure exactly -- the two agree
+    exactly whenever every band shares the same cross-axis positions (a
+    degenerate rectangular tissue -- see the boustrophedon-return-path test
+    notebook's own regression check).
+
+    Parameters
+    ----------
+    bands      : from :func:`build_irregular_bands` (optionally passed
+                through :func:`fix_overlap_clusters` first), in ASCENDING
+                fixed-axis order
+    fixed_axis : ``"y"`` (mirrors ``generate_scanning_path(direction=
+                "horizontal")``) or ``"x"`` (mirrors ``direction="vertical"``)
+
+    Returns
+    -------
+    ``(N, 2)`` array of ordered ``(x, y)`` stage coordinates.
+    """
+    if fixed_axis not in ("x", "y"):
+        raise ValueError("fixed_axis must be 'x' or 'y'")
+
+    path: List[Tuple[float, float]] = []
+    n_bands = len(bands)
+    if fixed_axis == "y":
+        for strip, i in enumerate(range(n_bands - 1, -1, -1)):
+            fixed_val, cross_vals = bands[i]
+            ordered = cross_vals if strip % 2 == 0 else cross_vals[::-1]
+            for c in ordered:
+                path.append((c, fixed_val))
+    else:
+        for j in range(n_bands):
+            fixed_val, cross_vals = bands[j]
+            ordered = cross_vals[::-1] if j % 2 == 0 else cross_vals
+            for c in ordered:
+                path.append((fixed_val, c))
+    return np.array(path) if path else np.empty((0, 2))
+
+
+def build_irregular_boundary_path(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    fixed_axis:       str            = "y",
+    min_width_frac:   float          = 0.1,
+    fixed_offset:     float          = 0.0,
+    return_side:      Optional[str]  = "auto",
+    apply_overlap_fix: bool          = True,
+    bad_overlap_frac:  float         = 0.3,
+    min_coverage_fraction: float     = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
+) -> np.ndarray:
+    """
+    Build the ordered FOV path for a single-axis-adaptive irregular grid.
+
+    Convenience wrapper mirroring :func:`build_boundary_path`'s pipeline:
+    :func:`build_irregular_bands` -> :func:`fix_overlap_clusters` (per band,
+    on by default -- see its docstring for why this is required, not
+    optional) -> :func:`generate_irregular_scanning_path` ->
+    :func:`filter_scanning_path`, optionally followed by
+    :func:`determine_return_side` + :func:`close_scanning_path`.
+
+    Parameters
+    ----------
+    boundary_polygon, hole_polygons, step_size, fov_size_um : as in
+        :func:`build_irregular_bands`
+    fixed_axis       : ``"y"`` or ``"x"`` -- see :func:`build_irregular_bands`
+    min_width_frac, fixed_offset : forwarded to :func:`build_irregular_bands`
+    return_side      : ``"auto"`` (default) picks the correct natural side
+                       via :func:`determine_return_side` -- deliberately the
+                       default rather than requiring an explicit guess,
+                       since an earlier hardcoded guess in this method's own
+                       validation notebook was measurably the WORSE side
+                       (see that function's docstring). An explicit
+                       ``"left"``/``"right"`` (``fixed_axis="y"``) or
+                       ``"top"``/``"bottom"`` (``fixed_axis="x"``) closes on
+                       that side directly; ``None`` skips closure entirely
+                       (raw snake order), matching :func:`build_boundary_path`.
+    apply_overlap_fix : apply :func:`fix_overlap_clusters` to every band
+                       before path ordering (default ``True``) -- see that
+                       function's docstring for why this matters.
+    bad_overlap_frac : forwarded to :func:`fix_overlap_clusters`
+    min_coverage_fraction, subset_polygons : forwarded to
+                       :func:`filter_scanning_path`, same contract as
+                       :func:`build_boundary_path`
+
+    Returns
+    -------
+    ``(M, 2)`` ordered stage coordinates.
+    """
+    bands = build_irregular_bands(
+        boundary_polygon, hole_polygons, step_size, fov_size_um,
+        fixed_axis=fixed_axis, min_width_frac=min_width_frac, fixed_offset=fixed_offset,
+    )
+    if apply_overlap_fix:
+        bands = [
+            (fixed_val, fix_overlap_clusters(cross_vals, fov_size_um, step_size, bad_overlap_frac)[0])
+            for fixed_val, cross_vals in bands
+        ]
+    path = generate_irregular_scanning_path(bands, fixed_axis=fixed_axis)
+    if len(path) == 0:
+        return path
+    filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
+                                     min_coverage_fraction=min_coverage_fraction,
+                                     subset_polygons=subset_polygons)
+    if return_side is not None and len(filtered) > 1:
+        if return_side == "auto":
+            return_side, _ = determine_return_side(filtered, fixed_axis, step_size)
+        filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
+    return filtered
+
+
+@dataclass
+class IrregularGridOffsetResult:
+    """Winner (by fewest FOVs) plus every fixed-axis offset evaluated."""
+    coords:            np.ndarray
+    best_offset:       float
+    n_fovs_per_offset: List[Tuple[float, int]]
+
+
+def optimize_irregular_grid(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    fixed_axis:       str            = "y",
+    min_width_frac:   float          = 0.1,
+    n_samples:        int            = 9,
+    return_side:      Optional[str]  = "auto",
+    apply_overlap_fix: bool          = True,
+    bad_overlap_frac:  float         = 0.3,
+    min_coverage_fraction: float     = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
+) -> IrregularGridOffsetResult:
+    """
+    Search the fixed axis's lattice phase (offset within one *step_size*
+    period) for the one needing the fewest FOVs -- the irregular-grid
+    analogue of :func:`optimize_grid_offset`'s offset search, but for the
+    ONE axis this grid still shares a single phase across (the cross axis
+    is already independently re-centred per band, so it has nothing to
+    search).
+
+    Only *fixed_offset* varies across candidates; every other
+    :func:`build_irregular_boundary_path` parameter stays fixed. Offsets a
+    full *step_size* apart reproduce the same lattice, so
+    ``[-step_size/2, step_size/2)`` covers every distinct phase.
+
+    Parameters
+    ----------
+    n_samples : candidate offsets evaluated (:func:`optimize_grid_offset`'s
+               own default, 9, reused here)
+    (all other parameters forwarded to :func:`build_irregular_boundary_path`)
+
+    Returns
+    -------
+    :class:`IrregularGridOffsetResult` -- ``coords`` is the winning
+    candidate's ``(M, 2)`` path (already closed if *return_side* was
+    given); ``n_fovs_per_offset`` holds every evaluated offset's FOV count.
+    """
+    offsets = np.linspace(-step_size / 2.0, step_size / 2.0, n_samples, endpoint=False)
+    best_coords, best_offset, best_n = None, 0.0, None
+    n_fovs_per_offset: List[Tuple[float, int]] = []
+    for off in offsets:
+        coords = build_irregular_boundary_path(
+            boundary_polygon, hole_polygons, step_size, fov_size_um,
+            fixed_axis=fixed_axis, min_width_frac=min_width_frac, fixed_offset=float(off),
+            return_side=return_side, apply_overlap_fix=apply_overlap_fix,
+            bad_overlap_frac=bad_overlap_frac, min_coverage_fraction=min_coverage_fraction,
+            subset_polygons=subset_polygons,
+        )
+        n_fovs_per_offset.append((float(off), len(coords)))
+        if best_n is None or len(coords) < best_n:
+            best_coords, best_offset, best_n = coords, float(off), len(coords)
+    return IrregularGridOffsetResult(coords=best_coords, best_offset=best_offset,
+                                      n_fovs_per_offset=n_fovs_per_offset)
