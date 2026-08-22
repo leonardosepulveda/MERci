@@ -69,10 +69,17 @@ _CODEBOOK_BY_LIB = {
 }
 
 _MICROSCOPE_PARAMETERS_BY_SCOPE = {
-    "ST2":  "STORM2FUSION_2304_60xSil.json",
-    "MF3":  "MERFISH3.json",
-    "MF4":  "MERFISH4.json",
-    "MF5":  "MERFISH5.json",
+    ("ST2", "60X"): "STORM2_60X.json",
+    ("ST2", "40X"): "STORM2_40X.json",
+    ("MF3", "60X"): "MERFISH3.json",
+    ("MF4", "60X"): "MERFISH4.json",
+    ("MF5", "60X"): "MERFISH5.json",
+}
+# Which objective each microscope uses when the caller doesn't name one --
+# mirrors acquisition.configs._DEFAULT_OBJECTIVE, keeping every existing
+# call site (single objective per scope, historically) working unchanged.
+_DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE = {
+    "ST2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X",
 }
 
 
@@ -87,14 +94,25 @@ def resolve_codebook_filename(lib_name: str) -> str:
         ) from None
 
 
-def resolve_microscope_parameters_filename(microscope: str) -> str:
-    """Return the microscope-parameters JSON filename for *microscope*, raising if unknown."""
+def resolve_microscope_parameters_filename(microscope: str, objective: Optional[str] = None) -> str:
+    """
+    Return the microscope-parameters JSON filename for *microscope* +
+    *objective*, raising if unknown.
+
+    *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
+    entry in ``_DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE`` (today, every
+    microscope has exactly one) -- omit it to keep prior single-objective-
+    per-scope behaviour unchanged.
+    """
+    microscope = microscope.upper()
+    obj = objective.upper() if objective is not None else \
+        _DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE.get(microscope, "")
     try:
-        return _MICROSCOPE_PARAMETERS_BY_SCOPE[microscope.upper()]
+        return _MICROSCOPE_PARAMETERS_BY_SCOPE[(microscope, obj)]
     except KeyError:
         raise ValueError(
-            f"No microscope-parameters mapping for microscope={microscope!r}. "
-            f"Known: {sorted(_MICROSCOPE_PARAMETERS_BY_SCOPE)}"
+            f"No microscope-parameters mapping for microscope={microscope!r}, "
+            f"objective={obj!r}. Known: {sorted(_MICROSCOPE_PARAMETERS_BY_SCOPE)}"
         ) from None
 
 
@@ -113,7 +131,7 @@ def create_microscope_parameters_json(
 
     Only non-``None`` fields are included, matching the real templates —
     e.g. ``MERFISH5.json`` has only ``microns_per_pixel``, while
-    ``MERFISH3/4.json`` and ``STORM2FUSION_2304_60xSil.json`` add
+    ``MERFISH3/4.json`` and ``STORM2_60X.json``/``STORM2_40X.json`` add
     ``flip_horizontal``/``flip_vertical``/``transpose``/``image_dimensions``.
     """
     params: Dict[str, Any] = {}
