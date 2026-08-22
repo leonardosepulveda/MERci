@@ -12,7 +12,9 @@ Typical workflow
    scan-path return leg, the other axis odd for a centred cell (see its docstring).
 3. ``generate_scanning_path`` – order grid points in a boustrophedon pattern.
 4. ``load_hole_polygons``/``load_subset_polygons`` – load polygon masks for
-   excluded (hole) or whitelisted-only (subset) areas.
+   excluded (hole) or whitelisted-only (subset) areas. Holes may come as one
+   file per hole (``hole{n}.txt``) or all in one combined file (see
+   ``load_hole_polygons``'s docstring).
 5. ``filter_scanning_path`` – keep FOVs whose camera frame overlaps the boundary;
    remove FOVs whose camera frame overlaps any hole; if any subsets are given,
    also remove FOVs that don't overlap the subset area.
@@ -207,30 +209,117 @@ def _read_xy_file(path: Path) -> List[Tuple[float, float]]:
     return coords
 
 
+def _split_by_distance_gap(
+    coords: List[Tuple[float, float]],
+) -> List[List[Tuple[float, float]]]:
+    """
+    Split a flat, click-ordered list of ``(x, y)`` points into separate
+    polygon vertex groups, wherever the distance to the next point is a
+    statistical outlier relative to the typical vertex-to-vertex spacing.
+
+    Steve dumps every hole's vertices into one file, one polygon at a time,
+    with no separator between holes. Within one hole, consecutive vertices
+    are close together (they trace its outline); the jump from a hole's
+    last vertex to the next hole's first vertex is much larger -- that jump
+    is what this function detects, using a modified z-score (Iglewicz &
+    Hoaglin) on the consecutive-distance array so no fixed µm threshold is
+    needed.
+
+    Returns
+    -------
+    List of point-list groups, in file order. A single hole (no outlier
+    gaps) returns one group containing every point.
+    """
+    if len(coords) < 2:
+        return [list(coords)] if coords else []
+
+    pts   = np.asarray(coords, dtype=float)
+    dists = np.hypot(*np.diff(pts, axis=0).T)
+
+    median = np.median(dists)
+    mad    = np.median(np.abs(dists - median))
+    scale  = mad if mad > 0 else (np.std(dists) or median or 1.0)
+
+    modified_z = 0.6745 * (dists - median) / scale
+    gap_after  = np.flatnonzero(modified_z > 3.5)   # index i means gap after point i
+
+    groups, start = [], 0
+    for i in gap_after:
+        groups.append(coords[start:i + 1])
+        start = i + 1
+    groups.append(coords[start:])
+    return groups
+
+
+def _load_combined_hole_polygons(path: Path) -> List[Polygon]:
+    """
+    Load hole polygons from a single combined file (see *combined_filename*
+    on :func:`load_hole_polygons`): every hole's vertices, back to back, no
+    separator -- split via :func:`_split_by_distance_gap`.
+    """
+    coords = _read_xy_file(path)
+    polygons: List[Polygon] = []
+
+    for n, group in enumerate(_split_by_distance_gap(coords), start=1):
+        if len(group) < 3:
+            log.warning(
+                "Hole %d in %s has fewer than 3 valid points – skipping.",
+                n, path.name,
+            )
+            continue
+
+        poly = Polygon(group)
+        if poly.is_empty or not poly.is_valid:
+            log.warning(
+                "Hole %d in %s produced an invalid Shapely polygon – skipping.",
+                n, path.name,
+            )
+            continue
+
+        polygons.append(poly)
+
+    return polygons
+
+
 def load_hole_polygons(
     hole_dir: Path,
     pattern:  str = "hole*.txt",
+    combined_filename: str = "holes.txt",
 ) -> List[Polygon]:
     """
     Load exclusion-region polygons from a directory.
 
-    Each ``hole{n}.txt`` file matching *pattern* must be a comma-separated
-    ``x,y`` file (one vertex per line); files with fewer than three vertices
-    are skipped. A hole can optionally have one or more companion
-    ``hole{n}_island{m}.txt`` files (same format) -- these become interior
-    rings of the hole polygon, for a hole that is really a donut/annulus
-    around genuine tissue (e.g. auto-derived by
-    ``MERci.acquisition.mosaic.segment_mosaic_tissue``/``save_boundary_from
-    _mosaic``): the island area is then correctly excluded *from* the hole
-    (i.e. still imaged), rather than swallowed whole into a solid disk.
-    Island companion files are never treated as holes in their own right.
+    Two input conventions, checked in this order:
+
+    1. **Combined** -- ``{combined_filename}`` (default ``holes.txt``): every
+       hole's vertices back to back in one comma-separated ``x,y`` file, no
+       separator between holes (this is what Steve exports when several
+       holes are drawn in one session). Split into separate holes by
+       :func:`_split_by_distance_gap`. Takes priority when present; islands
+       are not supported in this format.
+    2. **Per-file** (unchanged) -- each ``hole{n}.txt`` file matching
+       *pattern* must be a comma-separated ``x,y`` file (one vertex per
+       line); files with fewer than three vertices are skipped. A hole can
+       optionally have one or more companion ``hole{n}_island{m}.txt`` files
+       (same format) -- these become interior rings of the hole polygon, for
+       a hole that is really a donut/annulus around genuine tissue (e.g.
+       auto-derived by ``MERci.acquisition.mosaic.segment_mosaic_tissue``/
+       ``save_boundary_from_mosaic``): the island area is then correctly
+       excluded *from* the hole (i.e. still imaged), rather than swallowed
+       whole into a solid disk. Island companion files are never treated as
+       holes in their own right.
 
     Returns
     -------
     List of valid Shapely :class:`~shapely.geometry.Polygon` objects (with
-    interior rings where island companion files were found).
+    interior rings where per-file island companion files were found).
     """
     hole_dir = Path(hole_dir)
+
+    combined_path = hole_dir / combined_filename
+    if combined_path.exists():
+        return _load_combined_hole_polygons(combined_path)
+
     hole_re  = re.compile(r"^hole(\d+)\.txt$", re.IGNORECASE)
     polygons: List[Polygon] = []
 
