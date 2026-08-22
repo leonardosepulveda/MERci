@@ -95,7 +95,7 @@
   <mosaic validate="False">
     <flip_horizontal type="boolean">False</flip_horizontal>
     <flip_vertical type="boolean">True</flip_vertical>
-    <obj1 type="custom">60x,0.10,0.0,0.0</obj1>
+    <obj1 type="custom">60x,0.0878,0.0,0.0</obj1>
     <obj2 type="custom">10x,0.595,0.0,0.0</obj2>
     <obj3 type="custom">40x,0.1317,0.0,0.0</obj3>
     <objective type="string">obj1</objective>
