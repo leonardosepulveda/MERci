@@ -3,9 +3,9 @@
   <!-- camera settings -->
   <camera1 is_new="False">
     <colortable type="string">ramp.ctbl</colortable>
-    <cycle_value type="float">0.500002646617</cycle_value>
+    <cycle_value type="float">0.5</cycle_value>
     <exposure_time type="float">0.5</exposure_time>
-    <exposure_value type="float">0.500002646617</exposure_value>
+    <exposure_value type="float">0.5</exposure_value>
     <external_trigger type="int">0</external_trigger>
     <flip_horizontal type="boolean">False</flip_horizontal>
     <flip_vertical type="boolean">False</flip_vertical>
@@ -25,7 +25,7 @@
 
   <!-- film settings -->
   <film>
-    <filename type="string">hal-config-10x-mosaic</filename>
+    <filename type="string">hal-config-40x-mosaic</filename>
     <acq_mode type="string">fixed_length</acq_mode>
     <frames type="int">2</frames>
     <logfile type="string">F:\image_log.txt</logfile>
@@ -48,8 +48,9 @@
     <flip_vertical type="boolean">False</flip_vertical>
     <obj1 type="custom">60x,0.0878,0.0,0.0</obj1>
     <obj2 type="custom">10x,0.64,0.0,0.0</obj2>
-	<obj3 type="custom">4x,4.0,0.0,0.0</obj3>
-    <objective type="string">obj2</objective>
+	  <obj3 type="custom">4x,4.0,0.0,0.0</obj3>
+    <obj4 type="custom">40x,0.1317,0.0,0.0</obj4>
+    <objective type="string">obj4</objective>
     <transpose type="boolean">True</transpose>
   </mosaic>
   
