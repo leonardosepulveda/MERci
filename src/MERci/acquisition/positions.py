@@ -14,7 +14,9 @@ Typical workflow
 4. ``load_hole_polygons``/``load_subset_polygons`` – load polygon masks for
    excluded (hole) or whitelisted-only (subset) areas. Holes may come as one
    file per hole (``hole{n}.txt``) or all in one combined file (see
-   ``load_hole_polygons``'s docstring).
+   ``load_hole_polygons``'s docstring). ``load_hole_polygons_all_sources``
+   additionally merges in hand-drawn holes from ``boundaries/manual/`` even
+   when the boundary itself came from ``boundaries/from_mosaic/``.
 5. ``filter_scanning_path`` – keep FOVs whose camera frame overlaps the boundary;
    remove FOVs whose camera frame overlaps any hole; if any subsets are given,
    also remove FOVs that don't overlap the subset area.
@@ -355,6 +357,51 @@ def load_hole_polygons(
             continue
 
         polygons.append(poly)
+
+    return polygons
+
+
+def load_hole_polygons_all_sources(
+    positions_dir: Path,
+    boundary_dir:  Path,
+    pattern:            str = "hole*.txt",
+    combined_filename:  str = "holes.txt",
+) -> List[Polygon]:
+    """
+    Load hole polygons the way :func:`load_hole_polygons` does, plus also
+    from the sibling ``positions_dir/boundaries/manual/`` source when it
+    isn't already *boundary_dir* itself.
+
+    Holes are already "global" within one source directory -- every hole
+    file there applies to every boundary alike (see :func:`load_hole_polygons`).
+    This extends that across sources too: boundaries auto-derived from a
+    mosaic (``positions_dir/boundaries/from_mosaic/``) can still be combined
+    with hand-drawn supplementary holes dropped in
+    ``positions_dir/boundaries/manual/``, without redrawing them into the
+    mosaic-derived directory or re-running mosaic segmentation. When
+    *boundary_dir* already IS the manual source (or manual has no hole
+    files), this is exactly :func:`load_hole_polygons`'s result -- no holes
+    are ever double-loaded.
+
+    Parameters
+    ----------
+    positions_dir : ``SAMPLE_DIR/positions`` (holds ``boundaries/manual/``
+                     and ``boundaries/from_mosaic/``).
+    boundary_dir  : the resolved boundary source directory in use (from
+                     :func:`resolve_boundaries_source_dir`/:func:`resolve_boundary_dir`).
+    pattern, combined_filename : forwarded to :func:`load_hole_polygons`.
+
+    Returns
+    -------
+    List of valid Shapely :class:`~shapely.geometry.Polygon` objects, from
+    *boundary_dir* followed by ``manual/`` (if distinct and present).
+    """
+    boundary_dir = Path(boundary_dir)
+    polygons = load_hole_polygons(boundary_dir, pattern=pattern, combined_filename=combined_filename)
+
+    manual_dir = Path(positions_dir) / "boundaries" / "manual"
+    if manual_dir.is_dir() and manual_dir.resolve() != boundary_dir.resolve():
+        polygons += load_hole_polygons(manual_dir, pattern=pattern, combined_filename=combined_filename)
 
     return polygons
 
