@@ -540,16 +540,15 @@ def create_dave_config(
       still sit between rounds (after a round's last segment loop).
 
     **One ``<loop_variable>`` per loop, always — even when several rounds
-    point at the same positions file.** Dave's real ``v2Generator``
+    point at the same positions file.** Dave's ``v2Generator``
     (``handleLoop``) resolves a ``<loop>`` by looking up
     ``self.loop_variable_names.index(loop.attrib["name"])`` — every loop MUST
     have a ``<loop_variable>`` of the exact same name; there is no mechanism
     for a ``<movie>``'s ``<variable_entry>`` to reference a *different*,
-    shared loop_variable declared under another name (verified directly
-    against the storm_control source; an earlier attempt to declare one
-    shared loop_variable per segment/positions-file, referenced by name from
-    each round's movie, loaded fine in MERci's own reader but made real Dave
-    raise ``ValueError: 'Hyb NN Imaging' is not in list``). So every round
+    shared loop_variable declared under another name. A single shared
+    loop_variable referenced by name from each round's movie loads fine in
+    MERci's own reader but makes real Dave raise
+    ``ValueError: 'Hyb NN Imaging' is not in list``. So every round
     (and, in per-segment mode, every round×segment) still gets its own
     identically-named ``<loop_variable>``, duplicating the same ``file_path``
     across as many declarations as there are rounds/segments that use it.
@@ -861,9 +860,9 @@ def create_dave_config(
                 # is NOT equivalent: a Kilroy config can end a protocol with
                 # a bare valve reposition move with no <pump> after it (e.g.
                 # parking at the next hyb's port), which is not itself a
-                # flow -- confirmed as a real, previously undetected
-                # double-flow bug against a live experiment's actual Kilroy
-                # config (see protocol_last_flowed_valve's docstring).
+                # flow -- using the literal last <valve> element there causes
+                # a real double-flow bug (see protocol_last_flowed_valve's
+                # docstring).
                 image_buffer = resolver.image_buffer()
                 preceding_last_flow = protocol_last_flowed_valve(kilroy_config, steps[-1])
                 buffer_last_flow    = protocol_last_flowed_valve(kilroy_config, image_buffer)
@@ -919,11 +918,9 @@ def create_dave_config(
             # one <loop> whose name matches it. So when several rounds visit
             # the same segment, each round still declares its own
             # loop_variable pointing at the same positions file -- Dave has no
-            # mechanism to share one across differently-named loops (verified
-            # directly against storm_control's real v2Generator.py source; a
-            # shared name here previously caused ValueError: '<loop name>' is
-            # not in list). Each segment sets its own save directory just
-            # before its loop.
+            # mechanism to share one across differently-named loops (a shared
+            # name here raises ValueError: '<loop name>' is not in list).
+            # Each segment sets its own save directory just before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
                 lname = f"{_imaging_label(round_id)} - {seg}"
@@ -1037,21 +1034,14 @@ def create_focus_test_dave_config(
 
     **No movie by default (``n_test_frames=0``).** Each FOV's ``<movie>``
     carries only ``<name>``/``<check_focus>`` -- no ``<length>``/
-    ``<parameters>``. Dave's real ``v2Generator``
-    (``XMLRecipeParser.convertToDaveXMLPrimitives``) expands a ``<movie>``
-    into one action per a FIXED list (DAMoveStage, ..., DACheckFocus, ...,
-    DASetParameters, ..., DATakeMovie), and each action's own ``createETree``
-    silently returns ``None`` (omitting that step) when the fields it needs
-    aren't present -- confirmed directly against the real stock source
-    (``storm_control/dave/daveActions.py``): ``DASetParameters.createETree``
-    requires a ``parameters`` field, and ``DATakeMovie.createETree`` requires
-    both ``name`` AND ``length`` (with ``length > 0``). Omitting
-    ``<length>``/``<parameters>`` therefore yields a branch with ONLY
-    DAMoveStage + DACheckFocus -- no image is ever taken, no HAL parameters
-    changed. This needs no patch to Dave/HAL; it works with stock Dave as-is
-    (verified directly by running the real, unmodified ``v2Generator``
-    against a generated recipe of each kind -- see this repo's
-    ``prompt_history`` for the verification script).
+    ``<parameters>``. Dave's ``v2Generator`` expands ``<movie>`` into a fixed
+    action list (DAMoveStage, ..., DACheckFocus, ..., DASetParameters, ...,
+    DATakeMovie), and each action silently omits itself when its required
+    fields are missing: ``DASetParameters`` needs ``parameters``,
+    ``DATakeMovie`` needs ``name`` and ``length > 0``. So omitting
+    ``<length>``/``<parameters>`` yields a branch with ONLY DAMoveStage +
+    DACheckFocus -- no image taken, no HAL parameters changed. Works with
+    stock Dave, no patch needed.
 
     **No persisted per-FOV pass/fail file is possible in this mode.** HAL's
     focus-lock reply (``focus_status``) only reaches Dave live over TCP; Dave

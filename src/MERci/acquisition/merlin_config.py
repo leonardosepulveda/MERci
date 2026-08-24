@@ -1,14 +1,13 @@
 # MERci/acquisition/merlin_config.py
 """
 Generate MERlin's input/config files for one experiment, writing into a
-per-experiment ``SAMPLE_DIR/merlin/`` folder instead of the shared cluster
-location (``~/Software/merfish-parameters/``) used before.
+per-experiment ``SAMPLE_DIR/merlin/`` folder instead of a shared cluster
+location.
 
-Every schema in this module was verified against real, current (2026)
-template/output files read directly from ``R:\\Software\\merfish-parameters\\``
-(microscope-parameter JSONs, codebook CSVs, the cluster-resource-allocation
-template, a real generated snakemake-parameters file, and a real, currently
-live slurm submit script) — nothing here is a guess.
+Every schema in this module is verified against real, current
+template/output files (microscope-parameter JSONs, codebook CSVs, the
+cluster-resource-allocation template, a generated snakemake-parameters
+file, and a real, live slurm submit script) — nothing here is a guess.
 
 Functions
 ---------
@@ -574,24 +573,18 @@ def create_slurm_submit_script(
     conda_pkgs_dir/conda_envs_path : lab-wide conda storage convention;
                      override if this changes
     allow_ragged_z_stacks : passes ``--allow-ragged-z-stacks`` to ``merlin``
-                     -- a variable-z-per-FOV experiment's raw files
-                     legitimately have fewer frames than the deepest FOV's,
-                     which the CLI otherwise treats as a hard error. Requires
-                     a MERlin checkout with ragged-z-stack support (as of
-                     this writing, still in progress -- see
-                     ``prompt_history/2026_07_16_1015_variable_z_per_fov_
-                     storm_control_investigation.md``); ``False`` (default)
-                     leaves the generated script identical to before.
+                     -- lets a variable-z-per-FOV experiment's raw files have
+                     fewer frames than the deepest FOV's without erroring.
+                     Requires a MERlin checkout with ragged-z-stack support.
+                     ``False`` (default) omits the flag.
     analysis_name  : passes ``-x <analysis_name>`` to ``merlin``, so its
                      analysis/output folder is ``analysisHome/<analysis_name>``
                      (e.g. ``"$SAMPLE_DIR/merlin/output"``) instead of
                      ``analysisHome/<folder_name>`` -- MERlin otherwise mirrors
                      the raw-data folder's own (possibly deep/nested) path
                      under the analysis home. Requires a MERlin checkout with
-                     the ``-x``/``--analysis-name`` flag (``~/Software/
-                     merlin_cc`` as of this writing; NOT present in the older
-                     ``merlin_cp4_env`` fork). ``None`` (default) omits the
-                     flag, leaving the generated script identical to before.
+                     the ``-x``/``--analysis-name`` flag. ``None`` (default)
+                     omits the flag.
     """
     output_path = Path(output_path)
     if slurm_out_path is None:
@@ -657,14 +650,11 @@ date +'Finished at %R.'
 # PlotPerformance -- with a global-alignment task in the mix).
 
 # The global-alignment task used everywhere below. LeastSquaresGlobalAlignment
-# (`merlin.analysis.globalalign`, same module as SimpleGlobalAlignment) is
-# merlin_cc's current implementation -- corrects each fov's nominal position
-# via a joint sparse least-squares solve over real pairwise image-registration
-# measurements, instead of trusting the nominal stage position outright as
-# SimpleGlobalAlignment (used by the older analysis_decode_v2_aaron_260816.json
-# reference) does. See that class's own docstring in `merlin/analysis/
-# globalalign.py` (`~/Software/merlin_cc`) for why this correction needs a
-# joint per-fov solve rather than one global affine transform.
+# (`merlin.analysis.globalalign`) corrects each FOV's nominal position via a
+# joint sparse least-squares solve over real pairwise image-registration
+# measurements, instead of trusting the nominal stage position outright like
+# SimpleGlobalAlignment does. See that class's own docstring for why a joint
+# per-FOV solve is needed rather than one global affine transform.
 _GLOBAL_ALIGN_TASK = "LeastSquaresGlobalAlignment"
 
 _WARP_DEFAULTS = {
@@ -962,30 +952,25 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 # whichever of global_align_simple/global_align_least_squares was included).
 #
 # Default recipe values (data/configs/merlin/analysis/recipes/default_*.yaml)
-# were built to match analysis_decode_v2_aaron_260816.json (`~/Software/
-# merfish-parameters/analysis/`) field-for-field for every task it defines
-# (warp, preprocess, optimize, decode, filter, export, plot) -- explicit user
-# choice, verified real difference from the OLDER MerlinAnalysisSpec Python
-# defaults above (those trace to merlin_analysis_LT048.json/BC522 instead):
-# n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5), highpass_sigma
-# 3 (not 20), crop_width 100 (not 106); several fields that reference file
-# doesn't set at all (median_filter, percentile_pixel_to_keep,
+# match analysis_decode_v2_aaron_260816.json field-for-field for every task
+# it defines (warp, preprocess, optimize, decode, filter, export, plot) --
+# a deliberate departure from the OLDER MerlinAnalysisSpec Python defaults
+# above: n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5),
+# highpass_sigma 3 (not 20), crop_width 100 (not 106); several fields that
+# reference file doesn't set at all (median_filter, percentile_pixel_to_keep,
 # edge_width_to_remove, min_barcodes_for_refactoring, use_gpu,
-# remove_z_duplicated_barcodes) are likewise left unset here -- confirmed
-# directly against merlin_cc's own source (warp.py/optimize.py/decode.py/
-# filterbarcodes.py) that MERlin's own internal defaults then apply, matching
-# analysis_decode_v2_aaron_260816.json's real runtime behavior exactly, NOT a
-# regression from the old explicit values. Two deliberate departures from
-# that reference file (explicit user choice): the global-alignment atom is
-# global_align_least_squares (LeastSquaresGlobalAlignment) instead of that
-# file's SimpleGlobalAlignment, and slurm_report (absent from that file) is
-# included. chromatic_correction_file (that file sets an absolute path under
-# a different user's home directory) is deliberately left unset in
+# remove_z_duplicated_barcodes) are likewise left unset here, so MERlin's own
+# internal defaults apply -- matching that reference file's real runtime
+# behavior, not a regression from the old explicit values. Two further
+# deliberate departures from that reference file: the global-alignment atom
+# is global_align_least_squares (LeastSquaresGlobalAlignment) instead of its
+# SimpleGlobalAlignment, and slurm_report (absent from that file) is
+# included. chromatic_correction_file (an absolute path in that file, tied
+# to a specific machine) is deliberately left unset in
 # optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
 # shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
-# reference file entirely) keep the older MerlinAnalysisSpec defaults' values
-# (BC522/analysis_cellposeSAM_Dark_only.json-derived), since there's nothing
-# in analysis_decode_v2_aaron_260816.json to match them against.
+# reference file entirely) keep the older MerlinAnalysisSpec defaults'
+# values, since there's nothing in the reference file to match them against.
 
 # Atom names that name ONE of several mutually-exclusive alternatives for the
 # same structural role -- build_merlin_analysis_parameters uses whichever one

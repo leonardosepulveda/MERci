@@ -40,11 +40,10 @@ otherwise documented)
   objective's real parfocal/parcentric misalignment relative to whichever
   objective it treats as this session's stage-position reference (always
   ``0.00, 0.00`` on every real ``.msc`` file seen so far) -- IS used, by
-  :func:`load_steve_mosaic` (added after confirming directly, on real data,
-  that a previously-uncorrected mosaic/high-mag-alignment-tile discrepancy
-  exactly matched this already-recorded-but-ignored value); the
-  ``um_per_pix`` field in the same line is still NOT used for pixel size
-  (see below -- a separate, unrelated field in the same line).
+  :func:`load_steve_mosaic`, to correct a real mosaic/high-mag-alignment-
+  tile discrepancy; the ``um_per_pix`` field in the same line is still NOT
+  used for pixel size (see below -- a separate, unrelated field in the
+  same line).
 * ``<name>_<id>.stv`` – a ``pickle.dump`` of the tile's ``ImageItem.__dict__``
   (minus its Qt graphics item). The keys used here: ``numpy_data`` (the raw,
   already-oriented camera frame), ``x_um``/``y_um`` (stage position of the
@@ -56,9 +55,8 @@ otherwise documented)
   class attribute, not a universal constant). On a shared microscope where
   objectives are physically removed/reinstalled between users, the
   ``(x_offset, y_offset)`` above is NOT a fixed hardware constant either --
-  confirmed directly by comparing the same 10x-vs-60x pair's recorded offset
-  across several real experiment sessions on the identical scope: correct,
-  but different, values each time. It must always be read fresh from each
+  the same objective pair on the same scope can record different, still-
+  correct values across sessions. It must always be read fresh from each
   experiment's own ``.msc`` file.
 """
 from __future__ import annotations
@@ -168,14 +166,12 @@ def _parse_objective_offsets(msc_path: Path) -> "dict[str, Tuple[float, float]]"
     This offset is Steve's own record of the physical parfocal/parcentric
     misalignment between that objective's optical axis and whichever
     objective Steve treats as its stage-position reference for this session
-    (confirmed directly across several real experiments: the reference
-    objective's own line always reads ``0.00, 0.00``). On a shared
-    microscope where objectives are physically removed/reinstalled between
-    users, this offset is NOT a fixed hardware constant -- confirmed
-    directly by comparing the same 10x-vs-60x objective pair's recorded
-    offset across several real sessions on the identical scope (ST2):
-    correct, but different, values each time. Reading it fresh from each
-    experiment's own ``.msc`` file (never hardcoded) is therefore required.
+    (the reference objective's own line always reads ``0.00, 0.00``). On a
+    shared microscope where objectives are physically removed/reinstalled
+    between users, this offset is NOT a fixed hardware constant -- the same
+    objective pair can record different, still-correct values across
+    sessions. Reading it fresh from each experiment's own ``.msc`` file
+    (never hardcoded) is therefore required.
     """
     offsets: "dict[str, Tuple[float, float]]" = {}
     with msc_path.open() as fh:
@@ -202,15 +198,9 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
     ``(x_offset, y_offset)`` (the ``.msc`` file's ``objective,...`` line,
     see :func:`_parse_objective_offsets`) added before being returned, so
     tiles shot with different objectives land in one consistent stage-
-    position frame without a separate manual calibration/correction step --
-    a real, previously-uncorrected discrepancy between a mosaic's low-mag
-    scanning objective and its high-mag alignment tiles was confirmed
-    directly on real data (see ``notebooks/tests/fix_mosaic_shift_missing_
-    fovs.ipynb`` and its ``prompt_history`` for the investigation) to
-    exactly match this already-recorded-but-previously-unused offset. An
-    objective with no matching ``objective,`` line (or a manifest with none
-    at all) gets ``(0, 0)`` -- unchanged from the previous, uncorrected
-    behavior.
+    position frame without a separate manual calibration step. An objective
+    with no matching ``objective,`` line (or a manifest with none at all)
+    gets ``(0, 0)``.
 
     Parameters
     ----------
@@ -452,13 +442,13 @@ def segment_mosaic_tissue(
     global ``min_tissue_area_um2`` cannot distinguish a genuine small piece
     of tissue near the edge of a larger kept piece (e.g. a torn/frayed bit,
     or a fragment near a hole) from a background dust speck of similar
-    size -- confirmed directly on a real mosaic: both populations spanned
-    a near-identical small-area range, so simply lowering the area
-    threshold recovers real fragments at roughly a 10-to-1 cost in
-    reintroduced background noise. Distance to an already-kept piece is a
-    much stronger discriminator: a component sitting right at a real
-    tissue's edge is very likely real tissue too, while one sitting alone
-    far out in empty background is very likely debris, regardless of their
+    size -- both populations span a near-identical small-area range, so
+    simply lowering the area threshold recovers real fragments at roughly a
+    10-to-1 cost in reintroduced background noise. Distance to an
+    already-kept piece is a much stronger discriminator: a component
+    sitting right at a real tissue's edge is very likely real tissue too,
+    while one sitting alone far out in empty background is very likely
+    debris, regardless of their
     similar areas. When ``near_fragment_max_distance_um`` > 0, any
     component below ``min_tissue_area_um2`` is still kept if (a) its
     nearest pixel is within this distance of an already-kept (>=
@@ -687,8 +677,8 @@ def plot_tile_intensity_histograms(
     objective, a debris/bubble FOV, ...) stand out, and helps pick a fixed
     segmentation threshold by eye instead of trusting Otsu blindly.
 
-    Confirmed directly on a real dataset where most FOVs are tissue-free:
-    pooling by raw pixel count let the (much more numerous) empty tiles'
+    On a dataset where most FOVs are tissue-free, pooling by raw pixel
+    count lets the (much more numerous) empty tiles'
     background peak swamp the real tissue peak down to ~3% of the combined
     histogram's max density -- under the 5% prominence cutoff
     :func:`_estimate_bimodal_threshold` requires, so it always returned

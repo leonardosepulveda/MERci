@@ -482,8 +482,8 @@ def iter_tiff_frames(
     selection :func:`read_tiff_frames`/module-level ``tifffile.imread(...,
     key=...)`` use -- NOT ``tf.pages[idx]``. A stack written by
     ``tifffile.imwrite`` from one ``(n_frames, H, W)`` array is typically
-    stored as a *single* IFD/page holding every frame (confirmed directly,
-    tifffile's "shaped" convention), not one page per frame, so indexing
+    stored as a *single* IFD/page holding every frame (tifffile's "shaped"
+    convention), not one page per frame, so indexing
     ``tf.pages`` directly reads the wrong data for exactly the files this
     package itself writes. ``series=None`` matters too: leaving it at its
     default resolved a *different* (incorrect) code path in testing.
