@@ -132,12 +132,11 @@ def protocol_last_flowed_valve(path: Path, protocol_name: str) -> Optional[str]:
     Deliberately NOT just ``protocol_valve_commands(...)[-1]``: some Kilroy
     configs end a protocol with a bare valve *reposition* move that has no
     ``<pump>`` after it (e.g. parking the valve at the next hyb's port ready
-    for the following cycle) -- confirmed directly against a real config
-    (``kilroy-config-st2-syringe-direct-and-adaptors-260731.xml``) where
-    ``"Hybridize N"`` ends `<valve>Set Image</valve><pump>...</pump>
-    <valve>Set Hyb 1</valve>` (no pump after the trailing valve). Taking the
-    literal last valve name there ("Set Hyb 1") instead of the last one that
-    actually flowed ("Set Image") made ``_add_fluidics``'s already-flowed
+    for the following cycle) -- e.g. a protocol ending
+    `<valve>Set Image</valve><pump>...</pump><valve>Set Hyb 1</valve>` (no
+    pump after the trailing valve). Taking the literal last valve name there
+    ("Set Hyb 1") instead of the last one that actually flowed ("Set Image")
+    made ``_add_fluidics``'s already-flowed
     detection (see ``dave.py``) wrongly conclude the image buffer was NOT
     already flowed, appending a real second "Flow Image Buffer" step after
     every hybridization -- a genuine double-flow this function exists to

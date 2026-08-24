@@ -537,11 +537,9 @@ def create_shutter_file(
     to whatever the HAL config's own ``<default_power>`` sets for that
     channel (see :func:`power_dict_to_channel_list`), not an independent
     absolute laser power -- the two are not equivalent, and setting the same
-    real per-colour intensity in both places (an earlier version of this
-    function accepted a ``power={nm: power}`` mapping here, mirroring
-    ``power_dict_to_channel_list``) silently double-applies the intensity
-    scaling on real hardware. Per-colour power belongs ONLY in the HAL
-    config's ``<default_power>``.
+    real per-colour intensity in both places silently double-applies the
+    intensity scaling on real hardware. Per-colour power belongs ONLY in the
+    HAL config's ``<default_power>``.
 
     Parameters
     ----------

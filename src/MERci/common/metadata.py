@@ -27,14 +27,14 @@ def _path_exists_safe(p: Path) -> bool:
     """
     Like ``Path.exists()``, but treats an OS-level access failure (e.g. an
     unmapped/differently-credentialed network drive letter recorded in
-    round_info.csv's ``dir`` column on a different machine -- confirmed
-    directly: ``OSError: [WinError 1326] The user name or password is
-    incorrect`` for a real absolute path that isn't reachable from this
-    machine) the same as "doesn't exist" rather than letting it propagate.
-    ``Path.exists()`` itself only swallows the specific errno values that
-    mean "not found"; other OSErrors (permission/auth/unreachable) still
-    raise, which previously crashed the whole candidate-path resolution
-    instead of just skipping to the next candidate.
+    round_info.csv's ``dir`` column on a different machine -- e.g.
+    ``OSError: [WinError 1326] The user name or password is incorrect`` for
+    a real absolute path that isn't reachable from this machine) the same as
+    "doesn't exist" rather than letting it propagate. ``Path.exists()``
+    itself only swallows the specific errno values that mean "not found";
+    other OSErrors (permission/auth/unreachable) would otherwise crash the
+    whole candidate-path resolution instead of just skipping to the next
+    candidate.
     """
     try:
         return p.exists()
@@ -331,13 +331,11 @@ def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
     never has. This silently fell into the "relative -- resolve under this
     machine's own SAMPLE_DIR" branch, but a backslash-separated string
     parses as ONE opaque path component under POSIX `Path` (backslash isn't
-    a separator there), so joining it onto SAMPLE_DIR just produced one
-    bogus, nonexistent nested directory -- confirmed directly against a
-    real experiment transferred to the cluster: every round except
-    "cells" (saved only by its own unrelated dual-fallback) resolved 0
-    imaged FOVs even though every real file was present, right there, the
-    whole time. A forward-slash Windows path decomposes into real path
-    parts under POSIX `Path` but is still wrong (the drive + every
+    a separator there), so joining it onto SAMPLE_DIR just produces one
+    bogus, nonexistent nested directory -- every round can resolve 0 imaged
+    FOVs even though every real file is present. A forward-slash Windows
+    path decomposes into real path parts under POSIX `Path` but is still
+    wrong (the drive + every
     directory above ``data/`` gets appended onto SAMPLE_DIR verbatim,
     still never a real path) -- so this isn't just a backslash bug.
 

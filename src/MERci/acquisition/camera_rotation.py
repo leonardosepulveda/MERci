@@ -20,16 +20,6 @@ phase cross-correlation on a DAPI/cells-round frame -- reusing
 :func:`MERci.acquisition.alignment.phase_drift`), then fitting an affine
 transform (via the ``affine6p`` package) from every anchor+neighbour pair's
 (nominal, measured) position correspondence, pooled together into one fit.
-
-Historical context: this replaces an earlier BigStitcher-based manual
-workflow (see ``notebooks/misc/correct_camera_rotation.ipynb``'s intro and
-this project's ``prompt_history``) -- BigStitcher gave good results on a
-small (~5x5) contiguous tile block via full pairwise-shift + global
-optimization, but did not scale to a full experiment (>1000 tiles) and
-required manual bad-link curation. Sampling several small, independent
-4-connected-neighbour groups scattered across the whole grid and pooling
-their correspondences into one fit achieves the same "one global rotation"
-estimate without either limitation.
 """
 from __future__ import annotations
 
@@ -58,26 +48,10 @@ _DIRECTIONS = ("right", "left", "up", "down")
 # rather than guessing. This 8-combination search exists only as a fallback/
 # audit.
 #
-# History worth knowing before trusting this search's output: on a real MF3
-# dataset, this audit twice ranked "transpose alone" above MERFISH3.json's
-# real combination (transpose=True, flip_horizontal=False,
-# flip_vertical=True). Both times the cause was a SEPARATE bug in
-# crop_overlap below, not a wrong microscope-parameters file: crop_overlap's
-# "up" direction had its anchor/neighbour row selection backwards, which
-# happened to cancel out with the missing flip_vertical and looked like a
-# clean signal. Confirmed directly (see prompt_history) by cropping the same
-# real overlap region under both candidates and inspecting it visually --
-# the JSON's combination with the ORIGINAL (buggy) crop_overlap produced
-# visibly mismatched crops and a large, inconsistent measured shift, while
-# the same JSON combination with crop_overlap's row selection swapped gave
-# small, visually-matching crops identical to what "transpose alone" had
-# been giving. crop_overlap now has the corrected row convention, and this
-# audit agrees with MERFISH3.json (ranks it #1/8) as a result -- but if this
-# audit ever again ranks a DIFFERENT combination above the microscope-
-# parameters JSON's declared one, do not assume the JSON is wrong: inspect
-# the raw overlap crops directly first, the same way this bug was actually
-# found, since a compensating bug elsewhere is at least as likely as a wrong
-# JSON file.
+# Caution: a bug elsewhere (e.g. in crop_overlap below) can make a WRONG
+# combination look best here. If this audit ever ranks a different
+# combination above the microscope-parameters JSON's declared one, don't
+# assume the JSON is wrong -- inspect the raw overlap crops directly first.
 _ORIENTATION_COMBINATIONS = [
     (transpose, flip_horizontal, flip_vertical)
     for transpose in (False, True)
@@ -153,16 +127,12 @@ def crop_overlap(
     overlap as a fraction of the frame's full width/height (e.g.
     ``1 - ExperimentConfig.non_overlap_fraction``).
 
-    Row convention for "up"/"down" (confirmed directly against a real MF3
-    dataset, once the image was correctly oriented per its MERlin
-    microscope-parameters JSON -- see ``notebooks/misc/
-    correct_camera_rotation.ipynb`` section 4): for a correctly-oriented
-    frame, row index 0 is the physical -y (down) edge, not +y (up) -- so
-    "up" crops the anchor's LAST n rows against the neighbour's FIRST n
-    rows. An earlier version of this function assumed the opposite, which
-    happened to cancel out with a missing ``flip_vertical`` and looked
-    correct by coincidence until the image orientation was fixed to match
-    the microscope-parameters JSON.
+    Row convention for "up"/"down": for a correctly-oriented frame (per its
+    MERlin microscope-parameters JSON), row index 0 is the physical -y
+    (down) edge, not +y (up) -- so "up" crops the anchor's LAST n rows
+    against the neighbour's FIRST n rows. Getting this backwards can cancel
+    out with a missing ``flip_vertical`` and look correct by coincidence, so
+    don't assume it's right just because the crops look plausible.
 
     Returns
     -------
@@ -355,13 +325,11 @@ def detect_image_orientation(
     from this microscope's own MERlin microscope-parameters JSON
     (``data/configs/merlin/microscope/*.json``) instead of trusting this
     function's output as the primary source -- it exists to CROSS-CHECK that
-    file (or substitute for it when unavailable), not replace it. Confirmed
-    directly: on a real MF3 dataset, "transpose alone" (missing MERFISH3.
-    json's flip_vertical=True) scored best among a smaller 7-candidate
-    single-transform search yet still left a visible residual mis-stitch --
-    an empirically-best-among-limited-options answer is not the same as the
-    actual correct one, which is exactly why the full 8-combination search
-    (matching the JSON file's 3 independent booleans) exists here now.
+    file (or substitute for it when unavailable), not replace it. A smaller
+    search over a subset of the 3 independent booleans can score best yet
+    still leave a visible residual mis-stitch -- empirically-best-among-
+    limited-options isn't the same as actually correct, which is why this
+    searches the full 8-combination space.
 
     Why the "smallest median shift" criterion is still reasonable for this
     exhaustive search: real camera-vs-stage rotation is small (well under a
@@ -536,13 +504,11 @@ def filter_correspondence_outliers(
 
     Even with the right :func:`detect_image_orientation` in hand, a handful
     of individual registrations can still fail outright -- weak/sparse DAPI
-    signal in that particular FOV, an occasional bad phase-correlation peak
-    -- the same "bad link" problem BigStitcher's manual workflow required
-    curating by hand (see this module's docstring). Confirmed directly on
-    real data: the bulk of correspondences cluster tightly (a few um), with
-    a handful of clear outliers an order of magnitude or more larger -- a
-    real gap in the distribution, not a continuum, so a robust threshold
-    cleanly separates them without needing manual review.
+    signal in that particular FOV, an occasional bad phase-correlation peak.
+    The bulk of correspondences cluster tightly (a few um), with a handful
+    of clear outliers an order of magnitude or more larger -- a real gap in
+    the distribution, not a continuum, so a robust threshold cleanly
+    separates them without needing manual review.
 
     Parameters
     ----------
@@ -663,18 +629,12 @@ def fit_global_positions(
     Why this exists: a single global affine can only correct a rotation/
     scale/shear that's coherent across the WHOLE fov grid -- it cannot
     correct real, independent per-FOV stage-positioning jitter, even given
-    perfect measurements. Confirmed directly on real data
-    (BC553_sample_02/MF3): one correspondence (anchor 1087, neighbour 1082,
-    direction "left") measured a real, clear 5.17 um y-shift, but the pooled
-    global-affine fit came out near-identity (no other correspondence
-    echoed the same pattern) -- that real measurement never reached the
-    "corrected" position at all, it was averaged away rather than applied.
-    This is the same problem BigStitcher's own tile-position optimization
-    solves for a small contiguous tile block (see this module's docstring
-    for why a full dense version doesn't scale to a whole multi-thousand-FOV
-    experiment): treat every sampled FOV's position as its own free
-    variable, and jointly minimize its disagreement with every
-    correspondence that constrains it, instead of reducing every
+    perfect measurements. A correspondence with a real, clear per-FOV shift
+    can get averaged away into a near-identity global fit if no other
+    correspondence echoes the same pattern, so that real measurement never
+    reaches the "corrected" position at all. Fix: treat every sampled FOV's
+    position as its own free variable, and jointly minimize its disagreement
+    with every correspondence that constrains it, instead of reducing every
     measurement to one shared rotation/scale.
 
     Method
@@ -712,29 +672,19 @@ def fit_global_positions(
     would need denser/overlapping sampling to provide redundant constraints
     per FOV.
 
-    ``lsqr``'s own default convergence tolerances are too loose once this IS
+    ``lsqr``'s own default convergence tolerances are too loose once this is
     run on a dense, overlapping correspondence set (e.g. every FOV of a
     several-hundred-FOV grid measured against most/all of its real
-    neighbours, as `notebooks/tests/compare_stitching_correction_methods.
-    ipynb` does) -- confirmed directly on real data (BC555_sample_05/epi,
-    476 FOVs, 1662 kept correspondences, one connected component): calling
-    ``lsqr`` with no explicit ``atol``/``btol`` (i.e. scipy's own defaults)
-    declared convergence with ``residual_rms_um`` = 81.6 -- roughly 25x the
-    real ~3um signal this whole method exists to resolve -- while
-    ``atol=btol=1e-12`` on the exact same input converges properly
-    (``istop`` 1 or 2, a genuine "good enough" stop, not an iteration-limit
-    cutoff) to 0.025um, a two-thousand-fold tighter, far more physically
-    plausible residual. The small, sparse-star components this function was
-    originally written for never exposed this: a handful of unknowns
-    converges to any reasonable tolerance in a few iterations regardless, so
-    the default tolerance being loose never mattered until a large, densely
-    connected system was actually solved. Do not loosen these below their
-    own defaults without re-confirming convergence the same way (``istop``
-    close to 1/2, not 7 (iteration limit) or 3/4 (ill-conditioned) --
-    raising ``PIN_WEIGHT`` far past its current value chases the same
-    convergence problem: at ``1e8`` on this same dataset, ``lsqr`` hit
-    ``istop=3`` (excessive condition number) after only 5 iterations and the
-    residual got WORSE (206.8), not better).
+    neighbours): scipy's defaults can declare convergence tens of times
+    looser than the real ~3um signal this method exists to resolve, while
+    ``atol=btol=1e-12`` on the same input converges properly (``istop`` 1 or
+    2) to a far tighter, physically plausible residual. Small, sparse-star
+    components never expose this -- a handful of unknowns converges to any
+    tolerance in a few iterations regardless. Do not loosen these below
+    their own defaults without re-confirming convergence the same way
+    (``istop`` close to 1/2, not 7 = iteration limit or 3/4 = ill-
+    conditioned). Raising ``PIN_WEIGHT`` far past its current value chases
+    the same convergence problem instead of fixing it.
 
     Parameters
     ----------
