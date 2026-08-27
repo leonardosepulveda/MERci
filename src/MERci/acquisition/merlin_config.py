@@ -526,7 +526,7 @@ def create_slurm_submit_script(
     mem_mb:                    int    = 5000,
     time_limit:                str    = "2-00:00:00",
     partition:                 str    = "zhuang",
-    conda_env:                 str    = "merlin_cp4_env",
+    conda_env:                 str    = "merlin_cc_env",
     conda_pkgs_dir:            str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/pkgs",
     conda_envs_path:           str    = "/n/holylabs/zhuang_lab/Lab/lsepulvedaduran/conda/envs",
     allow_ragged_z_stacks:     bool   = False,
