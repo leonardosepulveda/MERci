@@ -995,9 +995,11 @@ def build_merlin_analysis_parameters(
     n_optimize_iterations:    Optional[int] = None,
 ) -> Path:
     """
-    Build MERlin's ``analysis_tasks`` JSON from a recipe (explicit ordered
+    Build MERlin's ``analysis_tasks`` recipe from a recipe (explicit ordered
     list of atomic task-file names -- see the module comment above) instead
-    of a :class:`MerlinAnalysisSpec`.
+    of a :class:`MerlinAnalysisSpec`. Written as YAML or JSON depending on
+    *output_path*'s extension (``.yaml``/``.yml`` vs anything else),
+    matching MERlin's own ``merlin.py`` dispatch.
 
     Parameters
     ----------
@@ -1120,5 +1122,8 @@ def build_merlin_analysis_parameters(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
-        json.dump({"analysis_tasks": tasks}, fh, indent=4)
+        if output_path.suffix.lower() in (".yaml", ".yml"):
+            yaml.safe_dump({"analysis_tasks": tasks}, fh, sort_keys=False)
+        else:
+            json.dump({"analysis_tasks": tasks}, fh, indent=4)
     return output_path
