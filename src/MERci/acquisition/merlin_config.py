@@ -1123,7 +1123,19 @@ def build_merlin_analysis_parameters(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
         if output_path.suffix.lower() in (".yaml", ".yml"):
-            yaml.safe_dump({"analysis_tasks": tasks}, fh, sort_keys=False)
+            dumped = yaml.safe_dump({"analysis_tasks": tasks}, sort_keys=False)
+            # Blank line between top-level tasks (lines starting "- " with no
+            # indent) for readability -- doesn't touch nested lists (e.g.
+            # ExportBarcodes' "columns"), which are indented.
+            out_lines = []
+            first_task = True
+            for line in dumped.splitlines():
+                if line.startswith("- "):
+                    if not first_task:
+                        out_lines.append("")
+                    first_task = False
+                out_lines.append(line)
+            fh.write("\n".join(out_lines) + "\n")
         else:
             json.dump({"analysis_tasks": tasks}, fh, indent=4)
     return output_path
