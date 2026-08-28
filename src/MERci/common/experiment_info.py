@@ -138,6 +138,31 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     return sample_name, imaging_dir
 
 
+def resolve_data_home(merci_dir: Path) -> str:
+    """
+    Infer ``DATA_HOME`` (notebook 06's cluster root directory holding the
+    raw data) from where this MERci clone actually lives on disk, instead of
+    a hardcoded path.
+
+    ``DATA_HOME`` is the directory that directly contains the true
+    ``sample_name`` folder from :func:`resolve_sample_identity` -- one level
+    up from ``SAMPLE_DIR`` in the flat layout, two levels up in the split
+    layout (``SAMPLE_DIR`` itself is the acquisition-type subfolder there).
+
+    Parameters
+    ----------
+    merci_dir : path to this MERci clone (``MERCI_DIR`` in every notebook)
+
+    Returns
+    -------
+    str : ``DATA_HOME``, as an absolute path string.
+    """
+    _, imaging_dir = resolve_sample_identity(merci_dir)
+    sample_dir = Path(merci_dir).parent
+    data_home  = sample_dir.parent.parent if imaging_dir else sample_dir.parent
+    return str(data_home)
+
+
 def positions_file_tag(sample_name: str, imaging_dir: str) -> str:
     """
     Token for ``positions_*.txt``/``fov_layout_*.png`` filenames: ``sample_name``
