@@ -47,8 +47,9 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from xml.dom import minidom
 
 import pandas as pd
@@ -523,6 +524,7 @@ def create_dave_config(
     microscope:           Optional[str] = None,
     estimate_frame_shape: Optional[Sequence[int]] = None,
     estimate_bytes_per_pixel: int = 2,
+    start_time:           Optional[datetime] = None,
 ) -> Optional["ExperimentEstimate"]:
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
@@ -676,6 +678,11 @@ def create_dave_config(
                             estimate; overrides the microscope-derived size.  When
                             ``None`` (default) the size comes from ``microscope``.
     estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
+    start_time            : wall-clock time this recipe is expected to start running
+                            on the microscope; when given, the printed estimate also
+                            shows realistic start/end dates for each round's fluidics
+                            and imaging (see :func:`format_experiment_estimate`).
+                            ``None`` (default) omits those dates.
 
     Returns
     -------
@@ -1002,7 +1009,7 @@ def create_dave_config(
             frame_height    = frame_h,
             bytes_per_pixel = estimate_bytes_per_pixel,
         )
-        print(format_experiment_estimate(est, per_round=True))
+        print(format_experiment_estimate(est, per_round=True, start_time=start_time))
         return est
     return None
 
@@ -1025,7 +1032,8 @@ def create_focus_test_dave_config(
     microscope:       Optional[str] = None,
     estimate_frame_shape: Optional[Sequence[int]] = None,
     estimate_bytes_per_pixel: int = 2,
-) -> int:
+    start_time:       Optional[datetime] = None,
+) -> Tuple[int, Optional["ExperimentEstimate"]]:
     """
     Write a lightweight Dave recipe that visits every FOV in *positions_file*
     and checks focus lock only -- no fluidics -- to catch a bad focus lock
@@ -1104,11 +1112,10 @@ def create_focus_test_dave_config(
     print_estimate   : if True (default), print an estimated run time/storage for
                        this recipe via the same :func:`estimate_dave_experiment`
                        mechanism :func:`create_dave_config` uses -- in check-only
-                       mode (``n_test_frames=0``) this correctly reports ~0 s/0 B
-                       (no image is ever taken), it does not add a stage-move/
-                       focus-check time estimate (neither does the main recipe's
-                       estimate, for the same reason: HAL/Dave don't expose that
-                       timing either).
+                       mode (``n_test_frames=0``) no image is ever taken, so imaging
+                       time comes only from the per-FOV move overhead (see
+                       ``estimate_dave_experiment``'s ``per_movie_overhead_s``),
+                       not from any exposure/readout time.
     kilroy_config    : unused here (this recipe has no fluidics) -- accepted only
                        so callers can pass the same value they use for
                        :func:`create_dave_config` without conditionally omitting it
@@ -1117,10 +1124,14 @@ def create_focus_test_dave_config(
     estimate_frame_shape     : explicit ``(width, height)`` in pixels; overrides
                        the microscope-derived size
     estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
+    start_time       : wall-clock time this recipe is expected to start running;
+                       see :func:`create_dave_config`'s same parameter
 
     Returns
     -------
-    int : number of FOVs visited (from *positions_file*)
+    (int, ExperimentEstimate or None)
+        Number of FOVs visited (from *positions_file*), and the estimate when
+        ``print_estimate`` is True (else None).
     """
     if n_test_frames > 0 and not hal_config:
         raise ValueError(
@@ -1176,6 +1187,7 @@ def create_focus_test_dave_config(
 
     _write_dave_xml(root, Path(output_path))
 
+    est = None
     if print_estimate:
         if estimate_frame_shape is not None:
             frame_w, frame_h = int(estimate_frame_shape[0]), int(estimate_frame_shape[1])
@@ -1189,9 +1201,9 @@ def create_focus_test_dave_config(
             frame_height    = frame_h,
             bytes_per_pixel = estimate_bytes_per_pixel,
         )
-        print(format_experiment_estimate(est, per_round=True))
+        print(format_experiment_estimate(est, per_round=True, start_time=start_time))
 
-    return n_fovs
+    return n_fovs, est
 
 
 # ── Dave annotation ────────────────────────────────────────────────────────────
@@ -1292,14 +1304,19 @@ class ExperimentEstimate:
     total_bytes     : total raw image size (Σ frames × bytes_per_frame over every
                       FOV-movie)
     n_fov_movies    : number of per-FOV movies acquired across the whole experiment
+    per_fov_time_s  : total imaging time spent on ONE FOV across the whole experiment
+                      (Σ, over every round, of that round's own per-FOV movie time --
+                      i.e. what one FOV alone would take, not multiplied by FOV count)
     per_round       : list of ``{"hyb", "label", "imaging_s", "fluidics_s",
-                      "bytes", "movies", "series"}`` dicts -- "Cells Imaging"
-                      first, then hyb-numbered rows (``"hyb"`` = bit/hyb
-                      index) in order, then any other non-numbered row (e.g.
+                      "bytes", "movies", "series", "per_fov_imaging_s"}`` dicts --
+                      "Cells Imaging" first, then hyb-numbered rows (``"hyb"`` =
+                      bit/hyb index) in order, then any other non-numbered row (e.g.
                       the closing "Fluidics Final" step, labeled by its own
                       loop name rather than a fabricated hyb number).
                       ``series`` is the list of distinct movie names (e.g.
                       ``"hal-st2_01"``) imaged in that round.
+                      ``per_fov_imaging_s`` is that round's own contribution to
+                      ``per_fov_time_s`` above.
     assumptions     : human-readable list of the numbers assumed (frame size, frame
                       time source, …)
     warnings        : anything that made the estimate approximate (missing positions
@@ -1310,6 +1327,7 @@ class ExperimentEstimate:
     fluidics_time_s: float
     total_bytes:     int
     n_fov_movies:    int
+    per_fov_time_s:  float = 0.0
     per_round:       List[dict] = field(default_factory=list)
     assumptions:     List[str]  = field(default_factory=list)
     warnings:        List[str]  = field(default_factory=list)
@@ -1338,7 +1356,7 @@ def estimate_dave_experiment(
     bytes_per_pixel:      int   = 2,
     frame_time_s:         Optional[float] = None,
     readout_overhead_s:   float = 0.0,
-    per_movie_overhead_s: float = 0.0,
+    per_movie_overhead_s: float = 5.0,
 ) -> ExperimentEstimate:
     """
     Estimate total run time and raw storage for a written Dave recipe.
@@ -1374,7 +1392,8 @@ def estimate_dave_experiment(
     frame_time_s         : fixed per-frame time (s); overrides the HAL exposure read
     readout_overhead_s   : added to each HAL ``exposure_time`` (camera readout etc.)
     per_movie_overhead_s : fixed seconds added per FOV-movie (stage move, focus, …);
-                           Dave's own estimate omits these, so the default is 0
+                           Dave's own estimate omits this -- default 5 s assumes the
+                           time to move to a new FOV and start acquiring
 
     Returns
     -------
@@ -1452,7 +1471,8 @@ def estimate_dave_experiment(
         key    = hno if hno is not None else lname
         rec    = per_round.setdefault(
             key, {"hyb": hno, "label": (f"Hyb {hno:02d}" if hno is not None else lname),
-                  "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0, "series": []})
+                  "imaging_s": 0.0, "fluidics_s": 0.0, "bytes": 0, "movies": 0, "series": [],
+                  "per_fov_imaging_s": 0.0})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
             # The loop_variable a movie references is its OWN <variable_entry
@@ -1485,6 +1505,11 @@ def estimate_dave_experiment(
             rec["imaging_s"] += n_fovs * loop_time
             rec["bytes"]     += n_fovs * loop_bytes
             rec["movies"]    += n_fovs * len(movies)
+            # Time to image ONE FOV in this round -- not multiplied by n_fovs.
+            # Segment mode can fold several same-round loops (one per tissue
+            # segment) into this same rec; they all share the same movie
+            # template, so this is set (not summed) each time.
+            rec["per_fov_imaging_s"] = loop_time
         else:                                        # fluidics loop
             for prot in lv_value.get(lname, []):
                 if prot in proto_dur:
@@ -1513,6 +1538,7 @@ def estimate_dave_experiment(
         fluidics_time_s = fluidics_time,
         total_bytes     = total_bytes,
         n_fov_movies    = n_movies,
+        per_fov_time_s  = sum(r["per_fov_imaging_s"] for r in per_round.values()),
         # "Cells Imaging" (and its segment-mode "Cells Imaging - <segment>"
         # variants) first (round 1 always runs first), then hyb-numbered rows
         # ascending, then any other non-numbered row (e.g. "Fluidics Final")
@@ -1554,27 +1580,69 @@ def _fmt_bytes(n: int) -> str:
     return f"{size:.1f} TiB"
 
 
-def format_experiment_estimate(est: ExperimentEstimate, per_round: bool = False) -> str:
-    """Render an :class:`ExperimentEstimate` as a readable multi-line report."""
+def _fmt_dt(dt: datetime) -> str:
+    """Format a datetime as ``YYYY-MM-DD HH:MM:SS``."""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_experiment_estimate(
+    est:        ExperimentEstimate,
+    per_round:  bool = False,
+    start_time: Optional[datetime] = None,
+) -> str:
+    """
+    Render an :class:`ExperimentEstimate` as a readable multi-line report.
+
+    Parameters
+    ----------
+    per_round  : if True, also list each round's own fluidics/imaging breakdown
+    start_time : when given, the recipe's assumed real start time -- adds an
+                 overall Start/End and, per round, a start/end date for its
+                 fluidics and imaging phases, computed by walking the rounds
+                 in run order and accumulating each phase's duration (fluidics
+                 before imaging within a round, matching the recipe's own
+                 acquisition order -- see this module's docstring)
+    """
     lines = [
         "Estimated experiment cost",
         f"  FOV-movies:    {est.n_fov_movies}",
         f"  Imaging time:  {_fmt_duration(est.imaging_time_s)}",
         f"  Fluidics time: {_fmt_duration(est.fluidics_time_s)}",
         f"  Total time:    {_fmt_duration(est.total_time_s)}",
+        f"  Time per FOV:  {_fmt_duration(est.per_fov_time_s)}",
         f"  Storage:       {_fmt_bytes(est.total_bytes)}",
     ]
+    cursor = start_time
+    if start_time is not None:
+        lines.append(f"  Start:         {_fmt_dt(start_time)}")
+        lines.append(f"  End:           {_fmt_dt(start_time + timedelta(seconds=est.total_time_s))}")
     if per_round and est.per_round:
         lines.append("  Per round:")
         for r in est.per_round:
             series_str = ", ".join(r.get("series", [])) or "-"
-            lines.append(
-                f"    {r['label']} [{series_str}]: {r['movies']} movies, "
-                f"img {_fmt_duration(r['imaging_s'])}, "
-                f"flu {_fmt_duration(r['fluidics_s'])}, "
-                f"{_fmt_bytes(r['bytes'])}")
+            lines.append(f"    {r['label']} [{series_str}]:")
+            if r["fluidics_s"] > 0:
+                lines.append("      Fluidics")
+                lines.append(f"        total time: {_fmt_duration(r['fluidics_s'])}")
+                if cursor is not None:
+                    fluidics_end = cursor + timedelta(seconds=r["fluidics_s"])
+                    lines.append(f"        start date: {_fmt_dt(cursor)}")
+                    lines.append(f"        end date:   {_fmt_dt(fluidics_end)}")
+                    cursor = fluidics_end
+            if r["movies"] > 0:
+                lines.append("      Imaging")
+                lines.append(f"        total time: {_fmt_duration(r['imaging_s'])}")
+                if cursor is not None:
+                    imaging_end = cursor + timedelta(seconds=r["imaging_s"])
+                    lines.append(f"        start date: {_fmt_dt(cursor)}")
+                    lines.append(f"        end date:   {_fmt_dt(imaging_end)}")
+                    cursor = imaging_end
+            lines.append(f"      Total movies: {r['movies']}")
+            lines.append(f"      Total size:   {_fmt_bytes(r['bytes'])}")
     if est.assumptions:
-        lines.append("  Assumptions: " + "; ".join(est.assumptions))
+        lines.append("  Assumptions:")
+        for a in est.assumptions:
+            lines.append(f"    - {a}")
     if est.warnings:
         lines.append("  Warnings:")
         for w in dict.fromkeys(est.warnings):     # de-duplicate, keep order
