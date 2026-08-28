@@ -1,0 +1,81 @@
+# Pipeline-level configuration for tumor/epi (epifluorescence tumor
+# acquisitions). Loaded via MERci.acquisition.pipeline_config.load_pipeline_config.
+#
+# Values here are the same for every experiment run through this pipeline --
+# per-experiment values (tissue-segmentation thresholds, positions
+# boundaries, sequential_genes.csv contents, etc.) are NOT here; they stay
+# hand-edited per notebook run. See prompt_history/2026_08_28_1655_* and
+# 2026_08_28_1712_* for how this list was derived.
+
+id: tumor_epi
+label: "Tumor -- Epifluorescence"
+analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
+
+microscope: MF4
+objective: "60X"
+
+imaging:
+  file_type: ".zarr"
+  exposure_time: 0.25   # seconds
+  # Per-channel laser power (nm -> 0..1), written into the HAL config's
+  # <default_power> list. Any wavelength not listed falls back to power_default.
+  power:
+    750: 1.000
+    650: 0.500
+    560: 0.500
+    488: 0.010
+    405: 0.001
+  power_default: 1.0
+
+  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
+  cells_round:
+    z_min: 1
+    z_max: 25
+    z_step: 1
+    bead_seq: [488]
+    color_seq: [405]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  # z-stack recipe for the "bits" round (barcode-imaging rounds).
+  bits_round:
+    z_min: 1
+    z_max: 25
+    z_step: 1
+    bead_seq: [488]
+    color_seq: [750, 650, 560]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
+  transit_n_blank: 2      # blank frames per transit FOV
+
+fluidics:
+  use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts
+  include_final_cleave: false   # True = add a final cleave step after the last imaging round
+  first_hyb_no_cleave: false    # True = first hyb (after the cells round) omits the cleave step
+
+# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
+# the list. Central to the pipeline: defines the barcode-imaging recipe.
+round_bit_color_csv: round_bit_color.csv
+
+analysis:
+  # Whether the MERlin recipe includes a cell-segmentation chain (required
+  # for include_sum_signal). Fixed per pipeline; segmentation method itself
+  # (CellPoseSegment3D vs CellPoseSegmentSAM) is set in the recipe YAML
+  # (data/configs/merlin/analysis/recipes/default_with_segmentation.yaml).
+  include_segmentation: false
+  # include_smfish/include_sum_signal stay DERIVED at generation time (as
+  # today) from whether metadata/sequential_genes.csv exists for this
+  # experiment -- not stored here, since that's a per-experiment fact even
+  # though round_bit_color itself is pipeline-fixed.
+  sum_signal_channel_names: ["DAPI"]
+
+metadata:
+  project: bc     # "bc" | "lt" | "mf" -- selects which master-CSV schema
+  lib_name: C3    # codebook/probe-library name (MERci/data/configs/merlin/codebooks/)
+  n_opt: 10       # MERlin optimize-iteration count
