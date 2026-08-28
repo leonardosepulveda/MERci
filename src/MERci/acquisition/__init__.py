@@ -38,7 +38,7 @@ from .positions import (
     GridOffsetCandidate,
     GridOffsetResult,
 )
-from .display import print_frame_table, display_xml
+from .display import print_frame_table, display_xml, display_file
 from .kilroy import (
     load_kilroy_protocols,
     find_kilroy_config,
