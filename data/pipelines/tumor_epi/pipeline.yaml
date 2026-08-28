@@ -4,8 +4,8 @@
 # Values here are the same for every experiment run through this pipeline --
 # per-experiment values (tissue-segmentation thresholds, positions
 # boundaries, sequential_genes.csv contents, etc.) are NOT here; they stay
-# hand-edited per notebook run. See prompt_history/2026_08_28_1655_* and
-# 2026_08_28_1712_* for how this list was derived.
+# hand-edited per notebook run. See prompt_history/2026_08_28_1655_*,
+# 2026_08_28_1712_* and 2026_08_28_1811_* for how this list was derived.
 
 id: tumor_epi
 label: "Tumor -- Epifluorescence"
@@ -17,15 +17,9 @@ objective: "60X"
 imaging:
   file_type: ".zarr"
   exposure_time: 0.25   # seconds
-  # Per-channel laser power (nm -> 0..1), written into the HAL config's
-  # <default_power> list. Any wavelength not listed falls back to power_default.
-  power:
-    750: 1.000
-    650: 0.500
-    560: 0.500
-    488: 0.010
-    405: 0.001
-  power_default: 1.0
+  # Per-channel laser power is NOT set here -- it's locked to the microscope
+  # choice above, not an independent pipeline dial. See
+  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
 
   # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
   cells_round:
@@ -59,23 +53,63 @@ fluidics:
   include_final_cleave: false   # True = add a final cleave step after the last imaging round
   first_hyb_no_cleave: false    # True = first hyb (after the cells round) omits the cleave step
 
-# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
-# the list. Central to the pipeline: defines the barcode-imaging recipe.
-round_bit_color_csv: round_bit_color.csv
-
-analysis:
-  # Whether the MERlin recipe includes a cell-segmentation chain (required
-  # for include_sum_signal). Fixed per pipeline; segmentation method itself
-  # (CellPoseSegment3D vs CellPoseSegmentSAM) is set in the recipe YAML
-  # (data/configs/merlin/analysis/recipes/default_with_segmentation.yaml).
-  include_segmentation: false
-  # include_smfish/include_sum_signal stay DERIVED at generation time (as
-  # today) from whether metadata/sequential_genes.csv exists for this
-  # experiment -- not stored here, since that's a per-experiment fact even
-  # though round_bit_color itself is pipeline-fixed.
-  sum_signal_channel_names: ["DAPI"]
-
-metadata:
+# Everything MERlin-specific: the codebook/schema identity (notebook 06's
+# "fields MERci can't know" -- PROJECT/LIB_NAME are properties of which
+# pipeline you're running, so they belong here, not hand-typed per
+# experiment), the round-bit-color table that drives the data organization,
+# and the analysis-task selection (notebook 07).
+merlin:
   project: bc     # "bc" | "lt" | "mf" -- selects which master-CSV schema
   lib_name: C3    # codebook/probe-library name (MERci/data/configs/merlin/codebooks/)
-  n_opt: 10       # MERlin optimize-iteration count
+
+  dataorganization:
+    # (round, bit, color) mapping -- notebook 03 loads this instead of
+    # hardcoding the list. Central to the pipeline: defines the barcode-
+    # imaging recipe. Physically alongside this file, mirroring the real
+    # SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
+    round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
+
+  analysis:
+    # MERlin optimize-iteration count -- a parameter of the optimize_iteration
+    # task below, independent of bit count.
+    n_optimize_iterations: 10
+
+    # Every atomic MERlin task (data/configs/merlin/analysis/tasks/*.yaml),
+    # enabled/disabled for this pipeline. This is the FULL menu -- trim to
+    # what this pipeline actually needs.
+    #
+    # NOTE: smfish_signal/sum_signal/export_sum_signals below are this
+    # pipeline's default; notebook 07 additionally still auto-adds
+    # smfish_signal (with the real channel names) whenever a given
+    # EXPERIMENT'S metadata/sequential_genes.csv exists, regardless of this
+    # flag -- flagging this interaction since it wasn't part of what was
+    # asked this pass, only carried over unchanged from the prior behavior.
+    tasks:
+      fiducial_correlation_warp:   true
+      deconvolution_preprocess:    true
+      optimize_iteration:          true
+      decode:                      true
+      global_align_least_squares:  true
+      global_align_simple:         false
+      generate_adaptive_threshold: true
+      adaptive_filter_barcodes:    true
+      export_barcodes:             true
+      plot_performance:            true
+      slurm_report:                true
+      cellpose_segment_3d:         false
+      cellpose_segment_sam:        false
+      clean_cell_boundaries:       false
+      combine_cleaned_boundaries:  false
+      refine_cell_databases:       false
+      partition_barcodes:          false
+      export_partitioned_barcodes: false
+      export_cell_metadata:        false
+      smfish_signal:               false   # see NOTE above -- auto-added per experiment
+      sum_signal:                  false   # requires cellpose_segment_3d or cellpose_segment_sam
+      export_sum_signals:          false
+
+    # {task_name: {param: value}} -- merged over that task's own YAML
+    # parameters. sum_signal has no sane shared default channel list.
+    overrides:
+      sum_signal:
+        channel_names: ["DAPI"]

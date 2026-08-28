@@ -1,0 +1,43 @@
+# Per-channel laser power (nm -> 0..1), keyed by microscope. Power is a
+# property of the scope's own hardware/alignment (laser attenuation tuned to
+# that scope's optics/PMT), not an independent per-pipeline dial -- so it's
+# looked up here by `microscope` (pipeline.yaml's own `microscope` field)
+# instead of being duplicated in every pipeline.yaml.
+#
+# Written into the HAL config's <default_power> list only -- every shutter
+# <event>'s own <power> is always the microscope's own `power_default`
+# regardless of colour (see acquisition/configs.py's create_shutter_file
+# docstring for why writing real per-colour intensity into both places
+# double-applies the scaling on real hardware).
+#
+# Values below are transcribed from what was previously hardcoded per
+# pipeline (tumor_epi's own POWER cell, notebook 01) -- only MF4 is
+# confirmed correct today; MF2/ST2 are carried over from the other
+# variants' notebooks for when they get their own pipeline.yaml, and
+# should be double-checked against those variants' real values before
+# relying on them.
+
+MF4:
+  power:
+    750: 1.000
+    650: 0.500
+    560: 0.500
+    488: 0.010
+    405: 0.001
+  power_default: 1.0
+
+MF2:
+  power:
+    650: 1.00
+    560: 1.00
+    488: 1.00
+    405: 1.00
+  power_default: 1.0
+
+ST2:
+  power:
+    650: 1.00
+    560: 1.00
+    488: 1.00
+    405: 1.00
+  power_default: 1.0
