@@ -71,6 +71,8 @@ SAMPLE_DIR/
   data/              raw image files (subfolder structure from round_info.csv's `dir` column)
   analysis/          thumbnails/, stats/, histograms/, mosaics/, done/
   merlin/            per-experiment MERlin config/run files (or fishtank/ for lineage_tracing/lineage)
+  figures/           MERlin's per-task verification figures (merlin.<taskName>.<figureName>.png),
+                     written via the generated sbatch script's `-f "$SAMPLE_DIR/figures"` flag
 ```
 
 ## Package layout

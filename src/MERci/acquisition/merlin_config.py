@@ -585,6 +585,13 @@ def create_slurm_submit_script(
                      under the analysis home. Requires a MERlin checkout with
                      the ``-x``/``--analysis-name`` flag. ``None`` (default)
                      omits the flag.
+
+    Always passes ``-f "$SAMPLE_DIR/figures"`` (mirrors ``-s
+    "$SAMPLE_DIR/merlin"`` -- unconditional, not a parameter), so every
+    per-task verification figure (e.g. ``FiducialCorrelationWarp``'s
+    ``drift_qc``, named ``merlin.<taskName>.<figureName>.png``) lands in
+    ``SAMPLE_DIR/figures``, alongside ``merci/``, ``merlin/``, ``analysis/``.
+    Requires a MERlin checkout with the ``-f``/``--figures-path`` flag.
     """
     output_path = Path(output_path)
     if slurm_out_path is None:
@@ -626,7 +633,8 @@ merlin -k "$SAMPLE_DIR/{parameters_file}" \\
        -m "$SAMPLE_DIR/{microscope_file}" \\
        -n 1000 \\
        -e {data_home} \\
-       -s "$SAMPLE_DIR/merlin"{analysis_name_flag}{ragged_flag} \\
+       -s "$SAMPLE_DIR/merlin" \\
+       -f "$SAMPLE_DIR/figures"{analysis_name_flag}{ragged_flag} \\
        {folder_name}
 
 date +'Finished at %R.'
