@@ -41,6 +41,16 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
 
+**Exported notebooks (optional)**: `notebooks/setup/00_select_pipeline.ipynb`
+copies one `before_imaging/` variant, flattened, plus the shared
+`after_imaging/`/`during_imaging/` notebooks, into a standalone
+`SAMPLE_DIR/notebooks/` folder that sits *alongside* `SAMPLE_DIR/MERci/`
+instead of inside it (`MERci/acquisition/pipeline_export.py`). There, `MERci`
+is a sibling rather than an ancestor, so every exported notebook resolves
+`MERCI_DIR = Path(os.getcwd()).parent.parent / "MERci"` — one fixed formula
+regardless of the original variant's nesting depth. The `MERci/` clone is
+only ever read from by the export, never modified.
+
 **Split acquisition types** — `tumor/` → `epi/` (epifluorescence) or `disk/`
 (spinning-disk confocal); `lineage_tracing/` → `merfish/` (MERlin/codebook,
 merlin-based) or `lineage/` (lineage-barcode, fishtank-based) or
@@ -87,6 +97,7 @@ src/MERci/
     fishtank_config.py     fishtank input/config-file generation (lineage_tracing/lineage only)
     display.py             print_frame_table, display_xml
     cluster_submit.py      sbatch script generation for cluster-side QC analysis
+    pipeline_export.py     export one pipeline's notebooks to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   analysis/
     fov.py                 per-FOV thumbnails/stats/histograms
     round.py               round-level mosaics (plain + flat-field-corrected)
@@ -108,6 +119,8 @@ src/MERci/
 
 ```
 notebooks/
+  setup/             00_select_pipeline: pick a before_imaging variant, export
+                     it + after/during_imaging to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   before_imaging/    Pre-experiment, run in order. Variants: reference/,
                      tumor/{epi,disk}/, lineage_tracing/{merfish,lineage,merfish_multi_z}/
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
