@@ -23,6 +23,10 @@ resolve_cluster_sample_dir        — this experiment's acquisition root as
 create_slurm_submit_script        — the sbatch script that runs ``merlin``,
     with every path relative to one ``$SAMPLE_DIR`` bash variable
 resolve_codebook_filename         — lib_name -> codebook filename (dispatch only)
+resolve_sequential_codebook_filename — lib_name -> its sequential-companion codebook
+    filename (dispatch only; caller checks existence -- most libraries have none)
+load_sequential_gene_names       — {bit: gene_name} for lib_name's sequential bits,
+    from that companion file, with an optional per-experiment override merged in
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
 load_microscope_orientation      — read a microscope's flip_horizontal/flip_vertical/
     transpose flags (MERlin's own defaults when absent, confirmed against
@@ -44,6 +48,7 @@ build_merlin_analysis_parameters — the notebooks' DEFAULT analysis-JSON
 from __future__ import annotations
 
 import copy
+import csv
 import json
 import re
 import sys
@@ -91,6 +96,57 @@ def resolve_codebook_filename(lib_name: str) -> str:
             f"No codebook mapping for lib_name={lib_name!r}. "
             f"Known: {sorted(_CODEBOOK_BY_LIB)}"
         ) from None
+
+
+def resolve_sequential_codebook_filename(lib_name: str) -> str:
+    """
+    Return *lib_name*'s sequential (non-barcode) companion codebook
+    filename, by convention: ``<codebook_stem>_sequential.csv`` alongside
+    the primary codebook (e.g. ``"C3v1_codebook.csv"`` ->
+    ``"C3v1_codebook_sequential.csv"``).
+
+    Dispatch only, like ``resolve_codebook_filename`` -- callers check the
+    file's existence themselves, since not every lib_name has sequential
+    bits (most codebooks have no companion file at all).
+    """
+    base = resolve_codebook_filename(lib_name)
+    stem = base[:-4] if base.lower().endswith(".csv") else base
+    return f"{stem}_sequential.csv"
+
+
+def load_sequential_gene_names(
+    codebooks_dir: Path,
+    lib_name: str,
+    experiment_override_path: Optional[Path] = None,
+) -> Dict[int, str]:
+    """
+    ``{bit: gene_name}`` for *lib_name*'s sequential (non-barcode) bits.
+
+    Pipeline-level by default: read from *lib_name*'s own
+    ``<codebook>_sequential.csv`` companion file in *codebooks_dir* --
+    empty dict if that file doesn't exist (not every library has sequential
+    bits). This is what a bit-count check should compare against the real
+    round_bit_color table: total bits imaged = the primary codebook's own
+    bit_names count + this dict's size.
+
+    If *experiment_override_path* is given and exists, its rows are merged
+    in on top (per-bit override) -- e.g. metadata/sequential_genes.csv for
+    an experiment using a gene not yet in any codebook's sequential
+    companion.
+    """
+    gene_names: Dict[int, str] = {}
+    seq_path = Path(codebooks_dir) / resolve_sequential_codebook_filename(lib_name)
+    if seq_path.exists():
+        with open(seq_path, newline="") as fh:
+            for row in csv.DictReader(fh):
+                gene_names[int(row["bit"])] = row["gene_name"]
+
+    if experiment_override_path is not None and Path(experiment_override_path).exists():
+        with open(experiment_override_path, newline="") as fh:
+            for row in csv.DictReader(fh):
+                gene_names[int(row["bit"])] = row["gene_name"]
+
+    return gene_names
 
 
 def resolve_microscope_parameters_filename(microscope: str, objective: Optional[str] = None) -> str:
