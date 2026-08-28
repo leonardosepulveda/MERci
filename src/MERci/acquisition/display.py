@@ -148,15 +148,8 @@ def print_frame_table(frame_table: pd.DataFrame) -> None:
                 )
 
 
-def display_xml(path: Path, encoding: str = "ISO-8859-1") -> None:
-    """
-    Render an XML file as a collapsible code block in a Jupyter notebook.
-
-    Parameters
-    ----------
-    path     : path to the XML file
-    encoding : file encoding (default ``"ISO-8859-1"``)
-    """
+def _display_collapsible(path: Path, encoding: str) -> None:
+    """Shared rendering for display_xml/display_file -- see those docstrings."""
     with open(path, "rb") as fh:
         text = fh.read().decode(encoding)
 
@@ -170,3 +163,31 @@ def display_xml(path: Path, encoding: str = "ISO-8859-1") -> None:
       <pre style="background:#f8f8f8;padding:8px;border-radius:4px;">{escaped_text}</pre>
     </details>
     """))
+
+
+def display_xml(path: Path, encoding: str = "ISO-8859-1") -> None:
+    """
+    Render an XML file as a collapsible code block in a Jupyter notebook.
+
+    Parameters
+    ----------
+    path     : path to the XML file
+    encoding : file encoding (default ``"ISO-8859-1"``)
+    """
+    _display_collapsible(path, encoding)
+
+
+def display_file(path: Path, encoding: str = "utf-8") -> None:
+    """
+    Render any text file (JSON, YAML, shell script, ...) as a collapsible
+    code block in a Jupyter notebook -- same collapsed-by-default pattern as
+    :func:`display_xml`, just not XML-specific (default encoding is UTF-8
+    instead of ISO-8859-1, matching how MERlin/Snakemake JSON and the Slurm
+    submit script are actually written).
+
+    Parameters
+    ----------
+    path     : path to the text file
+    encoding : file encoding (default ``"utf-8"``)
+    """
+    _display_collapsible(path, encoding)
