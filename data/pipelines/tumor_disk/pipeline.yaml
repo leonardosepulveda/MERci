@@ -1,0 +1,144 @@
+# Pipeline-level configuration for tumor/disk (spinning-disk confocal tumor
+# acquisitions -- the same sample as tumor_epi, disk-scope pass). Loaded via
+# MERci.acquisition.pipeline_config.load_pipeline_config.
+#
+# Values here are the same for every experiment run through this pipeline --
+# per-experiment values (tissue-segmentation thresholds, positions
+# boundaries, sequential_genes.csv contents, etc.) are NOT here; they stay
+# hand-edited per notebook run. See prompt_history/2026_08_28_1655_*,
+# 2026_08_28_1712_* for the general design, and the entry building this
+# specific pipeline for tumor_disk's own history (LIB_NAME/PROJECT were
+# "LT2"/"lt" in the pre-pipeline.yaml notebooks -- confirmed with the user
+# this was a copy-paste leftover; corrected to C3/bc, same as tumor_epi,
+# with a new "immuno" companion codebook for its 2 antibody targets; the
+# barcode-decode chain was also dropped from its MERlin recipe -- this
+# pipeline never images a combinatorial barcode, only 2 plain intensity
+# channels).
+
+id: tumor_disk
+label: "Tumor -- Spinning-disk confocal"
+analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
+
+microscope: MF2
+objective: "60X"
+
+imaging:
+  file_type: ".zarr"
+  exposure_time: 0.25   # seconds
+  # Per-channel laser power is NOT set here -- it's locked to the microscope
+  # choice above, not an independent pipeline dial. See
+  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
+
+  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
+  cells_round:
+    z_min: 1
+    z_max: 25
+    z_step: 1
+    bead_seq: [488]
+    color_seq: [405]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  # z-stack recipe for the "bits" round -- all 3 channels are still imaged
+  # together every pass (HAL/shutter hardware recipe), even though this
+  # pipeline's round_bit_color only decodes 2 of them (650/560) -- see
+  # merlin.dataorganization below.
+  bits_round:
+    z_min: 1
+    z_max: 25
+    z_step: 1
+    bead_seq: [488]
+    color_seq: [750, 650, 560]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
+  transit_n_blank: 2      # blank frames per transit FOV
+
+fluidics:
+  use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts
+  include_final_cleave: false   # True = add a final cleave step after the last imaging round
+  first_hyb_no_cleave: true     # True = first hyb (after the cells round) omits the cleave step -- differs from tumor_epi
+
+# Everything MERlin-specific. This pipeline images no combinatorial barcode
+# at all (round_bit_color is 1 round x 2 plain intensity channels: gamma-H2AX
+# + CENPA) -- lib_name is still C3 (same sample/project as tumor_epi's epi
+# pass), but the MERlin recipe below has no barcode-decode tasks, only
+# segmentation + smfish/sum_signal for those 2 targets.
+merlin:
+  project: bc     # "bc" | "lt" | "mf" -- same sample/project as tumor_epi
+  lib_name: C3    # same library as tumor_epi -- this is the disk-scope pass of the same sample
+
+  dataorganization:
+    # (round, bit, color) mapping -- notebook 03 loads this instead of
+    # hardcoding the list. Physically alongside this file, mirroring the
+    # real SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
+    round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
+    # This pipeline's 2 channels are antibody targets (CENPA, gamma-H2AX),
+    # not an RNA sequential-FISH panel -- their gene/target names come from
+    # lib_name's "immuno" companion codebook
+    # (data/configs/merlin/codebooks/C3v1_codebook_immuno.csv), distinct
+    # from tumor_epi's "sequential" companion for the same lib_name -- see
+    # merlin_config.resolve_sequential_codebook_filename's own docstring.
+    # NOTE: "H2AX" is used as the ASCII-safe identifier for gamma-H2AX in
+    # that file -- rename there if a different convention is preferred.
+    sequential_kind: immuno
+
+  analysis:
+    # MERlin optimize-iteration count -- unused by any enabled task below
+    # (no decode chain), but still read by create_cluster_resource_allocation.
+    n_optimize_iterations: 10
+
+    # Every atomic MERlin task (data/configs/merlin/analysis/tasks/*.yaml),
+    # enabled/disabled for this pipeline. This is the FULL menu -- trim to
+    # what this pipeline actually needs.
+    #
+    # No barcode-decode tasks (decode/generate_adaptive_threshold/
+    # adaptive_filter_barcodes/export_barcodes/optimize_iteration/
+    # plot_performance/slurm_report/partition_barcodes/
+    # export_partitioned_barcodes) -- this pipeline never images a
+    # combinatorial barcode, so there's nothing for them to decode.
+    # smfish_signal/sum_signal/export_sum_signals are unconditionally on
+    # (unlike tumor_epi, where they're auto-derived per experiment) --
+    # this pipeline always measures the same 2 fixed targets.
+    tasks:
+      fiducial_correlation_warp:   true
+      deconvolution_preprocess:    true
+      optimize_iteration:          false
+      decode:                      false
+      global_align_least_squares:  true
+      global_align_simple:         false
+      generate_adaptive_threshold: false
+      adaptive_filter_barcodes:    false
+      export_barcodes:             false
+      plot_performance:            false
+      slurm_report:                false
+      cellpose_segment_3d:         true
+      cellpose_segment_sam:        false
+      clean_cell_boundaries:       true
+      combine_cleaned_boundaries:  true
+      refine_cell_databases:       true
+      partition_barcodes:          false
+      export_partitioned_barcodes: false
+      export_cell_metadata:        true
+      smfish_signal:               true    # CENPA
+      sum_signal:                  true    # gamma-H2AX
+      export_sum_signals:          true
+
+    # {task_name: {param: value}} -- merged over that task's own YAML
+    # parameters. Fixed per this pipeline's 2 targets (not derived from a
+    # per-experiment file, unlike tumor_epi's DAPI default) -- CENPA via
+    # smFISH, gamma-H2AX via SumSignal. NOTE: MERlin's SumSignal has no
+    # per-channel selector (it measures every sequential/immuno channel in
+    # the data organization), so CENPA's intensity also gets measured by
+    # SumSignal as a side effect -- a known MERlin-side limitation, not
+    # fixable from this config.
+    overrides:
+      smfish_signal:
+        channel_names: ["CENPA"]
+      sum_signal:
+        channel_names: ["H2AX"]

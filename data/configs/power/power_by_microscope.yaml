@@ -11,13 +11,13 @@
 # double-applies the scaling on real hardware).
 #
 # Values below are transcribed from what was previously hardcoded per
-# pipeline (tumor_epi's own POWER cell, notebook 01) -- only MF3 is
-# confirmed correct today (notebook 01 had mistakenly hardcoded "MF4" for
-# tumor_epi, while every other tumor_epi notebook used "MF3" -- MF3 is the
-# real value, tumor pipelines use it consistently); MF2/ST2 are carried
-# over from the other variants' notebooks for when they get their own
-# pipeline.yaml, and should be double-checked against those variants' real
-# values before relying on them.
+# pipeline, verified against each pipeline's own real notebook 01 POWER
+# cell before being entered here -- MF3 (tumor_epi's real value, notebook
+# 01 had mistakenly hardcoded "MF4"), MF2 (tumor_disk, identical to MF3's
+# values) are confirmed. ST2 is carried over from the lineage_tracing
+# variants' notebooks for when they get their own pipeline.yaml, and
+# should be double-checked against those variants' real values before
+# relying on it.
 
 MF3:
   power:
@@ -30,10 +30,11 @@ MF3:
 
 MF2:
   power:
-    650: 1.00
-    560: 1.00
-    488: 1.00
-    405: 1.00
+    750: 1.000
+    650: 0.500
+    560: 0.500
+    488: 0.010
+    405: 0.001
   power_default: 1.0
 
 ST2:
