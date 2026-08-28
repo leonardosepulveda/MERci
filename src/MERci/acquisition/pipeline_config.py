@@ -54,6 +54,11 @@ class MerlinConfig:
     n_optimize_iterations:    int
     tasks:                    Dict[str, bool]      # atom name -> enabled, full menu
     overrides:                Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Which non-barcode companion codebook this pipeline's sequential bits
+    # come from -- "sequential" (default, e.g. an epi pipeline's RNA panel)
+    # or "immuno" (e.g. a disk pipeline's antibody panel) -- see
+    # merlin_config.resolve_sequential_codebook_filename's own docstring.
+    sequential_kind:          str = "sequential"
 
     @property
     def enabled_tasks(self) -> List[str]:
@@ -148,6 +153,7 @@ def load_pipeline_config(yaml_path: Path) -> PipelineConfig:
         n_optimize_iterations     = merlin["analysis"]["n_optimize_iterations"],
         tasks                      = dict(merlin["analysis"]["tasks"]),
         overrides                   = dict(merlin["analysis"].get("overrides", {})),
+        sequential_kind             = merlin["dataorganization"].get("sequential_kind", "sequential"),
     )
 
     return PipelineConfig(
