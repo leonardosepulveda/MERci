@@ -122,8 +122,25 @@ def create_data_organization(
 # ── Internal helpers ────────────────────────────────────────────────────────────
 
 def _frames_for_color(ft: pd.DataFrame, color_nm: int) -> list:
-    """Row indices (= frame numbers) where ``color`` matches *color_nm*."""
-    return ft.index[ft["color"] == color_nm].tolist()
+    """
+    Row indices (= frame numbers) where ``color`` matches *color_nm*.
+
+    Raises if nothing matches, rather than silently returning ``[]`` -- a bit
+    with no frames means MERlin gets an empty ``frame``/``zPos`` for that row
+    (real bug this caught: ``round_bit_color`` using a bit's dye/codebook
+    label, e.g. 647, when the frame table itself was built with a different
+    nominal excitation wavelength for that channel, e.g. 650 on MFX/ST2 --
+    see ``configs.py``'s ``_COLOUR_TO_CHANNEL``).
+    """
+    idx = ft.index[ft["color"] == color_nm].tolist()
+    if not idx:
+        present = sorted(ft["color"].dropna().unique().tolist())
+        raise ValueError(
+            f"No frames with color={color_nm} in the frame table (colors "
+            f"present: {present}) -- check round_bit_color against the "
+            f"frame table's own nominal wavelengths for this microscope."
+        )
+    return idx
 
 
 def _zpos_for_color(ft: pd.DataFrame, color_nm: int) -> list:
