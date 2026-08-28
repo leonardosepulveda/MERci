@@ -13,13 +13,15 @@
 # with a new "immuno" companion codebook for its 2 antibody targets; the
 # barcode-decode chain was also dropped from its MERlin recipe -- this
 # pipeline never images a combinatorial barcode, only 2 plain intensity
-# channels).
+# channels; the microscope was also corrected from "MF2" to "ST2" per the
+# user -- ST2 has no 750nm channel, so bits_round.color_seq below was
+# trimmed to [650, 560] accordingly).
 
 id: tumor_disk
 label: "Tumor -- Spinning-disk confocal"
 analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
 
-microscope: MF2
+microscope: ST2
 objective: "60X"
 
 imaging:
@@ -41,16 +43,15 @@ imaging:
     z_return_mode: progressive
     return_step: 5
 
-  # z-stack recipe for the "bits" round -- all 3 channels are still imaged
-  # together every pass (HAL/shutter hardware recipe), even though this
-  # pipeline's round_bit_color only decodes 2 of them (650/560) -- see
-  # merlin.dataorganization below.
+  # z-stack recipe for the "bits" round. ST2 has no 750nm channel (see
+  # acquisition/configs.py's _COLOUR_TO_CHANNEL), and round_bit_color only
+  # ever decodes 650/560 anyway, so color_seq is just those two.
   bits_round:
     z_min: 1
     z_max: 25
     z_step: 1
     bead_seq: [488]
-    color_seq: [750, 650, 560]
+    color_seq: [650, 560]
     end_seq: [488]
     scan_mode: interleaved
     z_return_mode: progressive

@@ -13,22 +13,14 @@
 # Values below are transcribed from what was previously hardcoded per
 # pipeline, verified against each pipeline's own real notebook 01 POWER
 # cell before being entered here -- MF3 (tumor_epi's real value, notebook
-# 01 had mistakenly hardcoded "MF4"), MF2 (tumor_disk, identical to MF3's
-# values) are confirmed. ST2 is carried over from the lineage_tracing
-# variants' notebooks for when they get their own pipeline.yaml, and
-# should be double-checked against those variants' real values before
-# relying on it.
+# 01 had mistakenly hardcoded "MF4") is confirmed. ST2 was carried over
+# from the lineage_tracing variants' notebooks; tumor_disk was originally
+# hardcoded as "MF2" with different (attenuated) values, but the user
+# confirmed tumor_disk is actually ST2 too and that THIS full-power entry
+# is ST2's real setting -- tumor_disk's old attenuated values were simply
+# wrong, not a second real microscope. No MF2 entry: nothing uses it.
 
 MF3:
-  power:
-    750: 1.000
-    650: 0.500
-    560: 0.500
-    488: 0.010
-    405: 0.001
-  power_default: 1.0
-
-MF2:
   power:
     750: 1.000
     650: 0.500
