@@ -11,7 +11,7 @@ id: tumor_epi
 label: "Tumor -- Epifluorescence"
 analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
 
-microscope: MF4
+microscope: MF3
 objective: "60X"
 
 imaging:

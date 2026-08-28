@@ -11,13 +11,15 @@
 # double-applies the scaling on real hardware).
 #
 # Values below are transcribed from what was previously hardcoded per
-# pipeline (tumor_epi's own POWER cell, notebook 01) -- only MF4 is
-# confirmed correct today; MF2/ST2 are carried over from the other
-# variants' notebooks for when they get their own pipeline.yaml, and
-# should be double-checked against those variants' real values before
-# relying on them.
+# pipeline (tumor_epi's own POWER cell, notebook 01) -- only MF3 is
+# confirmed correct today (notebook 01 had mistakenly hardcoded "MF4" for
+# tumor_epi, while every other tumor_epi notebook used "MF3" -- MF3 is the
+# real value, tumor pipelines use it consistently); MF2/ST2 are carried
+# over from the other variants' notebooks for when they get their own
+# pipeline.yaml, and should be double-checked against those variants' real
+# values before relying on them.
 
-MF4:
+MF3:
   power:
     750: 1.000
     650: 0.500
