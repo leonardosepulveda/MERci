@@ -1,9 +1,4 @@
-# Atomic MERlin analysis-task definition -- one task's own tunable defaults
-# only. Structural cross-references (warp_task/preprocess_task/optimize_task/
-# previous_iteration/global_align_task/segment_task/decode_task/filter_task/
-# .../random_seed) are injected by build_merlin_analysis_parameters()
-# (src/MERci/acquisition/merlin_config.py) based on which atoms are actually
-# in the recipe -- never hardcode them here.
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
 task: DeconvolutionPreprocess
 module: merlin.analysis.preprocess
 parameters:

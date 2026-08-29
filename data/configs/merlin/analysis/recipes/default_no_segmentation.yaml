@@ -1,6 +1,4 @@
-# Explicit ordered list of atomic task names (data/configs/merlin/analysis/tasks/)
-# to assemble into one MERlin analysis-tasks JSON -- see
-# build_merlin_analysis_parameters() (src/MERci/acquisition/merlin_config.py).
+# Ordered atomic-task list -- see ../tasks/README.md for the shared convention (see build_merlin_analysis_parameters() for assembly).
 n_optimize_iterations: 10
 tasks:
 - fiducial_correlation_warp
