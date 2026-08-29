@@ -118,8 +118,8 @@ merlin:
       export_barcodes:             false
       plot_performance:            false
       slurm_report:                false
-      cellpose_segment_3d:         true
-      cellpose_segment_sam:        false
+      cellpose_segment_3d:         false
+      cellpose_segment_sam:        true
       clean_cell_boundaries:       true
       combine_cleaned_boundaries:  true
       refine_cell_databases:       true
