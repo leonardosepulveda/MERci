@@ -105,16 +105,16 @@ merlin:
       plot_performance:            true
       slurm_report:                true
       cellpose_segment_3d:         false
-      cellpose_segment_sam:        false
-      clean_cell_boundaries:       false
-      combine_cleaned_boundaries:  false
-      refine_cell_databases:       false
-      partition_barcodes:          false
-      export_partitioned_barcodes: false
-      export_cell_metadata:        false
-      smfish_signal:               false   # see NOTE above -- auto-added per experiment
-      sum_signal:                  false   # requires cellpose_segment_3d or cellpose_segment_sam
-      export_sum_signals:          false
+      cellpose_segment_sam:        true
+      clean_cell_boundaries:       true
+      combine_cleaned_boundaries:  true
+      refine_cell_databases:       true
+      partition_barcodes:          true
+      export_partitioned_barcodes: true
+      export_cell_metadata:        true
+      smfish_signal:               true   # see NOTE above -- auto-added per experiment
+      sum_signal:                  true   # requires cellpose_segment_3d or cellpose_segment_sam
+      export_sum_signals:          true
 
     # {task_name: {param: value}} -- merged over that task's own YAML
     # parameters. sum_signal has no sane shared default channel list.
