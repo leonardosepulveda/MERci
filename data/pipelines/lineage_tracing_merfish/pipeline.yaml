@@ -1,0 +1,117 @@
+# Pipeline-level configuration for lineage_tracing/merfish (MERFISH pass of
+# a lineage-tracing sample -- combinatorial barcode decoding, MERlin-based).
+# Loaded via MERci.acquisition.pipeline_config.load_pipeline_config.
+#
+# Values here are the same for every experiment run through this pipeline --
+# per-experiment values (tissue-segmentation thresholds, positions
+# boundaries, etc.) are NOT here; they stay hand-edited per notebook run.
+# See prompt_history/2026_08_28_1655_*, 2026_08_28_1712_* for the general
+# design, and the entry building this specific pipeline for two real bugs
+# found and fixed along the way: round_bit_color originally recorded 647 for
+# many bits while the actual imaged/frame-table color on ST2 is 650
+# (create_data_organization raises ValueError on this mismatch -- confirmed
+# with the user, corrected to 650 throughout); and notebook 05 wrote
+# data_organization_*.csv to metadata/ while notebook 07 looked for it under
+# merlin/dataorganization/ (notebook 07's WARNING would always have fired) --
+# corrected notebook 05 to write to merlin/dataorganization/, matching
+# tumor_epi/tumor_disk's convention.
+
+id: lineage_tracing_merfish
+label: "Lineage Tracing -- MERFISH"
+analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
+
+microscope: ST2
+objective: "60X"
+
+imaging:
+  file_type: ".zarr"
+  exposure_time: 0.15   # seconds
+  # Per-channel laser power is NOT set here -- it's locked to the microscope
+  # choice above, not an independent pipeline dial. See
+  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
+
+  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
+  cells_round:
+    z_min: 0.5
+    z_max: 70
+    z_step: 0.5
+    bead_seq: [488]
+    color_seq: [405, 488]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  # z-stack recipe for the "bits" round (barcode-imaging rounds). ST2 has no
+  # 750nm channel, so only 650/560 here (unlike the tumor/epi pipelines'
+  # 3-color MF-series recipe).
+  bits_round:
+    z_min: 0.5
+    z_max: 70
+    z_step: 0.5
+    bead_seq: [488]
+    color_seq: [650, 560]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
+  transit_n_blank: 2      # blank frames per transit FOV
+
+fluidics:
+  use_adaptors: false          # direct-readout fluidics, not adaptor-based (differs from the tumor pipelines)
+  include_final_cleave: true   # add a final cleave step after the last imaging round
+  first_hyb_no_cleave: false   # first hyb (after the cells round) does NOT omit the cleave step
+
+# Everything MERlin-specific. This pipeline's 26 bits are ALL combinatorial
+# barcode (confirmed: LT2v0_codebook.csv has exactly 26 bit_names, matching
+# round_bit_color's 26 rows exactly) -- no sequential/non-barcode bits at
+# all, so there is no companion codebook file and notebook 05 never passes
+# sequential_gene_names.
+merlin:
+  project: lt     # "bc" | "lt" | "mf" -- selects which master-CSV schema
+  lib_name: LT2   # codebook/probe-library name (MERci/data/configs/merlin/codebooks/)
+
+  dataorganization:
+    # (round, bit, color) mapping -- notebook 03 loads this instead of
+    # hardcoding the list. Physically alongside this file, mirroring the
+    # real SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
+    round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
+
+  analysis:
+    # MERlin optimize-iteration count -- a parameter of the optimize_iteration
+    # task below, independent of bit count.
+    n_optimize_iterations: 10
+
+    # Every atomic MERlin task (data/configs/merlin/analysis/tasks/*.yaml),
+    # enabled/disabled for this pipeline. This is the FULL menu -- trim to
+    # what this pipeline actually needs. This pipeline is the plain barcode-
+    # decode chain only (matches data/configs/merlin/analysis/recipes/
+    # default_no_segmentation.yaml exactly) -- no segmentation, no smfish/
+    # sum_signal (this pipeline has no sequential bits to measure that way).
+    tasks:
+      fiducial_correlation_warp:   true
+      deconvolution_preprocess:    true
+      optimize_iteration:          true
+      decode:                      true
+      global_align_least_squares:  true
+      global_align_simple:         false
+      generate_adaptive_threshold: true
+      adaptive_filter_barcodes:    true
+      export_barcodes:             true
+      plot_performance:            true
+      slurm_report:                true
+      cellpose_segment_3d:         false
+      cellpose_segment_sam:        false
+      clean_cell_boundaries:       false
+      combine_cleaned_boundaries:  false
+      refine_cell_databases:       false
+      partition_barcodes:          false
+      export_partitioned_barcodes: false
+      export_cell_metadata:        false
+      smfish_signal:               false
+      sum_signal:                  false
+      export_sum_signals:          false
+
+    overrides: {}
