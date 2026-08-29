@@ -6,22 +6,19 @@
 # in the recipe -- never hardcode them here.
 #
 # Full parameter list, verified directly against merlin.analysis.segment.
-# CellPoseSegmentSAM.__init__ (~/260715_LT059_merlin_update/MERlin/merlin/
-# analysis/segment.py) -- every key below is a real parameter that class
-# reads; values already tuned here (channel_1_name/do_3D/dump_segmented_
-# images/downsample_factor/flow3D_smooth/min_size/expand_mask) are kept as
-# previously set (some differ from MERlin's own default, noted below);
-# every other key was missing and is added at MERlin's own real default.
+# CellPoseSegmentSAM.__init__ in the MERlin package -- every key below is a
+# real parameter that class reads; values already tuned here
+# (channel_1_name/do_3D/dump_segmented_images/downsample_factor/
+# flow3D_smooth/min_size/expand_mask) are kept as previously set (some
+# differ from MERlin's own default, noted below); every other key was
+# missing and is added at MERlin's own real default.
 #
-# Parameters are grouped below by where they're consumed (worked out in
-# MERlin's own prompt_history/2026_08_29_1400_compare_cellposesam_merlin_vs_
-# fishtank_params.md; full per-parameter detail in this repo's
-# cache/merlin_cellposesam_parameter_classification.md): passed directly to
-# cellpose, vs. passed to other MERlin subfunctions (channel I/O,
+# Parameters below are grouped by where they're consumed: passed directly
+# to cellpose, vs. passed to other MERlin subfunctions (channel I/O,
 # downsample/upsample, mask post-processing, caching). `diameter` and
 # `anisotropy` are flagged separately -- both are declared with a default
-# but never actually referenced in _run_analysis, so they're dead/no-op
-# regardless of value in the current MERlin code.
+# but never actually referenced in MERlin's _run_analysis, so they're
+# dead/no-op regardless of value in the current MERlin code.
 task: CellPoseSegmentSAM
 module: merlin.analysis.segment
 parameters:
