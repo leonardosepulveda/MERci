@@ -86,10 +86,14 @@ merlin:
 
     # Every atomic MERlin task (data/configs/merlin/analysis/tasks/*.yaml),
     # enabled/disabled for this pipeline. This is the FULL menu -- trim to
-    # what this pipeline actually needs. This pipeline is the plain barcode-
-    # decode chain only (matches data/configs/merlin/analysis/recipes/
-    # default_no_segmentation.yaml exactly) -- no segmentation, no smfish/
-    # sum_signal (this pipeline has no sequential bits to measure that way).
+    # what this pipeline actually needs. This pipeline's 26 bits are ALL
+    # combinatorial barcode -- no sequential/non-barcode bits, so smfish/
+    # sum_signal don't apply. Segmentation DOES apply though: the cells_round
+    # above images a dedicated 405 (DAPI) channel for exactly this purpose
+    # (notebook 05's include_dapi=True), and this pipeline has real
+    # combinatorial barcodes to partition into cells -- so cellpose_segment_
+    # sam and its full downstream chain (through partition_barcodes/
+    # export_partitioned_barcodes) are on, mirroring tumor_epi's pattern.
     tasks:
       fiducial_correlation_warp:   true
       deconvolution_preprocess:    true
@@ -103,13 +107,13 @@ merlin:
       plot_performance:            true
       slurm_report:                true
       cellpose_segment_3d:         false
-      cellpose_segment_sam:        false
-      clean_cell_boundaries:       false
-      combine_cleaned_boundaries:  false
-      refine_cell_databases:       false
-      partition_barcodes:          false
-      export_partitioned_barcodes: false
-      export_cell_metadata:        false
+      cellpose_segment_sam:        true
+      clean_cell_boundaries:       true
+      combine_cleaned_boundaries:  true
+      refine_cell_databases:       true
+      partition_barcodes:          true
+      export_partitioned_barcodes: true
+      export_cell_metadata:        true
       smfish_signal:               false
       sum_signal:                  false
       export_sum_signals:          false
