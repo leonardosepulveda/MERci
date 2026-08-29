@@ -12,23 +12,38 @@
 # images/downsample_factor/flow3D_smooth/min_size/expand_mask) are kept as
 # previously set (some differ from MERlin's own default, noted below);
 # every other key was missing and is added at MERlin's own real default.
+#
+# Parameters are grouped below by where they're consumed (worked out in
+# MERlin's own prompt_history/2026_08_29_1400_compare_cellposesam_merlin_vs_
+# fishtank_params.md; full per-parameter detail in this repo's
+# cache/merlin_cellposesam_parameter_classification.md): passed directly to
+# cellpose, vs. passed to other MERlin subfunctions (channel I/O,
+# downsample/upsample, mask post-processing, caching). `diameter` and
+# `anisotropy` are flagged separately -- both are declared with a default
+# but never actually referenced in _run_analysis, so they're dead/no-op
+# regardless of value in the current MERlin code.
 task: CellPoseSegmentSAM
 module: merlin.analysis.segment
 parameters:
-  diameter: null                 # MERlin default: null (not used by cellpose>=4.0's SAM model)
-  channel_1_name: DAPI
-  channel_2_name: null           # MERlin default: null (no second channel)
-  path_to_user_model: false      # MERlin default: false (use the built-in model, not a custom path)
+  # -- Passed directly to cellpose --
   use_gpu: true                  # MERlin default: true
+  path_to_user_model: false      # MERlin default: false (use the built-in model, not a custom path)
   do_3D: true
-  anisotropy: 1                  # MERlin default: 1 (z step size / pixel size; not used for 2D/3D stitching)
-  stitch_threshold: 0.25         # MERlin default: 0.25 (only used for 2D stitching, i.e. do_3D: false)
-  downsample_factor: 4
-  flow3D_smooth: 1               # MERlin default: 0 -- kept at the previously tuned value
-  min_size: 100                  # MERlin default: 0 -- kept at the previously tuned value
   flow_threshold: 0.4            # MERlin default: 0.4
   cellprob_threshold: 0.0        # MERlin default: 0.0
+  min_size: 100                  # MERlin default: 0 -- kept at the previously tuned value
   tile_norm_blocksize: 0         # MERlin default: 0
-  expand_mask: 2                 # MERlin default: 0 -- kept at the previously tuned value
-  use_old_segmentation: false    # MERlin default: false (always re-segment)
-  dump_segmented_images: false
+  flow3D_smooth: 1               # MERlin default: 0 -- kept at the previously tuned value; only used when do_3D: true
+  stitch_threshold: 0.25         # MERlin default: 0.25; only used when do_3D: false (MERlin's own manual stitcher -- keep non-zero, see cache/ note)
+
+  # -- Passed to other MERlin subfunctions (not cellpose) --
+  channel_1_name: DAPI
+  channel_2_name: null           # MERlin default: null (no second channel)
+  downsample_factor: 4           # shrinks input images before segmentation, upsamples masks back after
+  dump_segmented_images: false   # if true, also dumps the (resized) input channel image(s) for debugging
+  expand_mask: 2                 # MERlin default: 0 -- kept at the previously tuned value; post-hoc mask dilation, applied after stitching
+  use_old_segmentation: false    # MERlin default: false (always re-segment); if true, reloads a cached mask when one already exists
+
+  # -- Declared but dead/no-op in current MERlin code (never reach cellpose) --
+  diameter: null                 # MERlin default: null; not used by cellpose>=4.0's SAM model, not referenced in _run_analysis
+  anisotropy: 1                  # MERlin default: 1; not referenced in either eval() call regardless of value
