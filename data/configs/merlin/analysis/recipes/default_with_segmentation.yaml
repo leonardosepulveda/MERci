@@ -13,7 +13,7 @@ tasks:
 - export_barcodes
 - plot_performance
 - slurm_report
-- cellpose_segment_3d
+- cellpose_segment_sam
 - clean_cell_boundaries
 - combine_cleaned_boundaries
 - refine_cell_databases

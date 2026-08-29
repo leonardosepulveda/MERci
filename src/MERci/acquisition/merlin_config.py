@@ -23,10 +23,13 @@ resolve_cluster_sample_dir        — this experiment's acquisition root as
 create_slurm_submit_script        — the sbatch script that runs ``merlin``,
     with every path relative to one ``$SAMPLE_DIR`` bash variable
 resolve_codebook_filename         — lib_name -> codebook filename (dispatch only)
-resolve_sequential_codebook_filename — lib_name -> its sequential-companion codebook
-    filename (dispatch only; caller checks existence -- most libraries have none)
-load_sequential_gene_names       — {bit: gene_name} for lib_name's sequential bits,
-    from that companion file, with an optional per-experiment override merged in
+resolve_sequential_codebook_filename — (lib_name, kind="sequential") -> its non-barcode
+    companion codebook filename (dispatch only; caller checks existence -- most
+    libraries have none); kind lets one library have more than one companion
+    (e.g. "sequential" RNA panel vs "immuno" antibody panel for a disk pipeline)
+load_sequential_gene_names       — {bit: gene_name} for lib_name's non-barcode bits
+    of the given kind, from that companion file, with an optional per-experiment
+    override merged in
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
 load_microscope_orientation      — read a microscope's flip_horizontal/flip_vertical/
     transpose flags (MERlin's own defaults when absent, confirmed against
@@ -98,44 +101,52 @@ def resolve_codebook_filename(lib_name: str) -> str:
         ) from None
 
 
-def resolve_sequential_codebook_filename(lib_name: str) -> str:
+def resolve_sequential_codebook_filename(lib_name: str, kind: str = "sequential") -> str:
     """
-    Return *lib_name*'s sequential (non-barcode) companion codebook
-    filename, by convention: ``<codebook_stem>_sequential.csv`` alongside
-    the primary codebook (e.g. ``"C3v1_codebook.csv"`` ->
-    ``"C3v1_codebook_sequential.csv"``).
+    Return *lib_name*'s non-barcode companion codebook filename for
+    *kind*, by convention: ``<codebook_stem>_<kind>.csv`` alongside the
+    primary codebook (e.g. ``"C3v1_codebook.csv"`` + ``kind="sequential"``
+    -> ``"C3v1_codebook_sequential.csv"``; + ``kind="immuno"`` ->
+    ``"C3v1_codebook_immuno.csv"``).
+
+    *kind* lets one library have more than one non-barcode companion for
+    different acquisition modalities of the same sample -- e.g. an
+    epifluorescence pipeline's RNA sequential-FISH panel
+    (``kind="sequential"``) vs a disk-scope pipeline's immunofluorescence
+    panel (``kind="immuno"``) imaging the *same* library's codebook.
 
     Dispatch only, like ``resolve_codebook_filename`` -- callers check the
-    file's existence themselves, since not every lib_name has sequential
-    bits (most codebooks have no companion file at all).
+    file's existence themselves, since not every lib_name/kind pair has a
+    companion file (most codebooks have none at all).
     """
     base = resolve_codebook_filename(lib_name)
     stem = base[:-4] if base.lower().endswith(".csv") else base
-    return f"{stem}_sequential.csv"
+    return f"{stem}_{kind}.csv"
 
 
 def load_sequential_gene_names(
     codebooks_dir: Path,
     lib_name: str,
     experiment_override_path: Optional[Path] = None,
+    kind: str = "sequential",
 ) -> Dict[int, str]:
     """
-    ``{bit: gene_name}`` for *lib_name*'s sequential (non-barcode) bits.
+    ``{bit: gene_name}`` for *lib_name*'s non-barcode bits of the given
+    *kind* (see ``resolve_sequential_codebook_filename``).
 
     Pipeline-level by default: read from *lib_name*'s own
-    ``<codebook>_sequential.csv`` companion file in *codebooks_dir* --
-    empty dict if that file doesn't exist (not every library has sequential
-    bits). This is what a bit-count check should compare against the real
-    round_bit_color table: total bits imaged = the primary codebook's own
-    bit_names count + this dict's size.
+    ``<codebook>_<kind>.csv`` companion file in *codebooks_dir* -- empty
+    dict if that file doesn't exist (not every library has one). This is
+    what a bit-count check should compare against the real round_bit_color
+    table: total bits imaged = the primary codebook's own bit_names count
+    + this dict's size.
 
     If *experiment_override_path* is given and exists, its rows are merged
     in on top (per-bit override) -- e.g. metadata/sequential_genes.csv for
-    an experiment using a gene not yet in any codebook's sequential
-    companion.
+    an experiment using a gene not yet in any codebook's companion file.
     """
     gene_names: Dict[int, str] = {}
-    seq_path = Path(codebooks_dir) / resolve_sequential_codebook_filename(lib_name)
+    seq_path = Path(codebooks_dir) / resolve_sequential_codebook_filename(lib_name, kind)
     if seq_path.exists():
         with open(seq_path, newline="") as fh:
             for row in csv.DictReader(fh):

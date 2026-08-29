@@ -4,14 +4,31 @@
 # .../random_seed) are injected by build_merlin_analysis_parameters()
 # (src/MERci/acquisition/merlin_config.py) based on which atoms are actually
 # in the recipe -- never hardcode them here.
+#
+# Full parameter list, verified directly against merlin.analysis.segment.
+# CellPoseSegmentSAM.__init__ (~/260715_LT059_merlin_update/MERlin/merlin/
+# analysis/segment.py) -- every key below is a real parameter that class
+# reads; values already tuned here (channel_1_name/do_3D/dump_segmented_
+# images/downsample_factor/flow3D_smooth/min_size/expand_mask) are kept as
+# previously set (some differ from MERlin's own default, noted below);
+# every other key was missing and is added at MERlin's own real default.
 task: CellPoseSegmentSAM
 module: merlin.analysis.segment
 parameters:
+  diameter: null                 # MERlin default: null (not used by cellpose>=4.0's SAM model)
   channel_1_name: DAPI
+  channel_2_name: null           # MERlin default: null (no second channel)
+  path_to_user_model: false      # MERlin default: false (use the built-in model, not a custom path)
+  use_gpu: true                  # MERlin default: true
   do_3D: true
-  dump_segmented_masks: true
-  dump_segmented_images: false
+  anisotropy: 1                  # MERlin default: 1 (z step size / pixel size; not used for 2D/3D stitching)
+  stitch_threshold: 0.25         # MERlin default: 0.25 (only used for 2D stitching, i.e. do_3D: false)
   downsample_factor: 4
-  flow3D_smooth: 1
-  expand_mask: 2
-  min_size: 100
+  flow3D_smooth: 1               # MERlin default: 0 -- kept at the previously tuned value
+  min_size: 100                  # MERlin default: 0 -- kept at the previously tuned value
+  flow_threshold: 0.4            # MERlin default: 0.4
+  cellprob_threshold: 0.0        # MERlin default: 0.0
+  tile_norm_blocksize: 0         # MERlin default: 0
+  expand_mask: 2                 # MERlin default: 0 -- kept at the previously tuned value
+  use_old_segmentation: false    # MERlin default: false (always re-segment)
+  dump_segmented_images: false

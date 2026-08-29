@@ -68,6 +68,14 @@ merlin:
     # imaging recipe. Physically alongside this file, mirroring the real
     # SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
     round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
+    # This pipeline's non-barcode (sequential) bits' gene names come from
+    # lib_name's own "sequential" companion codebook
+    # (data/configs/merlin/codebooks/C3v1_codebook_sequential.csv) --
+    # "sequential" is the default, named explicitly here since a sibling
+    # disk-scope pipeline of the same sample uses "immuno" instead (its own
+    # antibody-panel companion) -- see
+    # merlin_config.resolve_sequential_codebook_filename's own docstring.
+    sequential_kind: sequential
 
   analysis:
     # MERlin optimize-iteration count -- a parameter of the optimize_iteration
@@ -80,10 +88,10 @@ merlin:
     #
     # NOTE: smfish_signal/sum_signal/export_sum_signals below are this
     # pipeline's default; notebook 07 additionally still auto-adds
-    # smfish_signal (with the real channel names) whenever a given
-    # EXPERIMENT'S metadata/sequential_genes.csv exists, regardless of this
-    # flag -- flagging this interaction since it wasn't part of what was
-    # asked this pass, only carried over unchanged from the prior behavior.
+    # smfish_signal (with the real channel names) whenever this pipeline's
+    # codebook_sequential companion (or a per-experiment
+    # metadata/sequential_genes.csv override) actually has entries,
+    # regardless of this flag.
     tasks:
       fiducial_correlation_warp:   true
       deconvolution_preprocess:    true
@@ -97,16 +105,16 @@ merlin:
       plot_performance:            true
       slurm_report:                true
       cellpose_segment_3d:         false
-      cellpose_segment_sam:        false
-      clean_cell_boundaries:       false
-      combine_cleaned_boundaries:  false
-      refine_cell_databases:       false
-      partition_barcodes:          false
-      export_partitioned_barcodes: false
-      export_cell_metadata:        false
-      smfish_signal:               false   # see NOTE above -- auto-added per experiment
-      sum_signal:                  false   # requires cellpose_segment_3d or cellpose_segment_sam
-      export_sum_signals:          false
+      cellpose_segment_sam:        true
+      clean_cell_boundaries:       true
+      combine_cleaned_boundaries:  true
+      refine_cell_databases:       true
+      partition_barcodes:          true
+      export_partitioned_barcodes: true
+      export_cell_metadata:        true
+      smfish_signal:               true   # see NOTE above -- auto-added per experiment
+      sum_signal:                  true   # requires cellpose_segment_3d or cellpose_segment_sam
+      export_sum_signals:          true
 
     # {task_name: {param: value}} -- merged over that task's own YAML
     # parameters. sum_signal has no sane shared default channel list.
