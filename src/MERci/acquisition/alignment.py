@@ -25,6 +25,12 @@ Typical workflow
 1. ``src = load_boundary_polygon(src_txt)`` / ``tgt = load_boundary_polygon(tgt_txt)``
 2. ``fit = fit_isotropic_alignment(src, tgt)``
 3. ``tgt_positions = fit.transform_points(src_positions)``
+
+When the two stages are not guaranteed axis-aligned to each other (e.g.
+comparing two *already-imaged* experiments rather than planning where to
+re-image), use :func:`fit_similarity_alignment` instead — same closed-form +
+IoU-refinement approach, but with a free rotation angle rather than only
+axis flips.
 """
 from __future__ import annotations
 
@@ -38,7 +44,7 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import median_filter
 from scipy.optimize import minimize
-from shapely.affinity import scale as _shp_scale, translate as _shp_translate
+from shapely.affinity import rotate as _shp_rotate, scale as _shp_scale, translate as _shp_translate
 from shapely.geometry import Polygon
 
 log = logging.getLogger(__name__)
@@ -121,6 +127,12 @@ class AlignmentResult:
     refined   : whether IoU refinement ran and improved on the initial guess
     flip_x    : True if the x-axis is mirrored between source and target
     flip_y    : True if the y-axis is mirrored between source and target
+    rotation_deg : counter-clockwise rotation (degrees), applied *after* the
+                  flip and *before* the scale — 0.0 for a :func:`fit_isotropic_alignment`
+                  result (backward-compatible: ``transform_points``/
+                  ``transform_polygon`` reduce to the old flip+scale+translate
+                  formula whenever this is 0). Only set by
+                  :func:`fit_similarity_alignment`.
     """
 
     scale:    float
@@ -132,6 +144,7 @@ class AlignmentResult:
     refined:  bool
     flip_x:   bool = False
     flip_y:   bool = False
+    rotation_deg: float = 0.0
 
     @property
     def translation(self) -> Tuple[float, float]:
@@ -139,20 +152,30 @@ class AlignmentResult:
 
     @property
     def signed_scale(self) -> Tuple[float, float]:
-        """``(sx, sy)`` — per-axis signed scale (negative = that axis flipped)."""
+        """``(sx, sy)`` — per-axis signed scale (negative = that axis flipped).
+        Only a complete description of the transform when ``rotation_deg == 0``."""
         return (-self.scale if self.flip_x else self.scale,
                 -self.scale if self.flip_y else self.scale)
 
     def transform_points(self, coords: np.ndarray) -> np.ndarray:
-        """Apply the transform to an ``(N, 2)`` array of ``(x, y)`` points."""
+        """Apply the transform to an ``(N, 2)`` array of ``(x, y)`` points:
+        flip, then rotate by ``rotation_deg``, then scale, then translate."""
         coords = np.asarray(coords, dtype=float)
-        sx, sy = self.signed_scale
-        return coords * np.array([sx, sy]) + np.array([self.tx, self.ty])
+        fx = -1.0 if self.flip_x else 1.0
+        fy = -1.0 if self.flip_y else 1.0
+        p = coords * np.array([fx, fy])
+        if self.rotation_deg:
+            p = p @ _rotation_matrix(self.rotation_deg).T
+        return self.scale * p + np.array([self.tx, self.ty])
 
     def transform_polygon(self, poly: Polygon) -> Polygon:
-        """Apply the transform to a Shapely polygon."""
-        sx, sy = self.signed_scale
-        return _apply_to_polygon(poly, sx, sy, self.tx, self.ty)
+        """Apply the transform to a Shapely polygon (same flip/rotate/scale/
+        translate order as :meth:`transform_points`)."""
+        fx = -1.0 if self.flip_x else 1.0
+        fy = -1.0 if self.flip_y else 1.0
+        return _apply_similarity_to_polygon(
+            poly, fx, fy, self.rotation_deg, self.scale, self.tx, self.ty
+        )
 
 
 # ── Polygon helpers ─────────────────────────────────────────────────────────
@@ -162,6 +185,26 @@ def _apply_to_polygon(poly: Polygon, sx: float, sy: float, tx: float, ty: float)
     factors for flips — then translate, matching the point transform
     ``q = (sx * p_x + tx, sy * p_y + ty)``."""
     scaled = _shp_scale(poly, xfact=sx, yfact=sy, origin=(0.0, 0.0))
+    return _shp_translate(scaled, xoff=tx, yoff=ty)
+
+
+def _rotation_matrix(theta_deg: float) -> np.ndarray:
+    """Counter-clockwise 2-D rotation matrix, degrees."""
+    theta = np.radians(theta_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s], [s, c]])
+
+
+def _apply_similarity_to_polygon(
+    poly: Polygon, fx: float, fy: float, theta_deg: float,
+    scale: float, tx: float, ty: float,
+) -> Polygon:
+    """Flip per-axis about the origin, rotate by *theta_deg* (counter-clockwise,
+    matching :func:`_rotation_matrix`), scale uniformly, then translate —
+    the polygon counterpart of :meth:`AlignmentResult.transform_points`."""
+    flipped = _shp_scale(poly, xfact=fx, yfact=fy, origin=(0.0, 0.0))
+    rotated = _shp_rotate(flipped, theta_deg, origin=(0.0, 0.0)) if theta_deg else flipped
+    scaled = _shp_scale(rotated, xfact=scale, yfact=scale, origin=(0.0, 0.0))
     return _shp_translate(scaled, xoff=tx, yoff=ty)
 
 
@@ -300,6 +343,147 @@ def fit_isotropic_alignment(
             best.flip_x, best.flip_y, best.iou,
         )
     return best
+
+
+# ── Full similarity fit (free rotation) ──────────────────────────────────────
+#
+# Unlike fit_isotropic_alignment above (built for planning where to re-image on
+# a second scope, where the two stages' axes are assumed already aligned),
+# comparing two experiments imaged independently gives no such guarantee — the
+# stage insert can land at an arbitrary angle on each microscope. This adds a
+# free rotation on top of the same scale + translation + optional-flip model.
+
+
+def _initial_guess_rotated(
+    src: Polygon, tgt: Polygon, fx: float, fy: float, theta_deg: float,
+) -> Tuple[float, float, float]:
+    """Closed-form moment match for a fixed flip + rotation angle: scale from
+    the area ratio (unchanged by rotation/flip, as in :func:`_initial_guess`),
+    translation aligns the flipped+rotated+scaled source centroid onto the
+    target centroid."""
+    scale = float(np.sqrt(tgt.area / src.area))
+    cs = np.array(src.centroid.coords[0], dtype=float)
+    ct = np.array(tgt.centroid.coords[0], dtype=float)
+    p = cs * np.array([fx, fy])
+    if theta_deg:
+        p = p @ _rotation_matrix(theta_deg).T
+    tx, ty = ct - scale * p
+    return scale, float(tx), float(ty)
+
+
+def _fit_one_flip_rotation(
+    src: Polygon, tgt: Polygon, fx: float, fy: float, theta0: float,
+    refine: bool, maxiter: int,
+) -> AlignmentResult:
+    """Fit scale + translation + rotation for a fixed flip, starting the
+    rotation from *theta0*. Mirrors :func:`_fit_one_flip`'s closed-form-then-
+    Nelder-Mead structure, with rotation added as a 4th free parameter."""
+    s0, tx0, ty0 = _initial_guess_rotated(src, tgt, fx, fy, theta0)
+    iou_init = polygon_iou(
+        _apply_similarity_to_polygon(src, fx, fy, theta0, s0, tx0, ty0), tgt
+    )
+    flip_x, flip_y = (fx < 0), (fy < 0)
+
+    if not refine:
+        return AlignmentResult(
+            scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
+            n_iter=0, refined=False, flip_x=flip_x, flip_y=flip_y,
+            rotation_deg=theta0,
+        )
+
+    def neg_iou(params: np.ndarray) -> float:
+        s, tx, ty, theta = params
+        s = abs(s)
+        if s == 0.0:
+            return 1.0
+        moved = _apply_similarity_to_polygon(src, fx, fy, theta, s, tx, ty)
+        return 1.0 - polygon_iou(moved, tgt)
+
+    res = minimize(
+        neg_iou,
+        x0=np.array([s0, tx0, ty0, theta0], dtype=float),
+        method="Nelder-Mead",
+        options={"maxiter": maxiter, "xatol": 1e-6, "fatol": 1e-9},
+    )
+    s_r, tx_r, ty_r = float(abs(res.x[0])), float(res.x[1]), float(res.x[2])
+    theta_r = float(res.x[3]) % 360.0
+    iou_r = 1.0 - float(res.fun)
+
+    if iou_r >= iou_init:
+        return AlignmentResult(
+            scale=s_r, tx=tx_r, ty=ty_r, iou=iou_r, iou_init=iou_init,
+            n_iter=int(res.nit), refined=True, flip_x=flip_x, flip_y=flip_y,
+            rotation_deg=theta_r,
+        )
+    # Refinement made things worse (rare) — keep the closed-form guess.
+    return AlignmentResult(
+        scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
+        n_iter=int(res.nit), refined=False, flip_x=flip_x, flip_y=flip_y,
+        rotation_deg=theta0,
+    )
+
+
+def fit_similarity_alignment(
+    src:        Polygon,
+    tgt:        Polygon,
+    refine:     bool = True,
+    allow_flip: bool = True,
+    n_angles:   int  = 72,
+    maxiter:    int  = 2000,
+) -> AlignmentResult:
+    """
+    Fit a full 2-D similarity transform (uniform scale + translation + a free
+    rotation angle, plus optional per-axis flips) mapping *src* onto *tgt* by
+    maximising boundary overlap — the rotation-aware counterpart of
+    :func:`fit_isotropic_alignment`.
+
+    Tissue-boundary IoU is not smooth in the rotation angle (unlike scale/
+    translation, which the closed-form centroid/area match already gets close
+    to optimal), so a gradient-free local refinement alone is not reliable
+    without a good starting angle. This instead does a **coarse grid search**
+    over *n_angles* evenly-spaced angles (× the flip combinations, if
+    *allow_flip*) — for each, the closed-form scale/translation
+    (:func:`_initial_guess_rotated`) gives one cheap IoU evaluation — then runs
+    a single Nelder–Mead refinement (scale, translation, *and* rotation
+    jointly) from whichever grid point scored highest.
+
+    Parameters
+    ----------
+    src, tgt   : source and target boundary polygons
+    refine     : run the IoU-maximising refinement after the grid search (default True)
+    allow_flip : also grid-search x/y axis flips (default True)
+    n_angles   : number of evenly-spaced angles (0-360°) tried in the coarse
+                 grid search per flip combination
+    maxiter    : maximum optimiser iterations for the final refinement
+
+    Returns
+    -------
+    AlignmentResult (``rotation_deg`` records the fitted angle; ``flip_x``/
+    ``flip_y`` the fitted flip, as in :func:`fit_isotropic_alignment`)
+    """
+    flips = (
+        [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
+        if allow_flip else [(1.0, 1.0)]
+    )
+    angles = np.linspace(0.0, 360.0, int(n_angles), endpoint=False)
+
+    best_fx, best_fy, best_theta, best_iou = 1.0, 1.0, 0.0, -1.0
+    for fx, fy in flips:
+        for theta in angles:
+            s0, tx0, ty0 = _initial_guess_rotated(src, tgt, fx, fy, theta)
+            iou = polygon_iou(
+                _apply_similarity_to_polygon(src, fx, fy, theta, s0, tx0, ty0), tgt
+            )
+            if iou > best_iou:
+                best_fx, best_fy, best_theta, best_iou = fx, fy, theta, iou
+
+    result = _fit_one_flip_rotation(src, tgt, best_fx, best_fy, best_theta, refine, maxiter)
+
+    log.info(
+        "Best similarity alignment: flip_x=%s flip_y=%s rotation=%.2f° IoU=%.4f.",
+        result.flip_x, result.flip_y, result.rotation_deg, result.iou,
+    )
+    return result
 
 
 # ── Per-FOV bead drift refinement ───────────────────────────────────────────
