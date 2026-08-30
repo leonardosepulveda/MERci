@@ -1040,7 +1040,11 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 # deliberate departures from that reference file: the global-alignment atom
 # is global_align_least_squares (LeastSquaresGlobalAlignment) instead of its
 # SimpleGlobalAlignment, and slurm_report (absent from that file) is
-# included. chromatic_correction_file (an absolute path in that file, tied
+# included; generate_mosaic (also absent from that file) was added later as
+# a default too, so every experiment's post-decode assembled mosaic (all
+# channels, backed by the real per-FOV LeastSquaresGlobalAlignment
+# transform rather than nominal stage positions) is available for QC and
+# cross-microscope-alignment checks. chromatic_correction_file (an absolute path in that file, tied
 # to a specific machine) is deliberately left unset in
 # optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
 # shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
@@ -1160,6 +1164,9 @@ def build_merlin_analysis_parameters(
             params["filter_task"] = "AdaptiveFilterBarcodes"
         elif name == "slurm_report":
             params["run_after_task"] = "ExportBarcodes"
+        elif name == "generate_mosaic":
+            params["warp_task"] = "FiducialCorrelationWarp"
+            params["global_align_task"] = align_task_name
         elif name in _SEGMENT_ATOM_NAMES:
             params["warp_task"] = "FiducialCorrelationWarp"
             params["global_align_task"] = align_task_name

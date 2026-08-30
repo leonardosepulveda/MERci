@@ -127,6 +127,7 @@ merlin:
       decode:                      false
       global_align_least_squares:  true
       global_align_simple:         false
+      generate_mosaic:             true
       generate_adaptive_threshold: false
       adaptive_filter_barcodes:    false
       export_barcodes:             false
