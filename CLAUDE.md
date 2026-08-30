@@ -141,6 +141,7 @@ notebooks/
     03  view_mosaics               display per-color mosaics
     04  view_intensity_stats       per-frame intensity stats over rounds
     05  batch_sample_review        post-acquisition: verify/backfill a batch, compare across it
+    06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
     07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
@@ -148,7 +149,9 @@ notebooks/
     round_mosaics            live quick-look mosaic (on-demand/catch-up/live modes)
     fast_spot_quantification per-bit hybridization-reagent QC
   misc/              Ad-hoc utilities — see each notebook's own markdown cells for what it does
-  tests/             Diagnostic/recovery notebooks for one specific real incident, kept as templates
+  tests/             Diagnostic/recovery notebooks for one specific real incident, kept as
+                     templates, and validation notebooks for a new feature (synthetic and/or
+                     real-data checks) written before it's wired into a production notebook
 ```
 
 ## Architecture
