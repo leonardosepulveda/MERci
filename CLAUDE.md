@@ -45,11 +45,15 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 copies one `before_imaging/` variant, flattened, plus the shared
 `after_imaging/`/`during_imaging/` notebooks, into a standalone
 `SAMPLE_DIR/notebooks/` folder that sits *alongside* `SAMPLE_DIR/MERci/`
-instead of inside it (`MERci/acquisition/pipeline_export.py`). There, `MERci`
-is a sibling rather than an ancestor, so every exported notebook resolves
-`MERCI_DIR = Path(os.getcwd()).parent.parent / "MERci"` — one fixed formula
-regardless of the original variant's nesting depth. The `MERci/` clone is
-only ever read from by the export, never modified.
+instead of inside it (`MERci/acquisition/pipeline_export.py`). The export
+also copies `MERci`'s `src/`+`data/` into `SAMPLE_DIR/notebooks/MERci/`, so
+the exported notebooks read from that frozen copy instead of the original
+clone — `notebooks/` is fully self-contained and unaffected by later changes
+to `SAMPLE_DIR/MERci/`. Every exported notebook resolves
+`MERCI_DIR = Path(os.getcwd()).parent / "MERci"` (the copy) and
+`SAMPLE_DIR = Path(os.getcwd()).parent.parent` — one fixed pair of formulas
+regardless of the original variant's nesting depth. The `MERci/` clone
+itself is only ever read from by the export, never modified.
 
 **Split acquisition types** — `tumor/` → `epi/` (epifluorescence) or `disk/`
 (spinning-disk confocal); `lineage_tracing/` → `merfish/` (MERlin/codebook,
