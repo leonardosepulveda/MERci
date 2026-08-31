@@ -3,8 +3,10 @@
 Export one before_imaging pipeline, plus the shared during_imaging/
 after_imaging notebooks, into a standalone ``SAMPLE_DIR/notebooks/`` tree
 that sits *alongside* the MERci clone (``SAMPLE_DIR/MERci/``) instead of
-inside it. Used by ``notebooks/setup/00_select_pipeline.ipynb``. The MERci
-clone itself is only ever read from, never modified.
+inside it, plus a copy of the chosen pipeline's ``pipeline.yaml`` (a record
+of which config it was exported from -- see ``_copy_pipeline_yaml``). Used
+by ``notebooks/setup/00_select_pipeline.ipynb``. The MERci clone itself is
+only ever read from, never modified.
 
 Path-detection change
 ----------------------
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Dict, NamedTuple
 
@@ -122,7 +125,7 @@ _MERCI_DIR_NOTE = (
 )
 
 
-def _adapt_readme(pipeline_src: Path, pipeline_id: str) -> str:
+def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool) -> str:
     """Base the new notebooks/README.md on the pipeline's own README.md:
     drop the stale parent-counting explanation, note the new sibling-MERci
     path, and describe the exported folder layout."""
@@ -134,6 +137,11 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str) -> str:
         if n:
             break
 
+    pipeline_yaml_line = (
+        "  pipeline.yaml     this pipeline's config at export time (record only -- "
+        "notebooks read the live copy from MERci/data/pipelines/)\n"
+        if has_pipeline_yaml else ""
+    )
     layout_note = (
         "\n## Folder structure\n\n"
         f"This `notebooks/` folder was generated for the `{pipeline_id}` "
@@ -143,6 +151,7 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str) -> str:
         "  before_imaging/   this pipeline's pre-experiment notebooks, run in order\n"
         "  during_imaging/   live QC notebooks, run during acquisition\n"
         "  after_imaging/    online-analysis notebooks, run during/after acquisition\n"
+        f"{pipeline_yaml_line}"
         "```\n\n"
         "The `MERci/` clone this was exported from is untouched; re-run "
         "`00_select_pipeline.ipynb` there to regenerate this folder.\n"
@@ -160,6 +169,22 @@ def _copy_notebooks(src_dir: Path, dst_dir: Path) -> None:
         (dst_dir / nb_path.name).write_text(json.dumps(notebook, indent=1))
 
 
+def _copy_pipeline_yaml(merci_dir: Path, pipeline_id: str, out_dir: Path) -> bool:
+    """Copy `pipeline_id`'s pipeline.yaml (MERCI_DIR/data/pipelines/<id>/) to
+    `out_dir/pipeline.yaml`, as a record of which pipeline config this
+    export was generated from. Not every pipeline has one (only the
+    MERlin-based ones -- see pipeline_config.py); if missing, remove any
+    stale `out_dir/pipeline.yaml` left over from a previous `force=True`
+    export of a different pipeline. Returns whether one was copied."""
+    dst = out_dir / "pipeline.yaml"
+    src = merci_dir / "data" / "pipelines" / pipeline_id / "pipeline.yaml"
+    if not src.exists():
+        dst.unlink(missing_ok=True)
+        return False
+    shutil.copy2(src, dst)
+    return True
+
+
 def export_pipeline_notebooks(
     merci_dir: Path,
     sample_dir: Path,
@@ -170,8 +195,10 @@ def export_pipeline_notebooks(
     Copy `pipeline_id`'s before_imaging notebooks (flattened, no variant
     subfolders) plus the shared during_imaging/after_imaging notebooks into
     `sample_dir/notebooks/`, rewriting each copy's MERCI_DIR line for the new
-    sibling-MERci layout, and writing notebooks/README.md (adapted from the
-    pipeline's own README.md). Returns the new notebooks/ directory.
+    sibling-MERci layout; copy `pipeline_id`'s pipeline.yaml (if it has one)
+    to `sample_dir/notebooks/pipeline.yaml`; and write notebooks/README.md
+    (adapted from the pipeline's own README.md). Returns the new notebooks/
+    directory.
 
     Raises FileExistsError if `sample_dir/notebooks/` already exists, unless
     `force=True`. Never modifies `merci_dir`.
@@ -198,7 +225,8 @@ def export_pipeline_notebooks(
     _copy_notebooks(pipeline_src, out_before)
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
     _copy_notebooks(notebooks_dir / "after_imaging", out_after)
+    has_pipeline_yaml = _copy_pipeline_yaml(merci_dir, pipeline_id, out_dir)
 
-    (out_dir / "README.md").write_text(_adapt_readme(pipeline_src, pipeline_id))
+    (out_dir / "README.md").write_text(_adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml))
 
     return out_dir
