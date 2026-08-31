@@ -35,7 +35,7 @@
         "partition" : "gpu_requeue,gpu",
         "gres" : "gpu:1",
         "time" : "0:10:00",
-        "exclude" : "holygpu7c0309,holygpu7c0709,holygpu7c0711,holygpu7c0715"
+        "exclude" : ""
     },
     "CleanCellBoundaries": {
         "mem": 10000
