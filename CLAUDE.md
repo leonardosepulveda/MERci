@@ -49,11 +49,13 @@ instead of inside it (`MERci/acquisition/pipeline_export.py`). There, `MERci`
 is a sibling rather than an ancestor, so every exported notebook resolves
 `MERCI_DIR = Path(os.getcwd()).parent.parent / "MERci"` — one fixed formula
 regardless of the original variant's nesting depth. The export also copies
-the chosen pipeline's `pipeline.yaml` (if it has one — only the MERlin-based
-pipelines do) to `SAMPLE_DIR/notebooks/pipeline.yaml`, as a record of which
-config it was generated from; exported notebooks still read the live copy
-under `MERci/data/pipelines/` via `MERCI_DIR`. The `MERci/` clone is only
-ever read from by the export, never modified.
+the chosen pipeline's `pipeline.yaml`+`round_bit_color.csv` (if it has one —
+only the MERlin-based pipelines do) to `SAMPLE_DIR/notebooks/`, and rewrites
+every notebook that loads it to read *that* copy instead of the one under
+`MERci/data/pipelines/` — so it can be hand-edited per experiment without
+touching `MERci/`. The shared (not per-experiment) per-microscope power
+table it also needs still comes from the live `MERci/` clone. The `MERci/`
+clone itself is only ever read from by the export, never modified.
 
 **Split acquisition types** — `tumor/` → `epi/` (epifluorescence) or `disk/`
 (spinning-disk confocal); `lineage_tracing/` → `merfish/` (MERlin/codebook,
