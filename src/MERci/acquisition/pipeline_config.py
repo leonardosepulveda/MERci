@@ -110,11 +110,9 @@ def _load_round_bit_color(yaml_path: Path, csv_relpath: str) -> List[tuple]:
     ]
 
 
-def _load_power(yaml_path: Path, microscope: str) -> tuple[Dict[int, float], float]:
-    """Per-channel laser power for `microscope`, from data/configs/power/
-    power_by_microscope.yaml (MERCI_DIR/data/, resolved relative to
-    yaml_path == MERCI_DIR/data/pipelines/<id>/pipeline.yaml)."""
-    data_dir = yaml_path.parents[2]   # .../data/pipelines/<id>/pipeline.yaml -> .../data
+def _load_power(data_dir: Path, microscope: str) -> tuple[Dict[int, float], float]:
+    """Per-channel laser power for `microscope`, from
+    data_dir/configs/power/power_by_microscope.yaml."""
     power_path = data_dir / "configs" / "power" / "power_by_microscope.yaml"
     if not power_path.exists():
         raise FileNotFoundError(f"{power_path} not found.")
@@ -125,16 +123,27 @@ def _load_power(yaml_path: Path, microscope: str) -> tuple[Dict[int, float], flo
     return {int(k): float(v) for k, v in entry["power"].items()}, float(entry["power_default"])
 
 
-def load_pipeline_config(yaml_path: Path) -> PipelineConfig:
+def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConfig:
     """
-    Load one pipeline's ``pipeline.yaml`` (+ its round_bit_color CSV and the
-    shared per-microscope power table, both resolved relative to
-    ``MERCI_DIR/data/``) into a ``PipelineConfig``.
+    Load one pipeline's ``pipeline.yaml`` (+ its round_bit_color CSV,
+    resolved relative to ``yaml_path``) into a ``PipelineConfig``.
+
+    `data_dir` locates the shared per-microscope power table
+    (``data_dir/configs/power/power_by_microscope.yaml``) -- defaults to
+    ``yaml_path.parents[2]`` (``MERCI_DIR/data``, when `yaml_path` is
+    ``MERCI_DIR/data/pipelines/<id>/pipeline.yaml``, its usual in-repo
+    location). Pass it explicitly when `yaml_path` is a copy that no longer
+    sits at that fixed depth under ``data/`` -- e.g. a pipeline.yaml exported
+    into ``SAMPLE_DIR/notebooks/`` by pipeline_export.py, which still needs
+    the *shared* (not per-experiment) power table from the original
+    ``MERci/data/``.
 
     Raises ``KeyError``/``FileNotFoundError`` loudly on anything missing --
     no silent defaults for pipeline-defining values.
     """
     yaml_path = Path(yaml_path)
+    if data_dir is None:
+        data_dir = yaml_path.parents[2]   # .../data/pipelines/<id>/pipeline.yaml -> .../data
     raw = yaml.safe_load(yaml_path.read_text())
 
     imaging  = raw["imaging"]
@@ -144,7 +153,7 @@ def load_pipeline_config(yaml_path: Path) -> PipelineConfig:
     def _recipe(d: dict) -> ImagingRoundRecipe:
         return ImagingRoundRecipe(**d)
 
-    power, power_default = _load_power(yaml_path, raw["microscope"])
+    power, power_default = _load_power(data_dir, raw["microscope"])
 
     merlin_config = MerlinConfig(
         project                = merlin["project"],

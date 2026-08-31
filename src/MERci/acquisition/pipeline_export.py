@@ -3,10 +3,18 @@
 Export one before_imaging pipeline, plus the shared during_imaging/
 after_imaging notebooks, into a standalone ``SAMPLE_DIR/notebooks/`` tree
 that sits *alongside* the MERci clone (``SAMPLE_DIR/MERci/``) instead of
-inside it, plus a copy of the chosen pipeline's ``pipeline.yaml`` (a record
-of which config it was exported from -- see ``_copy_pipeline_yaml``). Used
-by ``notebooks/setup/00_select_pipeline.ipynb``. The MERci clone itself is
-only ever read from, never modified.
+inside it. Used by ``notebooks/setup/00_select_pipeline.ipynb``. The MERci
+clone itself is only ever read from, never modified.
+
+If the chosen pipeline has a ``pipeline.yaml`` (only the MERlin-based
+pipelines do -- see ``pipeline_config.py``), it's copied (with its
+round_bit_color CSV) to ``notebooks/pipeline.yaml``/``notebooks/
+round_bit_color.csv``, and every notebook that loads it is rewritten to
+read *that* copy instead of the one under ``MERci/data/pipelines/`` -- so
+it can be hand-edited per experiment without touching the MERci clone. The
+shared (not per-experiment) per-microscope power table it also needs still
+comes from the MERci clone; see ``_rewrite_pipeline_config_line`` and
+``load_pipeline_config``'s own ``data_dir`` parameter.
 
 Path-detection change
 ----------------------
@@ -26,6 +34,8 @@ import re
 import shutil
 from pathlib import Path
 from typing import Dict, NamedTuple
+
+import yaml
 
 
 # ── Pipeline registry ────────────────────────────────────────────────────────
@@ -103,6 +113,43 @@ def _rewrite_merci_dir_line(notebook: dict) -> bool:
     return found
 
 
+# ── PIPELINE_CONFIG rewrite ──────────────────────────────────────────────────
+# Only the MERlin-based pipelines' before_imaging notebooks load a
+# pipeline.yaml (see PIPELINES/pipeline_config.py) -- a miss here is not an
+# error, just a notebook (or whole pipeline) that doesn't use one.
+
+_PIPELINE_CONFIG_RE = re.compile(
+    r'PIPELINE_CONFIG(\s*)=(\s*)load_pipeline_config\('
+    r'MERCI_DIR\s*/\s*"data"\s*/\s*"pipelines"\s*/\s*PIPELINE_ID\s*/\s*"pipeline\.yaml"'
+    r'\)'
+)
+_PIPELINE_CONFIG_REPLACEMENT = (
+    'PIPELINE_CONFIG = load_pipeline_config('
+    'Path(os.getcwd()).parent / "pipeline.yaml", data_dir=MERCI_DIR / "data")  '
+    "# edit pipeline.yaml here, not in MERci/"
+)
+
+
+def _rewrite_pipeline_config_line(notebook: dict) -> bool:
+    """Rewrite `PIPELINE_CONFIG = load_pipeline_config(MERCI_DIR / ...)` to
+    load the pipeline.yaml exported alongside this notebooks/ folder instead
+    (still passing MERCI_DIR/data as data_dir, for the shared power table),
+    in every code cell of `notebook` (in place). Returns whether a match was
+    found."""
+    found = False
+    for cell in notebook.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell["source"]
+        is_str = isinstance(src, str)
+        text = src if is_str else "".join(src)
+        new_text, n = _PIPELINE_CONFIG_RE.subn(_PIPELINE_CONFIG_REPLACEMENT, text)
+        if n:
+            found = True
+            cell["source"] = new_text if is_str else new_text.splitlines(keepends=True)
+    return found
+
+
 # ── README adaptation ─────────────────────────────────────────────────────────
 # Both phrasings used across the six variant READMEs for the stale
 # parent-counting explanation (see each variant's own README.md).
@@ -138,8 +185,8 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
             break
 
     pipeline_yaml_line = (
-        "  pipeline.yaml     this pipeline's config at export time (record only -- "
-        "notebooks read the live copy from MERci/data/pipelines/)\n"
+        "  pipeline.yaml     this pipeline's config -- edit here, not in MERci/\n"
+        "  round_bit_color.csv  round/bit/color assignment referenced by pipeline.yaml\n"
         if has_pipeline_yaml else ""
     )
     layout_note = (
@@ -166,22 +213,43 @@ def _copy_notebooks(src_dir: Path, dst_dir: Path) -> None:
         notebook = json.loads(nb_path.read_text())
         if not _rewrite_merci_dir_line(notebook):
             raise ValueError(f"No MERCI_DIR line found in {nb_path}")
+        _rewrite_pipeline_config_line(notebook)
         (dst_dir / nb_path.name).write_text(json.dumps(notebook, indent=1))
 
 
-def _copy_pipeline_yaml(merci_dir: Path, pipeline_id: str, out_dir: Path) -> bool:
-    """Copy `pipeline_id`'s pipeline.yaml (MERCI_DIR/data/pipelines/<id>/) to
-    `out_dir/pipeline.yaml`, as a record of which pipeline config this
-    export was generated from. Not every pipeline has one (only the
-    MERlin-based ones -- see pipeline_config.py); if missing, remove any
-    stale `out_dir/pipeline.yaml` left over from a previous `force=True`
-    export of a different pipeline. Returns whether one was copied."""
-    dst = out_dir / "pipeline.yaml"
-    src = merci_dir / "data" / "pipelines" / pipeline_id / "pipeline.yaml"
-    if not src.exists():
-        dst.unlink(missing_ok=True)
+_ROUND_BIT_COLOR_CSV_RE = re.compile(r"(round_bit_color_csv:\s*)\S+")
+
+
+def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> bool:
+    """Copy `pipeline_id`'s pipeline.yaml and its round_bit_color CSV
+    (MERCI_DIR/data/pipelines/<id>/) to `out_dir/pipeline.yaml` /
+    `out_dir/round_bit_color.csv`, rewriting the copied yaml's
+    round_bit_color_csv line to point at the flat copy (text substitution,
+    not a yaml round-trip, so pipeline.yaml's comments survive). This is
+    the copy every exported notebook is rewritten to read and edit -- see
+    `_rewrite_pipeline_config_line`.
+
+    Not every pipeline has a pipeline.yaml (only the MERlin-based ones --
+    see pipeline_config.py); if missing, remove any stale copy left over
+    from a previous `force=True` export of a different pipeline. Returns
+    whether one was copied."""
+    dst_yaml = out_dir / "pipeline.yaml"
+    dst_csv  = out_dir / "round_bit_color.csv"
+    src_dir  = merci_dir / "data" / "pipelines" / pipeline_id
+    src_yaml = src_dir / "pipeline.yaml"
+    if not src_yaml.exists():
+        dst_yaml.unlink(missing_ok=True)
+        dst_csv.unlink(missing_ok=True)
         return False
-    shutil.copy2(src, dst)
+
+    text = src_yaml.read_text()
+    csv_relpath = yaml.safe_load(text)["merlin"]["dataorganization"]["round_bit_color_csv"]
+    shutil.copy2(src_dir / csv_relpath, dst_csv)
+
+    new_text, n = _ROUND_BIT_COLOR_CSV_RE.subn(rf"\g<1>{dst_csv.name}", text)
+    if not n:
+        raise ValueError(f"No round_bit_color_csv line found in {src_yaml}")
+    dst_yaml.write_text(new_text)
     return True
 
 
@@ -195,10 +263,11 @@ def export_pipeline_notebooks(
     Copy `pipeline_id`'s before_imaging notebooks (flattened, no variant
     subfolders) plus the shared during_imaging/after_imaging notebooks into
     `sample_dir/notebooks/`, rewriting each copy's MERCI_DIR line for the new
-    sibling-MERci layout; copy `pipeline_id`'s pipeline.yaml (if it has one)
-    to `sample_dir/notebooks/pipeline.yaml`; and write notebooks/README.md
-    (adapted from the pipeline's own README.md). Returns the new notebooks/
-    directory.
+    sibling-MERci layout; copy `pipeline_id`'s pipeline.yaml + round_bit_color
+    CSV (if it has one) to `sample_dir/notebooks/`, rewriting every notebook
+    that loads it to read that copy instead of MERci's; and write
+    notebooks/README.md (adapted from the pipeline's own README.md). Returns
+    the new notebooks/ directory.
 
     Raises FileExistsError if `sample_dir/notebooks/` already exists, unless
     `force=True`. Never modifies `merci_dir`.
@@ -221,11 +290,12 @@ def export_pipeline_notebooks(
     for d in (out_before, out_during, out_after):
         d.mkdir(parents=True, exist_ok=True)
 
+    has_pipeline_yaml = _copy_pipeline_config(merci_dir, pipeline_id, out_dir)
+
     pipeline_src = notebooks_dir / PIPELINES[pipeline_id]
     _copy_notebooks(pipeline_src, out_before)
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
     _copy_notebooks(notebooks_dir / "after_imaging", out_after)
-    has_pipeline_yaml = _copy_pipeline_yaml(merci_dir, pipeline_id, out_dir)
 
     (out_dir / "README.md").write_text(_adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml))
 
