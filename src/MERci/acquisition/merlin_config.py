@@ -13,7 +13,8 @@ Functions
 ---------
 create_microscope_parameters_json — MERlin's per-scope calibration JSON
 create_codebook_csv               — MERlin's gene/barcode codebook CSV
-create_cluster_resource_allocation — per-task slurm resource overrides
+create_cluster_resource_allocation — per-task slurm resource overrides (YAML,
+    with calibrated tasks' mem/time commented out for MERlin to compute)
 create_snakemake_parameters       — snakemake's top-level parameters JSON
 short_experiment_name             — (sample_name, imaging_dir) -> short,
     SLURM-job-name-safe prefix (job_name_prefix for create_snakemake_parameters)
@@ -342,6 +343,91 @@ def create_codebook_csv(
 
 # ── Cluster resource allocation ─────────────────────────────────────────────
 
+# Tasks with a real, calibrated MERlin estimator (AnalysisTask.
+# providesMemoryEstimate/providesTimeEstimate = True, validated against real
+# sacct data -- see MERlin's own FINDINGS.md). For these, the fields listed
+# are commented out in the generated YAML (blank if the template has no
+# value for that field) so MERlin computes them; uncomment a field to pin an
+# explicit override instead. Any other field on the same task (e.g.
+# CellPoseSegmentSAM's GPU partition/gres, or its `time`, which it does not
+# estimate) is left active, unchanged.
+_VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "FiducialCorrelationWarp": ("mem", "time"),
+    "DeconvolutionPreprocess": ("mem", "time"),
+    "CellPoseSegmentSAM":      ("mem",),
+}
+
+# Tasks that also opt into estimation but whose formula is not yet
+# calibrated against real data. Left commented, an unvalidated estimate
+# could silently apply -- so instead every field below is pinned to an
+# explicit value (the template's own, or __default__'s if the template has
+# none) and stays active.
+_UNVALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "Decode":         ("mem", "time"),
+    "CAREPreprocess": ("mem", "time"),
+}
+
+
+def _yaml_scalar_line(key: str, value: Any) -> str:
+    """Render one ``key: value`` YAML line for a scalar leaf value.
+
+    ``time`` values (``"H:MM:SS"``) are always force-quoted: YAML 1.1's
+    sexagesimal-int resolver silently reinterprets some but not all such
+    strings as an integer of seconds (e.g. ``3:00:00`` -> ``10800``,
+    ``0:05:00`` stays a string) depending on the digit pattern, so relying
+    on ``yaml.safe_dump``'s own quoting choice here is not safe.
+    """
+    if key == "time":
+        return f"time: '{value}'"
+    return yaml.safe_dump(
+        {key: value}, default_flow_style=False, sort_keys=False
+    ).rstrip("\n")
+
+
+def _render_task_block(name: str, entry: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
+    """Render one task's YAML block, applying the commented/pinned estimate
+    conventions above; every other task is emitted unchanged.
+
+    If every field of the task ends up commented (e.g.
+    ``FiducialCorrelationWarp``, both of whose estimated fields are
+    validated), the header is written as ``name: {}`` rather than bare
+    ``name:`` -- otherwise the block would parse as ``None`` instead of an
+    empty mapping, and MERlin's own ``dict.update(override)`` in
+    ``snakewriter._cluster_resources_for_rule`` would raise on it.
+    """
+    validated = _VALIDATED_ESTIMATE_FIELDS.get(name, ())
+    unvalidated = _UNVALIDATED_ESTIMATE_FIELDS.get(name, ())
+
+    body: List[str] = []
+    has_active = False
+
+    for key, value in entry.items():
+        if key in validated:
+            body.append(f"  # {_yaml_scalar_line(key, value)}")
+        else:
+            body.append(f"  {_yaml_scalar_line(key, value)}")
+            has_active = True
+
+    for key in validated:
+        if key not in entry:
+            body.append(f"  # {key}: ")
+
+    missing_unvalidated = [k for k in unvalidated if k not in entry]
+    if missing_unvalidated:
+        body.append(
+            "  # no accurate estimate for this task yet -- "
+            + ", ".join(missing_unvalidated)
+            + " pinned explicitly so the"
+        )
+        body.append("  # unvalidated formula can't silently apply")
+        for key in missing_unvalidated:
+            body.append(f"  {_yaml_scalar_line(key, default.get(key))}")
+            has_active = True
+
+    header = f"{name}: {{}}" if not has_active else f"{name}:"
+    return [header, *body]
+
+
 def create_cluster_resource_allocation(
     template_path:          Path,
     exp_name:                str,
@@ -349,20 +435,31 @@ def create_cluster_resource_allocation(
     output_path:             Path,
 ) -> Path:
     """
-    Build a per-experiment cluster-resource-allocation JSON from the shared
-    *template_path* (e.g. ``MERci/data/configs/merlin/snakemake/
+    Build a per-experiment cluster-resource-allocation YAML from the shared
+    JSON *template_path* (e.g. ``MERci/data/configs/merlin/snakemake/
     cluster_resource_allocation_basic.json``):
 
     1. Replace the ``"YourExperimentName"`` placeholder in
        ``__default__["out"]``/``["err"]`` with *exp_name*.
     2. Duplicate the template's ``"Optimize01"`` block into
        ``"Optimize02"``..``"Optimize{n:02d}"``.
+    3. For tasks MERlin can estimate (see ``_VALIDATED_ESTIMATE_FIELDS``),
+       comment out the estimated field(s) -- MERlin computes them; uncomment
+       to pin an explicit value instead. For tasks whose estimate exists but
+       isn't calibrated yet (``_UNVALIDATED_ESTIMATE_FIELDS``), pin an
+       explicit value instead of commenting, so the unvalidated formula
+       can't silently apply. Every other task is written active, unchanged.
 
-    Verified safe as a plain deep-copy (no recursive string-rewrite needed):
-    in the real template, each per-task entry is a flat resource-override
-    dict (e.g. ``{"mem": 10000}``, occasionally with ``partition``/``gres``/
-    ``time``/``exclude`` for GPU tasks) — nothing embeds its own task name in
-    a leaf value, unlike the ``__default__`` block's ``out``/``err`` log paths.
+    The output is YAML (not JSON) because plain JSON has no comment syntax
+    -- MERlin's cluster-config loader already dispatches on file extension
+    (``.json`` vs ``.yaml``/``.yml``), so this is a drop-in format change.
+
+    Verified safe as a plain per-task dict walk (no recursive string-rewrite
+    needed): in the real template, each per-task entry is a flat
+    resource-override dict (e.g. ``{"mem": 10000}``, occasionally with
+    ``partition``/``gres``/``time``/``exclude`` for GPU tasks) — nothing
+    embeds its own task name in a leaf value, unlike the ``__default__``
+    block's ``out``/``err`` log paths.
     """
     with open(template_path, "r", encoding="utf-8") as fh:
         config = json.load(fh)
@@ -377,10 +474,26 @@ def create_cluster_resource_allocation(
         for i in range(2, n_optimize_iterations + 1):
             config[f"Optimize{i:02d}"] = copy.deepcopy(base)
 
+    lines = [
+        "# Auto-generated by create_cluster_resource_allocation() -- see that",
+        "# function's own docstring for the full convention. In short: a",
+        "# commented `# mem:`/`# time:` line means MERlin computes that value",
+        "# itself for this task; uncomment it (with a value) to pin an",
+        "# explicit override instead. An active, uncommented value is always",
+        "# used as-is.",
+    ]
+    for name, entry in config.items():
+        if name == "__default__":
+            lines.append("__default__:")
+            for key, value in entry.items():
+                lines.append(f"  {_yaml_scalar_line(key, value)}")
+        else:
+            lines.extend(_render_task_block(name, entry, default))
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=4)
+        fh.write("\n".join(lines) + "\n")
     return output_path
 
 
