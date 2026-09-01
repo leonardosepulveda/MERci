@@ -61,7 +61,7 @@ def _first_paragraph(readme_path: Path) -> str:
     if not readme_path.exists():
         return ""
     para = []
-    for line in readme_path.read_text().splitlines()[1:]:
+    for line in readme_path.read_text(encoding="utf-8").splitlines()[1:]:
         if not line.strip():
             if para:
                 break
@@ -177,7 +177,7 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
     drop the stale parent-counting explanation, note the new sibling-MERci
     path, and describe the exported folder layout."""
     readme_path = pipeline_src / "README.md"
-    base = readme_path.read_text() if readme_path.exists() else f"# {pipeline_id}\n"
+    base = readme_path.read_text(encoding="utf-8") if readme_path.exists() else f"# {pipeline_id}\n"
 
     for pat in _STALE_LEVELS_RES:
         base, n = pat.subn(_MERCI_DIR_NOTE, base)
@@ -210,11 +210,13 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
 
 def _copy_notebooks(src_dir: Path, dst_dir: Path) -> None:
     for nb_path in sorted(src_dir.glob("*.ipynb")):
-        notebook = json.loads(nb_path.read_text())
+        notebook = json.loads(nb_path.read_text(encoding="utf-8"))
         if not _rewrite_merci_dir_line(notebook):
             raise ValueError(f"No MERCI_DIR line found in {nb_path}")
         _rewrite_pipeline_config_line(notebook)
-        (dst_dir / nb_path.name).write_text(json.dumps(notebook, indent=1))
+        (dst_dir / nb_path.name).write_text(
+            json.dumps(notebook, indent=1, ensure_ascii=False), encoding="utf-8"
+        )
 
 
 _ROUND_BIT_COLOR_CSV_RE = re.compile(r"(round_bit_color_csv:\s*)\S+")
@@ -242,14 +244,14 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
         dst_csv.unlink(missing_ok=True)
         return False
 
-    text = src_yaml.read_text()
+    text = src_yaml.read_text(encoding="utf-8")
     csv_relpath = yaml.safe_load(text)["merlin"]["dataorganization"]["round_bit_color_csv"]
     shutil.copy2(src_dir / csv_relpath, dst_csv)
 
     new_text, n = _ROUND_BIT_COLOR_CSV_RE.subn(rf"\g<1>{dst_csv.name}", text)
     if not n:
         raise ValueError(f"No round_bit_color_csv line found in {src_yaml}")
-    dst_yaml.write_text(new_text)
+    dst_yaml.write_text(new_text, encoding="utf-8")
     return True
 
 
@@ -297,6 +299,8 @@ def export_pipeline_notebooks(
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
     _copy_notebooks(notebooks_dir / "after_imaging", out_after)
 
-    (out_dir / "README.md").write_text(_adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml))
+    (out_dir / "README.md").write_text(
+        _adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml), encoding="utf-8"
+    )
 
     return out_dir
