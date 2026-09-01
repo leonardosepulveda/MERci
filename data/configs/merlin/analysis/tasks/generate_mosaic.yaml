@@ -1,0 +1,8 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# No parameters set: MERlin exports every data channel (all barcode bits +
+# sequential/immuno channels) and every z index when 'data_channels'/
+# 'z_indexes' are omitted, which is exactly the "all bits, sequential genes
+# etc." default this atom is meant to produce.
+task: GenerateMosaic
+module: merlin.analysis.generatemosaic
