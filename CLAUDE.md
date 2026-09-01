@@ -35,7 +35,6 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 - `after_imaging/`, `during_imaging/`, `misc/`, `tests/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
-- `before_imaging/reference/` (3 levels): `.parent.parent.parent`
 - `before_imaging/{tumor,lineage_tracing}/<variant>/` (4 levels, split
   acquisition types — see below): `.parent.parent.parent.parent`
 
@@ -127,7 +126,7 @@ src/MERci/
 
 ```
 notebooks/
-  before_imaging/    Pre-experiment, run in order. Variants: reference/,
+  before_imaging/    Pre-experiment, run in order. Variants:
                      tumor/{epi,disk}/, lineage_tracing/{merfish,lineage,merfish_multi_z}/
     00  select_pipeline (opt.)               pick a variant, export it + after/during_imaging
                                               to SAMPLE_DIR/notebooks/ (sibling of MERci/)

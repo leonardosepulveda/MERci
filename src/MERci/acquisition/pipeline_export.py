@@ -42,7 +42,6 @@ import yaml
 # id -> before_imaging/ subpath, relative to MERci/notebooks/
 
 PIPELINES: Dict[str, str] = {
-    "reference":                       "before_imaging/reference",
     "tumor_epi":                       "before_imaging/tumor/epi",
     "tumor_disk":                      "before_imaging/tumor/disk",
     "lineage_tracing_merfish":         "before_imaging/lineage_tracing/merfish",
