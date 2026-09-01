@@ -41,7 +41,7 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
 
-**Exported notebooks (optional)**: `notebooks/setup/00_select_pipeline.ipynb`
+**Exported notebooks (optional)**: `notebooks/before_imaging/00_select_pipeline.ipynb`
 copies one `before_imaging/` variant, flattened, plus the shared
 `after_imaging/`/`during_imaging/` notebooks, into a standalone
 `SAMPLE_DIR/notebooks/` folder that sits *alongside* `SAMPLE_DIR/MERci/`
@@ -127,10 +127,10 @@ src/MERci/
 
 ```
 notebooks/
-  setup/             00_select_pipeline: pick a before_imaging variant, export
-                     it + after/during_imaging to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   before_imaging/    Pre-experiment, run in order. Variants: reference/,
                      tumor/{epi,disk}/, lineage_tracing/{merfish,lineage,merfish_multi_z}/
+    00  select_pipeline (opt.)               pick a variant, export it + after/during_imaging
+                                              to SAMPLE_DIR/notebooks/ (sibling of MERci/)
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
     02a create_boundary_from_mosaic (opt.)   derive tissue boundary from a Steve mosaic
     02b create_positions_from_boundaries     FOV scanning positions
