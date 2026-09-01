@@ -3,7 +3,7 @@
 Export one before_imaging pipeline, plus the shared during_imaging/
 after_imaging notebooks, into a standalone ``SAMPLE_DIR/notebooks/`` tree
 that sits *alongside* the MERci clone (``SAMPLE_DIR/MERci/``) instead of
-inside it. Used by ``notebooks/setup/00_select_pipeline.ipynb``. The MERci
+inside it. Used by ``notebooks/before_imaging/00_select_pipeline.ipynb``. The MERci
 clone itself is only ever read from, never modified.
 
 If the chosen pipeline has a ``pipeline.yaml`` (only the MERlin-based
@@ -192,7 +192,7 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
     layout_note = (
         "\n## Folder structure\n\n"
         f"This `notebooks/` folder was generated for the `{pipeline_id}` "
-        "pipeline by `MERci/notebooks/setup/00_select_pipeline.ipynb`.\n\n"
+        "pipeline by `MERci/notebooks/before_imaging/00_select_pipeline.ipynb`.\n\n"
         "```\n"
         "notebooks/\n"
         "  before_imaging/   this pipeline's pre-experiment notebooks, run in order\n"
