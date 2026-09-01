@@ -56,26 +56,26 @@ fluidics:
 # Everything MERlin-specific: the codebook/schema identity (notebook 06's
 # "fields MERci can't know" -- PROJECT/LIB_NAME are properties of which
 # pipeline you're running, so they belong here, not hand-typed per
-# experiment), the round-bit-color table that drives the data organization,
-# and the analysis-task selection (notebook 07).
+# experiment), and the analysis-task selection (notebook 07).
+
+# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
+# the list. Backend-agnostic (round_info.csv needs it either way), so it's
+# not under `merlin:` below.
+dataorganization:
+  round_bit_color_csv: dataorganization/round_bit_color.csv
+
 merlin:
   project: bc     # "bc" | "lt" | "mf" -- selects which master-CSV schema
   lib_name: C3    # codebook/probe-library name (MERci/data/configs/merlin/codebooks/)
 
-  dataorganization:
-    # (round, bit, color) mapping -- notebook 03 loads this instead of
-    # hardcoding the list. Central to the pipeline: defines the barcode-
-    # imaging recipe. Physically alongside this file, mirroring the real
-    # SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
-    round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
-    # This pipeline's non-barcode (sequential) bits' gene names come from
-    # lib_name's own "sequential" companion codebook
-    # (data/configs/merlin/codebooks/C3v1_codebook_sequential.csv) --
-    # "sequential" is the default, named explicitly here since a sibling
-    # disk-scope pipeline of the same sample uses "immuno" instead (its own
-    # antibody-panel companion) -- see
-    # merlin_config.resolve_sequential_codebook_filename's own docstring.
-    sequential_kind: sequential
+  # This pipeline's non-barcode (sequential) bits' gene names come from
+  # lib_name's own "sequential" companion codebook
+  # (data/configs/merlin/codebooks/C3v1_codebook_sequential.csv) --
+  # "sequential" is the default, named explicitly here since a sibling
+  # disk-scope pipeline of the same sample uses "immuno" instead (its own
+  # antibody-panel companion) -- see
+  # merlin_config.resolve_sequential_codebook_filename's own docstring.
+  sequential_kind: sequential
 
   analysis:
     # MERlin optimize-iteration count -- a parameter of the optimize_iteration

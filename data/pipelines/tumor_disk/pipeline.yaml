@@ -65,43 +65,41 @@ fluidics:
   include_final_cleave: false   # True = add a final cleave step after the last imaging round
   first_hyb_no_cleave: true     # True = first hyb (after the cells round) omits the cleave step -- differs from tumor_epi
 
-# Everything MERlin-specific. This pipeline images no combinatorial barcode
-# at all (round_bit_color is 1 round x 2 plain intensity channels: gamma-H2AX
-# + CENPA) -- lib_name is still C3 (same sample/project as tumor_epi's epi
-# pass), but the MERlin recipe below has no barcode-decode tasks, only
-# segmentation + smfish/sum_signal for those 2 targets.
+# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
+# the list. Backend-agnostic (round_info.csv needs it either way), so it's
+# not under `merlin:` below. This pipeline images no combinatorial barcode at
+# all (round_bit_color is 1 round x 2 plain intensity channels: gamma-H2AX +
+# CENPA) -- round_bit_color.csv's bit numbers (28, 29) are deliberately NOT
+# 1, 2: bit numbers here are just an index into MERci/data/readouts.csv to
+# pick a readout probe, and readouts 1-16 (RS0015-RS0548) are exactly
+# C3v1_codebook.csv's own barcode bit_names. MERlin's
+# DataOrganization.get_sequential_rounds() treats any data channel whose
+# readoutName matches a bit_name in the (always-loaded) primary codebook as a
+# multiplex/barcode channel, not a sequential one -- confirmed directly:
+# bits 1/2 (RS0015/RS0083) crashed a real run (BC555_sample_05/disk,
+# 2026-08-29) with `SumSignal: ['H2AX'] not found among sequential channels
+# ['DAPI']`, because both immuno channels were silently reclassified as
+# barcode bits. 28/29 (RS0967/RS0994) sit right after tumor_epi's own
+# sequential range (17-27) and are not in any C3 codebook's bit_names.
+dataorganization:
+  round_bit_color_csv: dataorganization/round_bit_color.csv
+
+# Everything MERlin-specific. lib_name is still C3 (same sample/project as
+# tumor_epi's epi pass), but the MERlin recipe below has no barcode-decode
+# tasks, only segmentation + smfish/sum_signal for those 2 targets.
 merlin:
   project: bc     # "bc" | "lt" | "mf" -- same sample/project as tumor_epi
   lib_name: C3    # same library as tumor_epi -- this is the disk-scope pass of the same sample
 
-  dataorganization:
-    # (round, bit, color) mapping -- notebook 03 loads this instead of
-    # hardcoding the list. Physically alongside this file, mirroring the
-    # real SAMPLE_DIR/merlin/dataorganization/ layout notebook 05 writes into.
-    round_bit_color_csv: merlin/dataorganization/round_bit_color.csv
-    # This pipeline's 2 channels are antibody targets (CENPA, gamma-H2AX),
-    # not an RNA sequential-FISH panel -- their gene/target names come from
-    # lib_name's "immuno" companion codebook
-    # (data/configs/merlin/codebooks/C3v1_codebook_immuno.csv), distinct
-    # from tumor_epi's "sequential" companion for the same lib_name -- see
-    # merlin_config.resolve_sequential_codebook_filename's own docstring.
-    # NOTE: "yH2AX" is used as the ASCII-safe identifier for gamma-H2AX in
-    # that file (confirmed with the user; a prior "H2AX" pass was wrong).
-    #
-    # round_bit_color.csv's bit numbers (28, 29) are deliberately NOT 1, 2:
-    # bit numbers here are just an index into MERci/data/readouts.csv to
-    # pick a readout probe, and readouts 1-16 (RS0015-RS0548) are exactly
-    # C3v1_codebook.csv's own barcode bit_names. MERlin's
-    # DataOrganization.get_sequential_rounds() treats any data channel
-    # whose readoutName matches a bit_name in the (always-loaded) primary
-    # codebook as a multiplex/barcode channel, not a sequential one --
-    # confirmed directly: bits 1/2 (RS0015/RS0083) crashed a real run
-    # (BC555_sample_05/disk, 2026-08-29) with `SumSignal: ['H2AX'] not
-    # found among sequential channels ['DAPI']`, because both immuno
-    # channels were silently reclassified as barcode bits. 28/29
-    # (RS0967/RS0994) sit right after tumor_epi's own sequential range
-    # (17-27) and are not in any C3 codebook's bit_names.
-    sequential_kind: immuno
+  # This pipeline's 2 channels are antibody targets (CENPA, gamma-H2AX),
+  # not an RNA sequential-FISH panel -- their gene/target names come from
+  # lib_name's "immuno" companion codebook
+  # (data/configs/merlin/codebooks/C3v1_codebook_immuno.csv), distinct
+  # from tumor_epi's "sequential" companion for the same lib_name -- see
+  # merlin_config.resolve_sequential_codebook_filename's own docstring.
+  # NOTE: "yH2AX" is used as the ASCII-safe identifier for gamma-H2AX in
+  # that file (confirmed with the user; a prior "H2AX" pass was wrong).
+  sequential_kind: immuno
 
   analysis:
     # MERlin optimize-iteration count -- unused by any enabled task below

@@ -6,8 +6,8 @@ that sits *alongside* the MERci clone (``SAMPLE_DIR/MERci/``) instead of
 inside it. Used by ``notebooks/before_imaging/00_select_pipeline.ipynb``. The MERci
 clone itself is only ever read from, never modified.
 
-If the chosen pipeline has a ``pipeline.yaml`` (only the MERlin-based
-pipelines do -- see ``pipeline_config.py``), it's copied (with its
+If the chosen pipeline has a ``pipeline.yaml`` (every pipeline except
+`multi_z` -- see ``pipeline_config.py``), it's copied (with its
 round_bit_color CSV) to ``notebooks/pipeline.yaml``/``notebooks/
 round_bit_color.csv``, and every notebook that loads it is rewritten to
 read *that* copy instead of the one under ``MERci/data/pipelines/`` -- so
@@ -230,10 +230,10 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
     the copy every exported notebook is rewritten to read and edit -- see
     `_rewrite_pipeline_config_line`.
 
-    Not every pipeline has a pipeline.yaml (only the MERlin-based ones --
-    see pipeline_config.py); if missing, remove any stale copy left over
-    from a previous `force=True` export of a different pipeline. Returns
-    whether one was copied."""
+    Not every pipeline has a pipeline.yaml (`multi_z` doesn't yet -- see
+    pipeline_config.py); if missing, remove any stale copy left over from a
+    previous `force=True` export of a different pipeline. Returns whether
+    one was copied."""
     dst_yaml = out_dir / "pipeline.yaml"
     dst_csv  = out_dir / "round_bit_color.csv"
     src_dir  = merci_dir / "data" / "pipelines" / pipeline_id
@@ -244,7 +244,7 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
         return False
 
     text = src_yaml.read_text(encoding="utf-8")
-    csv_relpath = yaml.safe_load(text)["merlin"]["dataorganization"]["round_bit_color_csv"]
+    csv_relpath = yaml.safe_load(text)["dataorganization"]["round_bit_color_csv"]
     shutil.copy2(src_dir / csv_relpath, dst_csv)
 
     new_text, n = _ROUND_BIT_COLOR_CSV_RE.subn(rf"\g<1>{dst_csv.name}", text)
