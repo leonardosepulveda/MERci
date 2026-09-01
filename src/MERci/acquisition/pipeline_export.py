@@ -46,7 +46,7 @@ PIPELINES: Dict[str, str] = {
     "tumor_disk":                      "before_imaging/tumor/disk",
     "lineage_tracing_merfish":         "before_imaging/lineage_tracing/merfish",
     "lineage_tracing_lineage":         "before_imaging/lineage_tracing/lineage",
-    "lineage_tracing_merfish_multi_z": "before_imaging/lineage_tracing/merfish_multi_z",
+    "multi_z":                         "before_imaging/multi_z",
 }
 
 

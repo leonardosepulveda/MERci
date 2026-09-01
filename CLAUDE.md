@@ -35,6 +35,7 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 - `after_imaging/`, `during_imaging/`, `misc/`, `tests/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
+- `before_imaging/multi_z/` (3 levels): `.parent.parent.parent`
 - `before_imaging/{tumor,lineage_tracing}/<variant>/` (4 levels, split
   acquisition types — see below): `.parent.parent.parent.parent`
 
@@ -58,11 +59,17 @@ clone itself is only ever read from by the export, never modified.
 
 **Split acquisition types** — `tumor/` → `epi/` (epifluorescence) or `disk/`
 (spinning-disk confocal); `lineage_tracing/` → `merfish/` (MERlin/codebook,
-merlin-based) or `lineage/` (lineage-barcode, fishtank-based) or
-`merfish_multi_z/` (variable-z-per-FOV, own 10-notebook sequence — see its
-own `README.md` under `notebooks/before_imaging/lineage_tracing/merfish_multi_z/`).
-Each variant is a full copy of the shared 8-notebook template (see
-"Architecture" below), four levels deep.
+merlin-based) or `lineage/` (lineage-barcode, fishtank-based). Each variant is
+a full copy of the shared 8-notebook template (see "Architecture" below),
+four levels deep.
+
+**`before_imaging/multi_z/`** — a separate, top-level pipeline (not nested
+under `lineage_tracing/`) for a variable-z-per-FOV acquisition: images a
+full-depth DAPI (cells) round first, measures each FOV's real tissue
+thickness (`after_imaging/08_measure_tissue_thickness.ipynb`, since that step
+runs mid-acquisition once the cells round exists), then generates one bits
+HAL config per z-depth tier. Own 9-notebook sequence, three levels deep — see
+its own `README.md` under `notebooks/before_imaging/multi_z/`.
 
 ## Experiment folder layout
 
@@ -127,7 +134,8 @@ src/MERci/
 ```
 notebooks/
   before_imaging/    Pre-experiment, run in order. Variants:
-                     tumor/{epi,disk}/, lineage_tracing/{merfish,lineage,merfish_multi_z}/
+                     tumor/{epi,disk}/, lineage_tracing/{merfish,lineage}/, multi_z/ (own
+                     9-notebook sequence -- see its own README.md)
     00  select_pipeline (opt.)               pick a variant, export it + after/during_imaging
                                               to SAMPLE_DIR/notebooks/ (sibling of MERci/)
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
@@ -148,6 +156,7 @@ notebooks/
     05  batch_sample_review        post-acquisition: verify/backfill a batch, compare across it
     06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
     07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
+    08  measure_tissue_thickness   multi_z only: per-FOV tissue z-extent, feeds multi_z's own notebook 04
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
@@ -161,8 +170,9 @@ notebooks/
 
 ## Architecture
 
-**Pre-experiment workflow**: run the 8 (or 10, for `merfish_multi_z/`)
-notebooks above in order for the acquisition being prepared. Each writes
+**Pre-experiment workflow**: run the 8 (or 9, for `multi_z/`, plus
+`after_imaging/08_measure_tissue_thickness.ipynb` mid-sequence) notebooks
+above in order for the acquisition being prepared. Each writes
 inputs the next one reads (HAL/shutter → positions → round_info → Dave
 config → data-organization/color-usage → experiment_info → merlin/fishtank
 scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)

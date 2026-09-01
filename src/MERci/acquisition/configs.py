@@ -493,8 +493,8 @@ def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
            (underscore-joined, e.g. ``"blkf5_488f2_560f25_650f25_750f25"``)
     tier : optional z-depth-tier label (e.g. ``"shallow"``, ``"deep"``) for a
            variable-z-per-FOV experiment's per-tier hal_config/shutter/
-           frame-table set -- see notebook 05 in
-           ``lineage_tracing/merfish_multi_z/``. ``None`` (default)
+           frame-table set -- see notebook 04 in
+           ``before_imaging/multi_z/``. ``None`` (default)
            reproduces the original ``{kind}-{name}`` stem exactly. Not
            strictly required for uniqueness (a shorter tier's frame table
            already yields a different colour-sequence *name*, since it has
