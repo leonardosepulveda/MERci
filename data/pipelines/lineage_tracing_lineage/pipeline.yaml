@@ -1,0 +1,90 @@
+# Pipeline-level configuration for lineage_tracing/lineage (the fishtank-
+# based, lineage-barcode sibling acquisition of lineage_tracing_merfish --
+# same sample, decoded with fishtank instead of MERlin). Loaded via
+# MERci.acquisition.pipeline_config.load_pipeline_config.
+#
+# Values here are the same for every experiment run through this pipeline --
+# per-experiment values (tissue-segmentation thresholds, positions
+# boundaries, the color_usage round-tag mapping, FISHTANK_CLUSTER_DIR, etc.)
+# are NOT here; they stay hand-edited per notebook run.
+
+id: lineage_tracing_lineage
+label: "Lineage Tracing -- Lineage (fishtank)"
+analysis_backend: fishtank   # drives notebook 05 (color_usage) / 07 (fishtank scripts)
+
+microscope: ST2
+objective: "60X"
+
+imaging:
+  file_type: ".zarr"
+  exposure_time: 0.25   # seconds
+  # Per-channel laser power is NOT set here -- it's locked to the microscope
+  # choice above, not an independent pipeline dial. See
+  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
+
+  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
+  cells_round:
+    z_min: 0.5
+    z_max: 100
+    z_step: 0.5
+    bead_seq: [488]
+    color_seq: [405, 488]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  # z-stack recipe for the "bits" round (lineage-barcode imaging rounds).
+  bits_round:
+    z_min: 0.5
+    z_max: 100
+    z_step: 0.5
+    bead_seq: [488]
+    color_seq: [650, 560, 488]
+    end_seq: [488]
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
+  transit_n_blank: 2      # blank frames per transit FOV
+
+# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
+# the list. Backend-agnostic (round_info.csv needs it either way): governs
+# the imaging recipe, not the fishtank decode itself -- fishtank's own
+# color_usage round-tag mapping (notebook 05) is a separate, manually-entered
+# per-experiment table, not derived from this file.
+dataorganization:
+  round_bit_color_csv: dataorganization/round_bit_color.csv
+
+fluidics:
+  use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts
+  include_final_cleave: false   # True = add a final cleave step after the last imaging round
+  first_hyb_no_cleave: true     # True = first hyb (after the cells round) omits the cleave step
+
+# Everything fishtank-specific: the color_usage color list (notebook 05) and
+# the decode-strategy target menu (notebook 05/07) -- lineage_lib_version
+# selects MERci/data/configs/fishtank/reference/{version}/, and each target's
+# reference_file/whitelist are bare filenames under that per-experiment
+# {FISHTANK_CLUSTER_DIR}/reference/ (not known at pipeline.yaml-authoring
+# time) -- `{lib_version}` is substituted with lineage_lib_version below by
+# load_pipeline_config.
+fishtank:
+  lineage_lib_version: v2
+
+  color_usage_colors: ["650", "560", "488", "405"]
+
+  targets:
+    - name: intBC
+      method: expectation_maximization
+      reference_file: "intBC_codebook_{lib_version}.csv"
+      whitelist: "embryo_integration_whitelist.txt"
+    - name: HEK3
+      method: logistic_regression
+      reference_file: "HEK3_weights_{lib_version}.csv"
+    - name: EMX1
+      method: logistic_regression
+      reference_file: "EMX1_weights_{lib_version}.csv"
+    - name: RNF2
+      method: logistic_regression
+      reference_file: "RNF2_weights_{lib_version}.csv"
