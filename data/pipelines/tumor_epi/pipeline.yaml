@@ -62,7 +62,7 @@ fluidics:
 # the list. Backend-agnostic (round_info.csv needs it either way), so it's
 # not under `merlin:` below.
 dataorganization:
-  round_bit_color_csv: dataorganization/round_bit_color.csv
+  round_bit_color_csv: configs/round_bit_color_map/tumor_epi.csv
 
 merlin:
   project: bc     # "bc" | "lt" | "mf" -- selects which master-CSV schema

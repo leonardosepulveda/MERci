@@ -10,8 +10,9 @@ If the chosen pipeline has a ``pipeline.yaml`` (every pipeline except
 `multi_z` -- see ``pipeline_config.py``), it's copied (with its
 round_bit_color CSV) to ``notebooks/pipeline.yaml``/``notebooks/
 round_bit_color.csv``, and every notebook that loads it is rewritten to
-read *that* copy instead of the one under ``MERci/data/pipelines/`` -- so
-it can be hand-edited per experiment without touching the MERci clone. The
+read *that* copy instead of the one under
+``MERci/data/configs/round_bit_color_map/`` -- so it can be hand-edited per
+experiment without touching the MERci clone. The
 shared (not per-experiment) per-microscope power table it also needs still
 comes from the MERci clone; see ``_rewrite_pipeline_config_line`` and
 ``load_pipeline_config``'s own ``data_dir`` parameter.
@@ -237,12 +238,13 @@ _ROUND_BIT_COLOR_CSV_RE = re.compile(r"(round_bit_color_csv:\s*)\S+")
 
 def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> bool:
     """Copy `pipeline_id`'s pipeline.yaml and its round_bit_color CSV
-    (MERCI_DIR/data/pipelines/<id>/) to `out_dir/pipeline.yaml` /
-    `out_dir/round_bit_color.csv`, rewriting the copied yaml's
-    round_bit_color_csv line to point at the flat copy (text substitution,
-    not a yaml round-trip, so pipeline.yaml's comments survive). This is
-    the copy every exported notebook is rewritten to read and edit -- see
-    `_rewrite_pipeline_config_line`.
+    (wherever pipeline.yaml's round_bit_color_csv points, resolved relative
+    to MERCI_DIR/data -- e.g. data/configs/round_bit_color_map/<id>.csv) to
+    `out_dir/pipeline.yaml` / `out_dir/round_bit_color.csv`, rewriting the
+    copied yaml's round_bit_color_csv line to point at the flat copy (text
+    substitution, not a yaml round-trip, so pipeline.yaml's comments
+    survive). This is the copy every exported notebook is rewritten to read
+    and edit -- see `_rewrite_pipeline_config_line`.
 
     Not every pipeline has a pipeline.yaml (`multi_z` doesn't yet -- see
     pipeline_config.py); if missing, remove any stale copy left over from a
@@ -259,7 +261,7 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
 
     text = src_yaml.read_text(encoding="utf-8")
     csv_relpath = yaml.safe_load(text)["dataorganization"]["round_bit_color_csv"]
-    shutil.copy2(src_dir / csv_relpath, dst_csv)
+    shutil.copy2(merci_dir / "data" / csv_relpath, dst_csv)
 
     new_text, n = _ROUND_BIT_COLOR_CSV_RE.subn(rf"\g<1>{dst_csv.name}", text)
     if not n:
