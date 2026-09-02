@@ -18,6 +18,7 @@ build/
 output/
 
 # Prompt/task history (local only)
+prompt_new/
 prompt_history/
 prompt_rationales/
 SOMEDAY.md
