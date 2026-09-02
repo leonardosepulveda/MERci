@@ -35,35 +35,43 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 - `after_imaging/`, `during_imaging/`, `misc/`, `tests/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
-- `before_imaging/reference/` (3 levels): `.parent.parent.parent`
-- `before_imaging/{tumor,lineage_tracing}/<variant>/` (4 levels, split
-  acquisition types — see below): `.parent.parent.parent.parent`
+- `before_imaging/{regular,multi_z}/` (3 levels): `.parent.parent.parent`
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
 
 **Exported notebooks (optional)**: `notebooks/before_imaging/00_select_pipeline.ipynb`
-copies one `before_imaging/` variant, flattened, plus the shared
+copies one pipeline's notebooks, flattened, plus the shared
 `after_imaging/`/`during_imaging/` notebooks, into a standalone
 `SAMPLE_DIR/notebooks/` folder that sits *alongside* `SAMPLE_DIR/MERci/`
 instead of inside it (`MERci/acquisition/pipeline_export.py`). There, `MERci`
 is a sibling rather than an ancestor, so every exported notebook resolves
 `MERCI_DIR = Path(os.getcwd()).parent.parent / "MERci"` — one fixed formula
-regardless of the original variant's nesting depth. The export also copies
+regardless of the original notebook's nesting depth. The export also copies
 the chosen pipeline's `pipeline.yaml`+`round_bit_color.csv` (if it has one —
-only the MERlin-based pipelines do) to `SAMPLE_DIR/notebooks/`, and rewrites
+every pipeline except `multi_z`) to `SAMPLE_DIR/notebooks/`, and rewrites
 every notebook that loads it to read *that* copy instead of the one under
 `MERci/data/pipelines/` — so it can be hand-edited per experiment without
 touching `MERci/`. The shared (not per-experiment) per-microscope power
 table it also needs still comes from the live `MERci/` clone. The `MERci/`
 clone itself is only ever read from by the export, never modified.
 
-**Split acquisition types** — `tumor/` → `epi/` (epifluorescence) or `disk/`
-(spinning-disk confocal); `lineage_tracing/` → `merfish/` (MERlin/codebook,
-merlin-based) or `lineage/` (lineage-barcode, fishtank-based) or
-`merfish_multi_z/` (variable-z-per-FOV, own 10-notebook sequence — see its
-own `README.md` under `notebooks/before_imaging/lineage_tracing/merfish_multi_z/`).
-Each variant is a full copy of the shared 8-notebook template (see
-"Architecture" below), four levels deep.
+**`before_imaging/regular/`** — one shared notebook set for every pipeline
+except `multi_z`: `tumor_epi`, `tumor_disk`, `lineage_tracing_merfish`,
+`lineage_tracing_lineage`. What used to differ between per-pipeline notebook
+copies (microscope, imaging recipe, fluidics, codebook/task menu or fishtank
+targets) now lives entirely in that pipeline's own
+`data/pipelines/<id>/pipeline.yaml` (`acquisition/pipeline_config.py`); every
+notebook's second cell sets `PIPELINE_ID` and loads it into
+`PIPELINE_CONFIG`. Steps 05/07 have two files each (`analysis_backend:
+merlin` vs `fishtank`) living side by side — `pipeline_export.py` copies only
+the matching pair. See `regular/README.md`.
+
+**`before_imaging/multi_z/`** — a separate pipeline (no `pipeline.yaml` yet)
+for a variable-z-per-FOV acquisition: images a full-depth DAPI (cells) round
+first, measures each FOV's real tissue thickness
+(`after_imaging/08_measure_tissue_thickness.ipynb`, since that step runs
+mid-acquisition once the cells round exists), then generates one bits HAL
+config per z-depth tier. Own 9-notebook sequence — see `multi_z/README.md`.
 
 ## Experiment folder layout
 
@@ -76,7 +84,7 @@ SAMPLE_DIR/
   settings/          hal-config-*.xml, shutter-*.xml, dave-*.xml
   data/              raw image files (subfolder structure from round_info.csv's `dir` column)
   analysis/          thumbnails/, stats/, histograms/, mosaics/, done/
-  merlin/            per-experiment MERlin config/run files (or fishtank/ for lineage_tracing/lineage)
+  merlin/            per-experiment MERlin config/run files (or fishtank/ for lineage_tracing_lineage)
   figures/           MERlin's per-task verification figures (merlin.<taskName>.<figureName>.png),
                      written via the generated sbatch script's `-f "$SAMPLE_DIR/figures"` flag
 ```
@@ -102,9 +110,10 @@ src/MERci/
     kilroy.py              Kilroy fluidics-protocol resolution/consistency checks
     data_organization.py   MERlin data-organization CSV
     merlin_config.py       MERlin input/config-file generation (SAMPLE_DIR/merlin/)
-    fishtank_config.py     fishtank input/config-file generation (lineage_tracing/lineage only)
+    fishtank_config.py     fishtank input/config-file generation (lineage_tracing_lineage only)
     display.py             print_frame_table, display_xml
     cluster_submit.py      sbatch script generation for cluster-side QC analysis
+    pipeline_config.py     PipelineConfig/MerlinConfig/FishtankConfig -- loads data/pipelines/<id>/pipeline.yaml
     pipeline_export.py     export one pipeline's notebooks to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   analysis/
     fov.py                 per-FOV thumbnails/stats/histograms
@@ -127,20 +136,22 @@ src/MERci/
 
 ```
 notebooks/
-  before_imaging/    Pre-experiment, run in order. Variants: reference/,
-                     tumor/{epi,disk}/, lineage_tracing/{merfish,lineage,merfish_multi_z}/
-    00  select_pipeline (opt.)               pick a variant, export it + after/during_imaging
+  before_imaging/    Pre-experiment, run in order. Two pipelines:
+                     regular/ (tumor_epi, tumor_disk, lineage_tracing_merfish,
+                     lineage_tracing_lineage -- one shared notebook set, see its own
+                     README.md), multi_z/ (own 9-notebook sequence, see its own README.md)
+    00  select_pipeline (opt.)               pick a pipeline, export it + after/during_imaging
                                               to SAMPLE_DIR/notebooks/ (sibling of MERci/)
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
     02a create_boundary_from_mosaic (opt.)   derive tissue boundary from a Steve mosaic
     02b create_positions_from_boundaries     FOV scanning positions
     03  create_round_info                    round-bit-color map, round_info.csv
     04  create_dave_config                   Dave experiment-recipe XML
-    05  create_data_organization             MERlin data-org CSV (merlin-based variants)
-        create_color_usage                   fishtank color_usage/decoding_strategy (lineage/ only)
+    05  create_data_organization             MERlin data-org CSV (analysis_backend: merlin)
+        create_color_usage                   fishtank color_usage/decoding_strategy (analysis_backend: fishtank)
     06  create_experiment_info               metadata/experiment_info.yaml
-    07  create_merlin_scripts                SAMPLE_DIR/merlin/ (merlin-based variants)
-        create_fishtank_scripts              SAMPLE_DIR/fishtank/ (lineage_tracing/lineage only)
+    07  create_merlin_scripts                SAMPLE_DIR/merlin/ (analysis_backend: merlin)
+        create_fishtank_scripts              SAMPLE_DIR/fishtank/ (analysis_backend: fishtank)
   after_imaging/     Online analysis, run during the experiment
     01  fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
     02  round_scheduler            round-level scheduler (mosaics, optional transfer)
@@ -149,6 +160,7 @@ notebooks/
     05  batch_sample_review        post-acquisition: verify/backfill a batch, compare across it
     06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
     07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
+    08  measure_tissue_thickness   multi_z only: per-FOV tissue z-extent, feeds multi_z's own notebook 04
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
@@ -162,8 +174,9 @@ notebooks/
 
 ## Architecture
 
-**Pre-experiment workflow**: run the 8 (or 10, for `merfish_multi_z/`)
-notebooks above in order for the acquisition being prepared. Each writes
+**Pre-experiment workflow**: run the 8 `regular/` notebooks (or the 9
+`multi_z/` ones, plus `after_imaging/08_measure_tissue_thickness.ipynb`
+mid-sequence) above in order for the acquisition being prepared. Each writes
 inputs the next one reads (HAL/shutter → positions → round_info → Dave
 config → data-organization/color-usage → experiment_info → merlin/fishtank
 scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)

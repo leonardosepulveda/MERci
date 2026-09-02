@@ -6,8 +6,8 @@ that sits *alongside* the MERci clone (``SAMPLE_DIR/MERci/``) instead of
 inside it. Used by ``notebooks/before_imaging/00_select_pipeline.ipynb``. The MERci
 clone itself is only ever read from, never modified.
 
-If the chosen pipeline has a ``pipeline.yaml`` (only the MERlin-based
-pipelines do -- see ``pipeline_config.py``), it's copied (with its
+If the chosen pipeline has a ``pipeline.yaml`` (every pipeline except
+`multi_z` -- see ``pipeline_config.py``), it's copied (with its
 round_bit_color CSV) to ``notebooks/pipeline.yaml``/``notebooks/
 round_bit_color.csv``, and every notebook that loads it is rewritten to
 read *that* copy instead of the one under ``MERci/data/pipelines/`` -- so
@@ -42,13 +42,18 @@ import yaml
 # id -> before_imaging/ subpath, relative to MERci/notebooks/
 
 PIPELINES: Dict[str, str] = {
-    "reference":                       "before_imaging/reference",
-    "tumor_epi":                       "before_imaging/tumor/epi",
-    "tumor_disk":                      "before_imaging/tumor/disk",
-    "lineage_tracing_merfish":         "before_imaging/lineage_tracing/merfish",
-    "lineage_tracing_lineage":         "before_imaging/lineage_tracing/lineage",
-    "lineage_tracing_merfish_multi_z": "before_imaging/lineage_tracing/merfish_multi_z",
+    "tumor_epi":                       "before_imaging/regular",
+    "tumor_disk":                      "before_imaging/regular",
+    "lineage_tracing_merfish":         "before_imaging/regular",
+    "lineage_tracing_lineage":         "before_imaging/regular",
+    "multi_z":                         "before_imaging/multi_z",
 }
+
+# before_imaging/regular/ holds both backends' 05/07 side by side -- exactly
+# one pair is copied per export, picked by the chosen pipeline's
+# analysis_backend (see export_pipeline_notebooks).
+_MERLIN_ONLY_NAMES   = {"05_create_data_organization.ipynb", "07_create_merlin_scripts.ipynb"}
+_FISHTANK_ONLY_NAMES = {"05_create_color_usage.ipynb", "07_create_fishtank_scripts.ipynb"}
 
 
 class PipelineInfo(NamedTuple):
@@ -72,15 +77,21 @@ def _first_paragraph(readme_path: Path) -> str:
 
 def describe_pipelines(merci_dir: Path) -> Dict[str, PipelineInfo]:
     """Pipeline id -> (source subpath, description), for the notebook's
-    "available pipelines" display cell."""
+    "available pipelines" display cell. Several ids share one `source`
+    folder (`before_imaging/regular/`), so the description comes from each
+    pipeline's own `pipeline.yaml` `label` (falling back to that folder's
+    README.md first paragraph for a pipeline with no pipeline.yaml, e.g.
+    `multi_z`)."""
     notebooks_dir = merci_dir / "notebooks"
-    return {
-        pid: PipelineInfo(
-            source=src,
-            description=_first_paragraph(notebooks_dir / src / "README.md"),
-        )
-        for pid, src in PIPELINES.items()
-    }
+    out = {}
+    for pid, src in PIPELINES.items():
+        yaml_path = merci_dir / "data" / "pipelines" / pid / "pipeline.yaml"
+        if yaml_path.exists():
+            description = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))["label"]
+        else:
+            description = _first_paragraph(notebooks_dir / src / "README.md")
+        out[pid] = PipelineInfo(source=src, description=description)
+    return out
 
 
 # ── MERCI_DIR rewrite ─────────────────────────────────────────────────────────
@@ -208,8 +219,10 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
-def _copy_notebooks(src_dir: Path, dst_dir: Path) -> None:
+def _copy_notebooks(src_dir: Path, dst_dir: Path, exclude: set = frozenset()) -> None:
     for nb_path in sorted(src_dir.glob("*.ipynb")):
+        if nb_path.name in exclude:
+            continue
         notebook = json.loads(nb_path.read_text(encoding="utf-8"))
         if not _rewrite_merci_dir_line(notebook):
             raise ValueError(f"No MERCI_DIR line found in {nb_path}")
@@ -231,10 +244,10 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
     the copy every exported notebook is rewritten to read and edit -- see
     `_rewrite_pipeline_config_line`.
 
-    Not every pipeline has a pipeline.yaml (only the MERlin-based ones --
-    see pipeline_config.py); if missing, remove any stale copy left over
-    from a previous `force=True` export of a different pipeline. Returns
-    whether one was copied."""
+    Not every pipeline has a pipeline.yaml (`multi_z` doesn't yet -- see
+    pipeline_config.py); if missing, remove any stale copy left over from a
+    previous `force=True` export of a different pipeline. Returns whether
+    one was copied."""
     dst_yaml = out_dir / "pipeline.yaml"
     dst_csv  = out_dir / "round_bit_color.csv"
     src_dir  = merci_dir / "data" / "pipelines" / pipeline_id
@@ -245,7 +258,7 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
         return False
 
     text = src_yaml.read_text(encoding="utf-8")
-    csv_relpath = yaml.safe_load(text)["merlin"]["dataorganization"]["round_bit_color_csv"]
+    csv_relpath = yaml.safe_load(text)["dataorganization"]["round_bit_color_csv"]
     shutil.copy2(src_dir / csv_relpath, dst_csv)
 
     new_text, n = _ROUND_BIT_COLOR_CSV_RE.subn(rf"\g<1>{dst_csv.name}", text)
@@ -294,8 +307,16 @@ def export_pipeline_notebooks(
 
     has_pipeline_yaml = _copy_pipeline_config(merci_dir, pipeline_id, out_dir)
 
+    # before_imaging/regular/ holds both backends' 05/07 side by side --
+    # copy only the pair matching this pipeline's analysis_backend.
+    exclude = set()
+    if has_pipeline_yaml:
+        src_yaml_path = merci_dir / "data" / "pipelines" / pipeline_id / "pipeline.yaml"
+        backend = yaml.safe_load(src_yaml_path.read_text(encoding="utf-8"))["analysis_backend"]
+        exclude = _FISHTANK_ONLY_NAMES if backend == "merlin" else _MERLIN_ONLY_NAMES
+
     pipeline_src = notebooks_dir / PIPELINES[pipeline_id]
-    _copy_notebooks(pipeline_src, out_before)
+    _copy_notebooks(pipeline_src, out_before, exclude=exclude)
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
     _copy_notebooks(notebooks_dir / "after_imaging", out_after)
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
@@ -47,10 +47,12 @@ class ImagingRoundRecipe:
 
 @dataclass
 class MerlinConfig:
-    """Everything MERlin-specific for one pipeline (notebooks 03/05/06/07)."""
+    """Everything MERlin-specific for one pipeline (notebooks 05/07, merlin
+    backend only). ``round_bit_color`` is NOT here -- it's backend-agnostic
+    (round_info.csv needs it regardless of analysis backend), so it lives on
+    ``PipelineConfig`` directly -- see that class's own docstring."""
     project:                str
     lib_name:                str
-    round_bit_color:          List[tuple]         # [(round, bit, color), ...]
     n_optimize_iterations:    int
     tasks:                    Dict[str, bool]      # atom name -> enabled, full menu
     overrides:                Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -67,8 +69,39 @@ class MerlinConfig:
 
 
 @dataclass
+class FishtankTarget:
+    """One decode-strategy row for a fishtank pipeline's notebook 05
+    (`decoding_strategy_*.csv`). ``reference_file``/``whitelist`` are bare
+    filenames under ``{FISHTANK_CLUSTER_DIR}/reference/`` (a per-experiment
+    cluster path, not known at pipeline.yaml-authoring time) -- notebook 05
+    joins them at run time. ``{lib_version}`` in either filename is already
+    substituted with ``FishtankConfig.lineage_lib_version`` by
+    ``load_pipeline_config``."""
+    name:            str
+    method:          str
+    reference_file:  str = ""
+    whitelist:       str = ""
+
+
+@dataclass
+class FishtankConfig:
+    """Everything fishtank-specific for one pipeline (notebooks 05/07,
+    fishtank backend only)."""
+    lineage_lib_version:  str
+    color_usage_colors:    List[str]
+    targets:                List[FishtankTarget] = field(default_factory=list)
+
+
+@dataclass
 class PipelineConfig:
-    """All pipeline-level values for one before_imaging pipeline."""
+    """All pipeline-level values for one before_imaging pipeline.
+
+    ``round_bit_color`` is required for every pipeline regardless of
+    ``analysis_backend`` -- notebook 03 (round_info.csv) needs it either way.
+    Exactly one of ``merlin``/``fishtank`` is populated, matching
+    ``analysis_backend`` -- notebooks 05/07 are the only ones that read
+    either.
+    """
     id:                str
     label:             str
     analysis_backend:  str   # "merlin" | "fishtank"
@@ -85,13 +118,17 @@ class PipelineConfig:
     focus_test_z:     float
     transit_n_blank:  int
 
+    # ── Round/bit/color (notebook 03) -- backend-agnostic ────────────────
+    round_bit_color:  List[tuple]   # [(round, bit, color), ...]
+
     # ── Fluidics (notebook 04) ───────────────────────────────────────────
     use_adaptors:           bool
     include_final_cleave:   bool
     first_hyb_no_cleave:    bool
 
-    # ── MERlin-specific (notebooks 03/05/06/07) ──────────────────────────
-    merlin: MerlinConfig
+    # ── Backend-specific (notebooks 05/07) -- exactly one populated ──────
+    merlin:    Optional[MerlinConfig]   = None
+    fishtank:  Optional[FishtankConfig] = None
 
     source_path: Path = field(repr=False, default=None)
 
@@ -146,29 +183,56 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         data_dir = yaml_path.parents[2]   # .../data/pipelines/<id>/pipeline.yaml -> .../data
     raw = yaml.safe_load(yaml_path.read_text())
 
-    imaging  = raw["imaging"]
-    fluidics = raw["fluidics"]
-    merlin   = raw["merlin"]
+    imaging          = raw["imaging"]
+    fluidics         = raw["fluidics"]
+    dataorganization = raw["dataorganization"]
+    backend          = raw["analysis_backend"]
 
     def _recipe(d: dict) -> ImagingRoundRecipe:
         return ImagingRoundRecipe(**d)
 
     power, power_default = _load_power(data_dir, raw["microscope"])
+    round_bit_color = _load_round_bit_color(yaml_path, dataorganization["round_bit_color_csv"])
 
-    merlin_config = MerlinConfig(
-        project                = merlin["project"],
-        lib_name                = merlin["lib_name"],
-        round_bit_color          = _load_round_bit_color(yaml_path, merlin["dataorganization"]["round_bit_color_csv"]),
-        n_optimize_iterations     = merlin["analysis"]["n_optimize_iterations"],
-        tasks                      = dict(merlin["analysis"]["tasks"]),
-        overrides                   = dict(merlin["analysis"].get("overrides", {})),
-        sequential_kind             = merlin["dataorganization"].get("sequential_kind", "sequential"),
-    )
+    merlin_config = None
+    if "merlin" in raw:
+        merlin = raw["merlin"]
+        merlin_config = MerlinConfig(
+            project                = merlin["project"],
+            lib_name                = merlin["lib_name"],
+            n_optimize_iterations     = merlin["analysis"]["n_optimize_iterations"],
+            tasks                      = dict(merlin["analysis"]["tasks"]),
+            overrides                   = dict(merlin["analysis"].get("overrides", {})),
+            sequential_kind             = merlin.get("sequential_kind", "sequential"),
+        )
+
+    fishtank_config = None
+    if "fishtank" in raw:
+        fishtank = raw["fishtank"]
+        lib_version = fishtank["lineage_lib_version"]
+        fishtank_config = FishtankConfig(
+            lineage_lib_version  = lib_version,
+            color_usage_colors    = list(fishtank["color_usage_colors"]),
+            targets                 = [
+                FishtankTarget(
+                    name           = t["name"],
+                    method          = t["method"],
+                    reference_file   = t.get("reference_file", "").format(lib_version=lib_version),
+                    whitelist         = t.get("whitelist", "").format(lib_version=lib_version),
+                )
+                for t in fishtank.get("targets", [])
+            ],
+        )
+
+    if backend == "merlin" and merlin_config is None:
+        raise KeyError(f"{yaml_path}: analysis_backend='merlin' but no 'merlin' section.")
+    if backend == "fishtank" and fishtank_config is None:
+        raise KeyError(f"{yaml_path}: analysis_backend='fishtank' but no 'fishtank' section.")
 
     return PipelineConfig(
         id                = raw["id"],
         label             = raw["label"],
-        analysis_backend  = raw["analysis_backend"],
+        analysis_backend  = backend,
         microscope        = raw["microscope"],
         objective         = raw["objective"],
 
@@ -181,11 +245,14 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         focus_test_z     = imaging["focus_test_z"],
         transit_n_blank  = imaging["transit_n_blank"],
 
+        round_bit_color  = round_bit_color,
+
         use_adaptors           = fluidics["use_adaptors"],
         include_final_cleave   = fluidics["include_final_cleave"],
         first_hyb_no_cleave    = fluidics["first_hyb_no_cleave"],
 
-        merlin = merlin_config,
+        merlin    = merlin_config,
+        fishtank   = fishtank_config,
 
         source_path = yaml_path,
     )
