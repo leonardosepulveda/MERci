@@ -166,6 +166,7 @@ notebooks/
     imaged_fovs             live acquisition-progress map
     round_mosaics            live quick-look mosaic (on-demand/catch-up/live modes)
     fast_spot_quantification per-bit hybridization-reagent QC
+    dave_timing_accuracy     actual vs. Dave-estimated block timing, real-data ETA for remaining blocks
   misc/              Ad-hoc utilities — see each notebook's own markdown cells for what it does
   tests/             Diagnostic/recovery notebooks for one specific real incident, kept as
                      templates, and validation notebooks for a new feature (synthetic and/or
