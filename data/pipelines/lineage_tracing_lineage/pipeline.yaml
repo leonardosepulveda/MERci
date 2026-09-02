@@ -55,7 +55,7 @@ imaging:
 # color_usage round-tag mapping (notebook 05) is a separate, manually-entered
 # per-experiment table, not derived from this file.
 dataorganization:
-  round_bit_color_csv: dataorganization/round_bit_color.csv
+  round_bit_color_csv: configs/round_bit_color_map/lineage_tracing_lineage.csv
 
 fluidics:
   use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts

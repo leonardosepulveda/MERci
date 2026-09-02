@@ -133,8 +133,17 @@ class PipelineConfig:
     source_path: Path = field(repr=False, default=None)
 
 
-def _load_round_bit_color(yaml_path: Path, csv_relpath: str) -> List[tuple]:
+def _load_round_bit_color(yaml_path: Path, data_dir: Path, csv_relpath: str) -> List[tuple]:
+    # Resolved relative to data_dir for the in-repo layout (e.g.
+    # data/configs/round_bit_color_map/<id>.csv), but tried relative to
+    # yaml_path's own directory first -- pipeline_export.py rewrites an
+    # exported pipeline.yaml's round_bit_color_csv to a bare filename
+    # pointing at its own local flat copy (round_bit_color.csv next to that
+    # copy), which only resolves against the yaml's own directory, not
+    # data_dir (still the shared MERci clone's data/ for the export case).
     csv_path = yaml_path.parent / csv_relpath
+    if not csv_path.exists():
+        csv_path = data_dir / csv_relpath
     if not csv_path.exists():
         raise FileNotFoundError(
             f"{csv_path} not found -- round_bit_color_csv in {yaml_path.name} "
@@ -163,7 +172,9 @@ def _load_power(data_dir: Path, microscope: str) -> tuple[Dict[int, float], floa
 def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConfig:
     """
     Load one pipeline's ``pipeline.yaml`` (+ its round_bit_color CSV,
-    resolved relative to ``yaml_path``) into a ``PipelineConfig``.
+    resolved relative to ``data_dir`` -- lives under
+    ``data_dir/configs/round_bit_color_map/``, like the power table) into a
+    ``PipelineConfig``.
 
     `data_dir` locates the shared per-microscope power table
     (``data_dir/configs/power/power_by_microscope.yaml``) -- defaults to
@@ -192,7 +203,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         return ImagingRoundRecipe(**d)
 
     power, power_default = _load_power(data_dir, raw["microscope"])
-    round_bit_color = _load_round_bit_color(yaml_path, dataorganization["round_bit_color_csv"])
+    round_bit_color = _load_round_bit_color(yaml_path, data_dir, dataorganization["round_bit_color_csv"])
 
     merlin_config = None
     if "merlin" in raw:

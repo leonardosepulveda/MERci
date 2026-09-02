@@ -82,7 +82,7 @@ fluidics:
 # barcode bits. 28/29 (RS0967/RS0994) sit right after tumor_epi's own
 # sequential range (17-27) and are not in any C3 codebook's bit_names.
 dataorganization:
-  round_bit_color_csv: dataorganization/round_bit_color.csv
+  round_bit_color_csv: configs/round_bit_color_map/tumor_disk.csv
 
 # Everything MERlin-specific. lib_name is still C3 (same sample/project as
 # tumor_epi's epi pass), but the MERlin recipe below has no barcode-decode
