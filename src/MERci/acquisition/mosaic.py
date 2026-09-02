@@ -61,6 +61,7 @@ otherwise documented)
 """
 from __future__ import annotations
 
+import json
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1019,6 +1020,50 @@ def save_mosaic_canvas(canvas: MosaicCanvas, path: Path) -> None:
         image=canvas.image, covered=canvas.covered,
         origin_um=np.array(canvas.origin_um), pixel_size_um=canvas.pixel_size_um,
     )
+
+
+def load_or_build_mosaic_canvas_cached(
+    msc_path: Path, keep_objectives: List[str], working_pixel_um: float, cache_dir: Path,
+) -> Tuple[MosaicCanvas, bool, Optional[int]]:
+    """
+    Load *msc_path* as a :class:`MosaicCanvas`, reusing
+    ``cache_dir/mosaic_canvas.npz`` (:func:`save_mosaic_canvas`/
+    :func:`load_mosaic_canvas`) if it's still valid for the given
+    *msc_path*/*keep_objectives*/*working_pixel_um* (a
+    ``mosaic_canvas_params.json`` sidecar records what the cache was built
+    from, including *msc_path*'s own mtime), else assembles it fresh via
+    :func:`load_steve_mosaic`/:func:`assemble_mosaic_canvas` and caches the
+    result for next time.
+
+    Returns ``(canvas, was_cached, n_tiles)`` -- *n_tiles* is the number of
+    tiles kept after :func:`filter_tiles_by_objective`, or None when the
+    cache was reused (no fresh assembly, so nothing to count).
+    """
+    msc_path = Path(msc_path)
+    cache_dir = Path(cache_dir)
+    cache_npz = cache_dir / "mosaic_canvas.npz"
+    cache_params = cache_dir / "mosaic_canvas_params.json"
+    params_now = {
+        "msc_path": str(msc_path), "msc_mtime": msc_path.stat().st_mtime,
+        "keep_objectives": keep_objectives, "working_pixel_um": working_pixel_um,
+    }
+
+    cached_ok = False
+    if cache_npz.exists() and cache_params.exists():
+        with open(cache_params) as fh:
+            cached_ok = json.load(fh) == params_now
+
+    if cached_ok:
+        return load_mosaic_canvas(cache_npz), True, None
+
+    tiles_all = load_steve_mosaic(msc_path)
+    tiles = [t for t in tiles_all if t.objective_name in keep_objectives]
+    canvas = assemble_mosaic_canvas(tiles, working_pixel_um=working_pixel_um)
+    save_mosaic_canvas(canvas, cache_npz)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_params, "w") as fh:
+        json.dump(params_now, fh)
+    return canvas, False, len(tiles)
 
 
 def load_mosaic_canvas(path: Path) -> MosaicCanvas:

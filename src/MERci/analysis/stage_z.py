@@ -19,8 +19,9 @@ per-FOV test movies.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 CACHE_COLUMNS = [
@@ -334,3 +335,20 @@ def assign_x_positions(cache: pd.DataFrame) -> pd.DataFrame:
     cache = cache.copy()
     cache["x"] = cache["fov_id"]
     return cache
+
+
+def positions_to_grid_indices(fov_ids: List[int], meta) -> Dict[int, Tuple[int, int]]:
+    """
+    Stage ``(x, y)`` positions -> integer ``(x_idx, y_idx)`` grid indices --
+    round to the nearest integer micron, then rank each axis's unique
+    values, which is robust to float imprecision on a regular grid. Same
+    approach as ``after_imaging/04_view_intensity_stats.ipynb``'s /
+    ``misc/measure_tissue_thickness_test.ipynb``'s own heatmaps use.
+    """
+    xs = np.array([round(meta.fovs[f].position[0]) for f in fov_ids])
+    ys = np.array([round(meta.fovs[f].position[1]) for f in fov_ids])
+    unique_xs = np.sort(np.unique(xs))
+    unique_ys = np.sort(np.unique(ys))
+    x_rank = {v: i for i, v in enumerate(unique_xs)}
+    y_rank = {v: i for i, v in enumerate(unique_ys)}
+    return {f: (x_rank[xs[i]], y_rank[ys[i]]) for i, f in enumerate(fov_ids)}
