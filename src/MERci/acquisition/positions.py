@@ -660,7 +660,7 @@ def determine_return_side(
     shape that breaks the same-side guarantee), falls back to actually
     trying both sides and keeping whichever gives the smaller
     ``max_step_um`` -- an empirical tie-break, not a second guess. Verified
-    (``notebooks/tests/test_irregular_grid_boustrophedon_return_path.ipynb``)
+    (``notebooks/tests/irregular_grid/test_irregular_grid_boustrophedon_return_path.ipynb``)
     to never pick the worse of the two natural sides, on a real benchmark.
 
     Parameters
@@ -1618,9 +1618,9 @@ def build_boundary_path_optimized(
 # weaker (not globally phase-locked) cross-axis overlap margin.
 #
 # Validated against the production regular-grid pipeline in
-# notebooks/tests/test_irregular_grid_boustrophedon_return_path.ipynb,
-# notebooks/tests/test_irregular_grid_downstream_qc_tools.ipynb, and
-# notebooks/tests/test_irregular_grid_column_overlap_correction.ipynb --
+# notebooks/tests/irregular_grid/test_irregular_grid_boustrophedon_return_path.ipynb,
+# notebooks/tests/irregular_grid/test_irregular_grid_downstream_qc_tools.ipynb, and
+# notebooks/tests/irregular_grid/test_irregular_grid_column_overlap_correction.ipynb --
 # see each notebook's own Takeaways for the validated numbers this code was
 # ported from.
 #
@@ -1767,7 +1767,7 @@ def fix_overlap_clusters(
     one piece) stays exactly *step_size* by construction. This produces a
     real defect: a few anomalously close/overlapping FOVs concentrated at
     piece boundaries, confirmed on a real benchmark (see
-    ``notebooks/tests/test_irregular_grid_column_overlap_correction.ipynb``:
+    ``notebooks/tests/irregular_grid/test_irregular_grid_column_overlap_correction.ipynb``:
     18/36 columns affected, worst pairwise overlap fraction 0.997).
 
     A **sub-band** is a maximal run of consecutive points bounded by either
