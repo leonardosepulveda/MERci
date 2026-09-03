@@ -19,6 +19,10 @@ counter_mean/counter_percentile/rebin_counter/tpc_from_counter
                               no raw pixel re-read needed
 tpc_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
                               is_contiguous) purely from a compute_channel_counters() result
+resolve_round_by_imaging_type – (imaging_round, frame_table) for round_info.csv's first
+                              row matching a given imaging_type (e.g. "cells")
+compute_tissue_fraction     – per-FOV true-pixel-count tissue coverage (0-1), same
+                              method/estimator as misc/measure_tissue_thickness_test.ipynb
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
 """
@@ -510,6 +514,130 @@ def tpc_profile_from_counters(channel_counters: Dict, threshold: float, tpc_thre
         dtype=np.int64,
     )
     return {"z_um": z_um, "tpc": tpc, **_summarize_tpc_profile(z_um, tpc, tpc_threshold)}
+
+
+# ── Tissue fraction (per-FOV, single-channel true-pixel-count coverage) ────────
+
+def resolve_round_by_imaging_type(config, imaging_type: str) -> Tuple[int, pd.DataFrame]:
+    """
+    ``(imaging_round, frame_table)`` for ``round_info.csv``'s first row whose
+    ``imaging_type`` matches (e.g. ``"cells"``).
+
+    Raises
+    ------
+    ValueError if no round has that ``imaging_type``.
+    """
+    from ..acquisition.configs import find_frame_table_for_hal_config
+
+    round_info = pd.read_csv(config.round_info_csv)
+    match = round_info.loc[round_info["imaging_type"] == imaging_type]
+    if match.empty:
+        raise ValueError(f"No round with imaging_type={imaging_type!r} in {config.round_info_csv}")
+    row = match.iloc[0]
+    round_id = int(row["imaging_round"])
+    hal_path = config.settings_dir / row["hal_config"]
+    ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
+    frame_table = pd.read_csv(ft_path, index_col=0)
+    return round_id, frame_table
+
+
+def compute_tissue_fraction(
+    config, meta, cache_dir: Path, label: str,
+    *, channel_nm: float = 405.0, n_background_frames: int = 10,
+) -> Tuple[pd.DataFrame, float]:
+    """
+    Per-FOV ``tissue_fraction`` (0-1): what fraction of the frame is actually
+    covered by tissue, using the same true-pixel-count (TPC) method as
+    ``misc/measure_tissue_thickness_test.ipynb`` -- reused here as a proxy
+    for "is this FOV mostly empty of tissue" (as opposed to genuinely low
+    barcode/foci density in a FOV that IS covered by tissue).
+
+    1. For every FOV, build an exact per-z pixel-intensity Counter
+       (:func:`compute_channel_counters`) for *channel_nm* in the ``cells``
+       round -- cached per FOV under ``cache_dir/channel_counters/``.
+    2. Estimate a THRESHOLD as the highest pixel value observed among the
+       *n_background_frames* lowest-mean frames across every FOV/z -- the
+       highest value that can plausibly occur as background noise.
+    3. Per FOV, ``tissue_fraction`` = the largest single-z true-pixel
+       fraction (pixels >= THRESHOLD, divided by total pixels) seen across
+       that FOV's z-stack -- not one fixed z, since real tissue can sit at
+       a different z per FOV.
+
+    Parameters
+    ----------
+    config, meta : ExperimentConfig, ExperimentMetadata for the dataset
+    cache_dir    : per-FOV Counters are cached under ``cache_dir/channel_counters/``
+    label        : prefix for progress/print messages (e.g. a sample name)
+    channel_nm   : which color channel is DAPI/cells (default 405.0)
+    n_background_frames : how many lowest-mean frames to treat as background
+                   for THRESHOLD estimation
+
+    Returns
+    -------
+    (results_df[fov_id, tissue_fraction], threshold)
+    """
+    from ..common.io import read_image_frames
+    from ..progress_display import ProgressReporter
+
+    round_id, frame_table = resolve_round_by_imaging_type(config, "cells")
+    channel_frames  = frame_table[frame_table["color"].round(0) == round(channel_nm)].sort_values("z")
+    z_frame_indices = list(zip(channel_frames.index.tolist(), channel_frames["z"].tolist()))
+    if not z_frame_indices:
+        raise ValueError(f"No frames found for channel {channel_nm} nm in the 'cells' round's frame table.")
+
+    counters_dir = Path(cache_dir) / "channel_counters"
+    counters_dir.mkdir(parents=True, exist_ok=True)
+
+    def counters_path(fpath):
+        return counters_dir / f"{Path(fpath).stem}_counters.npz"
+
+    files = [f for f in meta.files_for_round(round_id) if f.exists()]
+    channel_counters, to_compute = {}, []
+    for fpath in files:
+        if counters_path(fpath).exists():
+            channel_counters[meta.fov_id_of_file(fpath)] = load_channel_counters(counters_path(fpath))
+        else:
+            to_compute.append(fpath)
+    print(f"[{label}] {len(channel_counters)} / {len(files)} DAPI channel Counter(s) already cached; "
+          f"computing {len(to_compute)} more ({len(z_frame_indices)} z-step(s) each).")
+
+    if to_compute:
+        reporter = ProgressReporter(total=len(to_compute), label=f"[{label}] Computing DAPI Counters")
+        for fpath in reporter.wrap(to_compute):
+            counters = compute_channel_counters(fpath, z_frame_indices)
+            save_channel_counters(counters_path(fpath), counters)
+            channel_counters[meta.fov_id_of_file(fpath)] = counters
+
+    # THRESHOLD (measure_tissue_thickness_test.ipynb's estimator): highest pixel
+    # value among the n_background_frames lowest-mean frames across every FOV/z.
+    frame_records = [
+        (counter_mean(values, counts), fov_id, pos)
+        for fov_id, counters in channel_counters.items()
+        for pos, (values, counts) in enumerate(zip(counters["values_per_z"], counters["counts_per_z"]))
+    ]
+    frame_records.sort(key=lambda r: r[0])
+    worst = frame_records[:n_background_frames]
+    threshold = max(
+        float(channel_counters[fov_id]["values_per_z"][pos].max()) for _, fov_id, pos in worst
+    )
+
+    # One frame read, just for its pixel dimensions (Counters discard shape).
+    sample_frame = read_image_frames(files[0], [int(z_frame_indices[0][0])])[0]
+    total_pixels = sample_frame.shape[0] * sample_frame.shape[1]
+
+    rows = []
+    for fov_id, counters in channel_counters.items():
+        fractions = [
+            tpc_from_counter(values, counts, threshold) / total_pixels
+            for values, counts in zip(counters["values_per_z"], counters["counts_per_z"])
+        ]
+        rows.append({"fov_id": fov_id, "tissue_fraction": max(fractions)})
+
+    results_df = pd.DataFrame(rows).sort_values("fov_id").reset_index(drop=True)
+    print(f"[{label}] THRESHOLD={threshold:.1f}  tissue_fraction: "
+          f"mean={results_df['tissue_fraction'].mean():.3f}  "
+          f"median={results_df['tissue_fraction'].median():.3f}")
+    return results_df, threshold
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
