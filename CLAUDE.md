@@ -35,7 +35,8 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 - `after_imaging/`, `during_imaging/`, `misc/`, `tests/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
-- `before_imaging/{regular,multi_z}/` (3 levels): `.parent.parent.parent`
+- `before_imaging/{regular,multi_z}/`, `tests/<subfolder>/` (3 levels):
+  `.parent.parent.parent`
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
 
