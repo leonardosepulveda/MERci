@@ -23,6 +23,8 @@ resolve_round_by_imaging_type – (imaging_round, frame_table) for round_info.cs
                               row matching a given imaging_type (e.g. "cells")
 compute_tissue_fraction     – per-FOV true-pixel-count tissue coverage (0-1), same
                               method/estimator as misc/measure_tissue_thickness_test.ipynb
+resolve_barcode_bit_lookup  – {bit: (round_id, frame_index)} for every combinatorial
+                              barcode bit at one fixed z, from round_bit_color_map.csv
 load_stats                  – convenience: load a saved stats CSV
 load_histogram              – convenience: load a saved histogram .npz
 """
@@ -638,6 +640,84 @@ def compute_tissue_fraction(
           f"mean={results_df['tissue_fraction'].mean():.3f}  "
           f"median={results_df['tissue_fraction'].median():.3f}")
     return results_df, threshold
+
+
+# ── Barcode-bit lookup (per-bit, one fixed z) ───────────────────────────────────
+
+def resolve_barcode_bit_lookup(
+    config, meta, round_info: pd.DataFrame,
+    *, n_barcode_bits: int = 16, z_plane: Optional[float] = None,
+) -> Tuple[Dict[int, Tuple[int, int]], Dict[int, object], float]:
+    """
+    Map every combinatorial MERFISH barcode bit to a ``(round_id, frame_index)``
+    pair at one fixed z-plane, plus each bits round's ``series`` for reading
+    frames -- relocated from ``test_weighted_average_intensity.ipynb``'s
+    section 4 (see that notebook for the full derivation/rationale) so a
+    second notebook can reuse it instead of duplicating the ~40-line
+    round_bit_color_map.csv/round_info.csv cross-reference.
+
+    ``round_bit_color_map.csv``'s own ``round`` column is 1-indexed within
+    the bits rounds only (H01=1, H02=2, ...), not ``round_info.csv``'s
+    ``imaging_round`` (which also counts the earlier ``cells`` round) --
+    translated by position: the ``round_info.csv`` rows with
+    ``imaging_type == "bits"``, sorted by ``imaging_round``, are H01, H02,
+    ... in that same order. Every bits round shares one frame table (same
+    HAL config across all bits rounds), read once from the first bits round.
+
+    Parameters
+    ----------
+    config, meta   : ExperimentConfig, ExperimentMetadata for the dataset
+    round_info     : ``round_info.csv``, already loaded (``pd.read_csv``)
+    n_barcode_bits : number of combinatorial bits (16 for this codebook;
+                     round_bit_color_map.csv's bit numbers above this are
+                     non-combinatorial "sequential genes" readout, excluded)
+    z_plane        : fixed z to resolve every bit at; ``None`` auto-picks the
+                     middle z of the range imaged for the barcode colors
+
+    Returns
+    -------
+    (bit_lookup, bits_series_by_round, z_plane) where:
+      bit_lookup           : {bit: (round_id, frame_index)} -- round_id is
+                              round_bit_color_map.csv's own round number
+      bits_series_by_round : {round_id: series} for reading frames
+      z_plane              : the z actually used (resolved if it was ``None``)
+    """
+    from ..acquisition.configs import find_frame_table_for_hal_config
+
+    round_bit_color = pd.read_csv(config.metadata_dir / "round_bit_color_map.csv")
+    bits_df = round_bit_color[round_bit_color["bit"] <= n_barcode_bits].sort_values("bit").reset_index(drop=True)
+    assert len(bits_df) == n_barcode_bits, (
+        f"Expected {n_barcode_bits} combinatorial bits, found {len(bits_df)} with bit <= {n_barcode_bits} "
+        f"in {config.metadata_dir / 'round_bit_color_map.csv'} -- check n_barcode_bits / the codebook."
+    )
+
+    bits_rounds_info = round_info.loc[round_info["imaging_type"] == "bits"].sort_values("imaging_round")
+    bits_round_to_imaging_round = {i + 1: int(r) for i, r in enumerate(bits_rounds_info["imaging_round"])}
+
+    bits_round_ids = sorted(int(r) for r in bits_df["round"].unique())
+    bits_series_by_round = {
+        rid: meta.series_for_round(bits_round_to_imaging_round[rid], imaging_type="bits")[0]
+        for rid in bits_round_ids
+    }
+
+    first_bits_round = bits_rounds_info.iloc[0]
+    hal_config_path  = config.settings_dir / first_bits_round["hal_config"]
+    frame_table_path = find_frame_table_for_hal_config(hal_config_path, config.metadata_dir)
+    frame_table       = pd.read_csv(frame_table_path)
+
+    barcode_colors = sorted(bits_df["color"].astype(float).unique())
+    barcode_z_values = sorted(frame_table.loc[frame_table["color"].isin(barcode_colors), "z"].unique())
+    if z_plane is None:
+        z_plane = barcode_z_values[len(barcode_z_values) // 2]
+
+    bit_lookup = {}
+    for _, row in bits_df.iterrows():
+        match = frame_table[(frame_table["color"] == float(row["color"])) & (frame_table["z"] == z_plane)]
+        if len(match) != 1:
+            raise ValueError(f"Expected exactly one frame at color={row['color']}, z={z_plane}; found {len(match)}.")
+        bit_lookup[int(row["bit"])] = (int(row["round"]), int(match.index[0]))
+
+    return bit_lookup, bits_series_by_round, z_plane
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
