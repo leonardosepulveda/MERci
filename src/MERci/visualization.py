@@ -12,6 +12,10 @@ plot_fov_layout             – scatter plot of FOV stage positions
 plot_stats_over_rounds      – mean signal per round with error bars
 plot_spatial_uniformity     – colour-coded scatter for the last round
 display_mosaic              – show a saved mosaic PNG in a notebook
+
+Notebook output
+----------------
+get_merci_figures_dir       – SAMPLE_DIR/figures/MERci/... dir for a notebook's figures
 """
 from __future__ import annotations
 
@@ -25,6 +29,36 @@ import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
+
+
+# ── Notebook figure output directory ───────────────────────────────────────────
+
+def get_merci_figures_dir(sample_dir, category: str, notebook_name: str,
+                           subfolder: Optional[str] = None) -> Path:
+    """
+    Directory for one notebook's saved figures: creates and returns
+    ``SAMPLE_DIR/figures/MERci/<category>/[<subfolder>/]<notebook_name>/``.
+
+    The single place that defines where notebook figures live (see
+    NOTEBOOK_GUIDELINES.md #6) -- every figure-saving notebook gets its
+    ``figures_dir`` from this call, so the convention only has to change
+    here, not in every notebook, if it ever needs to.
+
+    ``category`` is the notebook's top-level folder under ``notebooks/``
+    (``"before_imaging"``, ``"after_imaging"``, ``"during_imaging"``,
+    ``"misc"``, or ``"tests"``). ``subfolder`` is an organizational
+    subfolder *within* that category that groups otherwise-unrelated
+    notebooks together (e.g. ``"fov_stitching"`` under ``tests/``) --
+    deliberately NOT used for before_imaging's own ``regular``/``multi_z``
+    pipeline subfolders, since only one pipeline's notebooks ever exist in
+    a given experiment folder at a time.
+    """
+    path = Path(sample_dir) / "figures" / "MERci" / category
+    if subfolder is not None:
+        path = path / subfolder
+    path = path / notebook_name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 # ── Acquisition: shutter sequence ─────────────────────────────────────────────
