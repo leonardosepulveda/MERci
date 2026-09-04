@@ -651,7 +651,7 @@ def resolve_barcode_bit_lookup(
     """
     Map every combinatorial MERFISH barcode bit to a ``(round_id, frame_index)``
     pair at one fixed z-plane, plus each bits round's ``series`` for reading
-    frames -- relocated from ``test_weighted_average_intensity.ipynb``'s
+    frames -- relocated from ``01_test_weighted_average_intensity.ipynb``'s
     section 4 (see that notebook for the full derivation/rationale) so a
     second notebook can reuse it instead of duplicating the ~40-line
     round_bit_color_map.csv/round_info.csv cross-reference.
