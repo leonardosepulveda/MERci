@@ -82,12 +82,25 @@ in new notebooks rather than picking new numbers per plot.
 
 Every cell that calls `plt.show()` on a real figure (not a quick throwaway
 diagnostic) should also `fig.savefig(...)` a copy to
-`SAMPLE_DIR/analysis/figures/{NOTEBOOK_NAME}.{figure_name}.png`, where
-`NOTEBOOK_NAME` is the notebook's own filename stem (e.g. `stage_z_drift`,
-defined once in the Parameters/Setup section) and `figure_name` is a short,
-descriptive slug for that specific figure (e.g. `stage_z_drift`,
-`stage_z_heatmap`). This gives every notebook's output figures one shared,
-predictable location and naming scheme, so a later batch step (or a human
-skimming the experiment folder) can find any notebook's plots without
-knowing that notebook's own internal cell structure. `during_imaging/stage_z_drift.ipynb`
-is the reference implementation.
+`{figures_dir}/{NOTEBOOK_NAME}.{figure_name}.png`, where `figures_dir` comes
+from `MERci.visualization.get_merci_figures_dir(SAMPLE_DIR, category,
+NOTEBOOK_NAME, subfolder=...)` -- it resolves to
+`SAMPLE_DIR/figures/MERci/<category>/[<subfolder>/]<notebook_name>/`,
+outside the `MERci/` clone (sibling of it, alongside MERlin's own
+`figures/`), and creates the directory if missing. `NOTEBOOK_NAME` is the
+notebook's own filename stem (e.g. `stage_z_drift`, defined once in the
+Parameters/Setup section) and `figure_name` is a short, descriptive slug for
+that specific figure (e.g. `stage_z_drift`, `stage_z_heatmap`). `category`
+is the notebook's top-level folder under `notebooks/` (`before_imaging`,
+`after_imaging`, `during_imaging`, `misc`, `tests`); `subfolder` is an
+organizational subfolder *within* that category that groups otherwise-
+unrelated notebooks (e.g. `fov_stitching` under `tests/`) -- omit it for
+before_imaging's own `regular`/`multi_z` pipeline subfolders, since only one
+pipeline's notebooks exist in a given experiment folder at a time. Routing
+every notebook through this one function (rather than each notebook
+constructing its own path) means the convention only has to change in one
+place if it ever needs to. This gives every notebook's output figures one
+shared, predictable location and naming scheme, so a later batch step (or a
+human skimming the experiment folder) can find any notebook's plots without
+knowing that notebook's own internal cell structure.
+`during_imaging/stage_z_drift.ipynb` is the reference implementation.
