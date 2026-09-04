@@ -257,6 +257,11 @@ under `cache/` (repo root, gitignored) — never the session scratchpad or
 anywhere outside this repo. Distinct from `analysis/cache/<notebook_name>/`
 (a per-*experiment* cache under `SAMPLE_DIR/`, not this repo).
 
+Mirror the notebook's own path under `cache/`: work done while on some
+`notebooks/<...>/<notebook_name>.ipynb` goes under
+`cache/<...>/<notebook_name>/`, matching that notebook's path relative to
+`notebooks/`.
+
 ## Remembering task history
 
 Two local-only, gitignored records:
