@@ -521,6 +521,7 @@ def create_dave_config(
     positions_dir:        Optional[Path] = None,
     create_data_dirs:     bool = True,
     print_estimate:       bool = True,
+    per_round:            bool = True,
     microscope:           Optional[str] = None,
     estimate_frame_shape: Optional[Sequence[int]] = None,
     estimate_bytes_per_pixel: int = 2,
@@ -669,6 +670,12 @@ def create_dave_config(
                             storage for the recipe (see
                             :func:`estimate_dave_experiment`).  Requires
                             ``kilroy_config`` for the fluidics portion.
+    per_round             : if True (default), the printed estimate includes a
+                            "Per round:" text breakdown (see
+                            :func:`format_experiment_estimate`).  Set False when
+                            the caller will build its own per-round table instead
+                            (see :func:`experiment_estimate_table`) -- avoids
+                            printing the same breakdown twice.
     microscope            : microscope id (e.g. ``"MF3"``, ``"MFX"``, ``"ST2"``)
                             used to pick the camera frame size for the storage
                             estimate (MFX/ST2 → 2304², MF-series → 2048²; see
@@ -1009,7 +1016,7 @@ def create_dave_config(
             frame_height    = frame_h,
             bytes_per_pixel = estimate_bytes_per_pixel,
         )
-        print(format_experiment_estimate(est, per_round=True, start_time=start_time))
+        print(format_experiment_estimate(est, per_round=per_round, start_time=start_time))
         return est
     return None
 
@@ -1028,6 +1035,7 @@ def create_focus_test_dave_config(
     create_data_dir:  bool = True,
     movie_name:       str = "focustest",
     print_estimate:   bool = True,
+    per_round:        bool = True,
     kilroy_config:    Optional[Path] = None,
     microscope:       Optional[str] = None,
     estimate_frame_shape: Optional[Sequence[int]] = None,
@@ -1116,6 +1124,9 @@ def create_focus_test_dave_config(
                        time comes only from the per-FOV move overhead (see
                        ``estimate_dave_experiment``'s ``per_movie_overhead_s``),
                        not from any exposure/readout time.
+    per_round        : if True (default), the printed estimate includes a
+                       "Per round:" text breakdown -- see
+                       :func:`create_dave_config`'s same parameter.
     kilroy_config    : unused here (this recipe has no fluidics) -- accepted only
                        so callers can pass the same value they use for
                        :func:`create_dave_config` without conditionally omitting it
@@ -1201,7 +1212,7 @@ def create_focus_test_dave_config(
             frame_height    = frame_h,
             bytes_per_pixel = estimate_bytes_per_pixel,
         )
-        print(format_experiment_estimate(est, per_round=True, start_time=start_time))
+        print(format_experiment_estimate(est, per_round=per_round, start_time=start_time))
 
     return n_fovs, est
 
@@ -1556,18 +1567,16 @@ def estimate_dave_experiment(
 
 
 def _fmt_duration(seconds: float) -> str:
-    """Format seconds as ``Dd HHh MMm SSs`` (dropping leading zero units)."""
+    """Format seconds as ``Dd, Hh, Mm`` (e.g. ``"0d, 11h, 17m"``), truncating to
+    the minute. Falls back to ``"Ns"`` under a minute -- otherwise a short
+    duration like "Time per FOV" would always round down to "0d, 0h, 0m"."""
     total = int(round(seconds))
-    d, rem = divmod(total, 86400)
-    h, rem = divmod(rem, 3600)
-    m, s   = divmod(rem, 60)
-    if d:
-        return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
-    if h:
-        return f"{h}h {m:02d}m {s:02d}s"
-    if m:
-        return f"{m}m {s:02d}s"
-    return f"{s}s"
+    if total < 60:
+        return f"{total}s"
+    total //= 60
+    d, rem = divmod(total, 1440)
+    h, m   = divmod(rem, 60)
+    return f"{d}d, {h}h, {m}m"
 
 
 def _fmt_bytes(n: int) -> str:
@@ -1581,8 +1590,10 @@ def _fmt_bytes(n: int) -> str:
 
 
 def _fmt_dt(dt: datetime) -> str:
-    """Format a datetime as ``YYYY-MM-DD HH:MM:SS``."""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    """Format a datetime as ``Month D YYYY, HH:MM`` (e.g. ``"September 5 2026,
+    13:05"``). ``%-d`` (no leading zero) is a glibc/BSD strftime extension --
+    fine on this project's Linux/Mac targets, not on Windows."""
+    return dt.strftime("%B %-d %Y, %H:%M")
 
 
 def format_experiment_estimate(
@@ -1648,6 +1659,42 @@ def format_experiment_estimate(
         for w in dict.fromkeys(est.warnings):     # de-duplicate, keep order
             lines.append(f"    - {w}")
     return "\n".join(lines)
+
+
+def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime) -> pd.DataFrame:
+    """
+    Per-round fluidics/imaging breakdown as a dataframe, one row per phase,
+    chained off ``start_time`` in run order -- the tabular counterpart of
+    :func:`format_experiment_estimate`'s own "Per round:" text section
+    (``dave_timing_accuracy.ipynb``'s block-by-block table uses this same
+    style). Columns: ``block``, ``kind`` ("fluidics"/"imaging"), ``start``,
+    ``end``, ``duration`` (the latter three pre-formatted via ``_fmt_dt``/
+    ``_fmt_duration``, ready to ``display()`` as-is).
+    """
+    rows: List[dict] = []
+    cursor = start_time
+    for r in est.per_round:
+        # A "Hyb NN" label (r["hyb"] is not None) is a bare number needing a
+        # " Fluidics"/" Imaging" suffix; a non-hyb label ("Cells Imaging",
+        # "Fluidics Final", ...) is the raw loop name and already names its
+        # one phase -- see estimate_dave_experiment's per_round docstring.
+        if r["hyb"] is not None:
+            fluidics_label, imaging_label = f"{r['label']} Fluidics", f"{r['label']} Imaging"
+        else:
+            fluidics_label = imaging_label = r["label"]
+        if r["fluidics_s"] > 0:
+            end = cursor + timedelta(seconds=r["fluidics_s"])
+            rows.append({"block": fluidics_label, "kind": "fluidics",
+                         "start": _fmt_dt(cursor), "end": _fmt_dt(end),
+                         "duration": _fmt_duration(r["fluidics_s"])})
+            cursor = end
+        if r["movies"] > 0:
+            end = cursor + timedelta(seconds=r["imaging_s"])
+            rows.append({"block": imaging_label, "kind": "imaging",
+                         "start": _fmt_dt(cursor), "end": _fmt_dt(end),
+                         "duration": _fmt_duration(r["imaging_s"])})
+            cursor = end
+    return pd.DataFrame(rows, columns=["block", "kind", "start", "end", "duration"])
 
 
 # ── XML writer ─────────────────────────────────────────────────────────────────
