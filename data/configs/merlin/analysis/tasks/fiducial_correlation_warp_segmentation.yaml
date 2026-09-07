@@ -1,0 +1,17 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# A second, channel-restricted FiducialCorrelationWarp instance (own
+# analysis_name, distinct from the shared fiducial_correlation_warp.yaml
+# atom) -- lets segmentation run with `merlin --allow-missing-channels` on
+# just the cells/DAPI round, before the decode rounds are imaged. See
+# build_segmentation_only_recipe_tasks/derive_segmentation_channels in
+# merlin_config.py for how a recipe/analysis JSON is assembled around it;
+# channels_to_process (the segment atom's own channel(s), e.g. ["DAPI"])
+# is supplied per experiment via `overrides`, not hardcoded here.
+task: FiducialCorrelationWarp
+module: merlin.analysis.warp
+analysis_name: FiducialCorrelationWarpSegmentation
+parameters:
+  highpass_sigma: 3
+  write_fiducial_images: true
+  write_aligned_images: false

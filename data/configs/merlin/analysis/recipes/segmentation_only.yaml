@@ -1,0 +1,19 @@
+# Ordered atomic-task list -- see ../tasks/README.md for the shared convention (see build_merlin_analysis_parameters() for assembly).
+#
+# The segmentation-chain portion of default_with_segmentation.yaml, with the
+# unrestricted fiducial_correlation_warp swapped for fiducial_correlation_
+# warp_segmentation -- runs with `merlin --allow-missing-channels` on just
+# the cells/DAPI round, before the decode rounds are imaged. Reference/
+# manual-use shape only: notebook 07/09's own generated per-experiment
+# segmentation-only recipe is derived dynamically instead, via
+# build_segmentation_only_recipe_tasks (merlin_config.py), so it always
+# matches that experiment's own align/segment-method choice.
+n_optimize_iterations: 1
+tasks:
+- fiducial_correlation_warp_segmentation
+- global_align_least_squares
+- cellpose_segment_sam
+- clean_cell_boundaries
+- combine_cleaned_boundaries
+- refine_cell_databases
+- export_cell_metadata
