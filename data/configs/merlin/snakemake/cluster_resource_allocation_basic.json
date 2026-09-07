@@ -37,6 +37,9 @@
         "time" : "0:10:00",
         "exclude" : ""
     },
+    "CellPoseSegmentSAMDone": {
+        "mem": 32000
+    },
     "CleanCellBoundaries": {
         "mem": 10000
     },
@@ -138,6 +141,9 @@
     },
     "RefineCellDatabasespolyT": {
         "mem": 5000
+    },
+    "SmfishSignal": {
+        "mem": 32000
     },
     "SumSignals": {
         "mem": 3000
