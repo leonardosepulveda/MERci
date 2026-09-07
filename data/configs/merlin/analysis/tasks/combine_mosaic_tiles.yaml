@@ -1,0 +1,8 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# Assembles the final mosaic tiff(s) from generate_mosaic's (GenerateMosaicTile)
+# cached per-fov tiles. No parameters set: MERlin's own defaults
+# (output_format='imagej', separate_files=false, write_pyramidal_tiff=false)
+# already match what this repo wants.
+task: CombineMosaicTiles
+module: merlin.analysis.generatemosaic

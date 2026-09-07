@@ -6,7 +6,9 @@ tasks:
 - optimize_iteration
 - decode
 - global_align_least_squares
+- create_ffc
 - generate_mosaic
+- combine_mosaic_tiles
 - generate_adaptive_threshold
 - adaptive_filter_barcodes
 - export_barcodes

@@ -1,0 +1,9 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# Estimates a per-color flat-field-correction field from a sample of exterior
+# fovs' raw frames. No dependencies, no parameters set: MERlin's own defaults
+# (fov_count=10, smooth_sigma=50, normalize_percentile=99.99,
+# minimum_value=0.1) are used as-is. Consumed by generate_mosaic as its
+# ffc_task.
+task: CreateFfc
+module: merlin.analysis.createffc
