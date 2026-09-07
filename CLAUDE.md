@@ -234,6 +234,19 @@ Notebooks auto-detect `SAMPLE_DIR` from their own location (see "Deployment
 model" above for the exact parent-dir counts per variant). Do not hardcode
 absolute paths.
 
+## Test notebooks: stay portable
+
+`notebooks/tests/<subfolder>/` notebooks should read real data through a
+local copy under that notebook's own `cache/` mirror (see "Working / cache
+files" below) in a `data/` subfolder there, not directly from the live
+experiment tree in every cell -- see
+[`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md)'s "Test notebooks: stay
+portable" section for the full rule (folder layout, provenance comments,
+calculation/plotting split for data too big to copy, preferring `MERci`
+library functions over inline logic). This makes a later export to a
+standalone folder (`/save_test <subfolder> <destination>`) a copy, not a
+rewrite.
+
 ## Scope constraint
 
 All edits and analysis must stay within this repo. Do not modify sibling
@@ -248,6 +261,12 @@ Commit and push as you go — do not leave finished work uncommitted.
 - Don't batch unrelated changes into one commit; don't let edits pile up locally.
 - Standing authorization to commit and push without asking each time.
 - Never commit transient files (`*.tmp.*`, `__pycache__/`, `*.egg-info/` — gitignored).
+- A branch whose work is confined to `notebooks/tests/` is local-only: don't
+  push it, and don't merge it to master, unless the user explicitly asks
+  (a global git-workflow rule applying across this user's projects). A
+  change this same branch makes outside `notebooks/tests/` (e.g. a function
+  pulled out into `src/MERci/`) still follows the normal push/merge rules
+  above, on its own branch.
 
 ## Working / cache files
 
@@ -261,6 +280,11 @@ Mirror the notebook's own path under `cache/`: work done while on some
 `notebooks/<...>/<notebook_name>.ipynb` goes under
 `cache/<...>/<notebook_name>/`, matching that notebook's path relative to
 `notebooks/`.
+
+For a `notebooks/tests/` notebook specifically, that mirror also holds its
+local data copy, at `cache/<...>/<notebook_name>/data/` -- see
+[`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md)'s "Test notebooks: stay
+portable" section.
 
 ## Remembering task history
 

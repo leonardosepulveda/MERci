@@ -104,3 +104,57 @@ shared, predictable location and naming scheme, so a later batch step (or a
 human skimming the experiment folder) can find any notebook's plots without
 knowing that notebook's own internal cell structure.
 `during_imaging/stage_z_drift.ipynb` is the reference implementation.
+
+## 7. Test notebooks: stay portable
+
+`notebooks/tests/<subfolder>/` notebooks investigate one specific question
+against real data, and their findings sometimes need to move to a
+standalone location later (a different machine, a paper's supplementary
+material, a collaborator without access to the source experiment tree).
+Write them so that move is a copy, not a rewrite.
+
+**Start from a local data folder, not the live experiment tree.** At the
+top of the notebook, resolve a `DATA_DIR` under that notebook's own cache
+mirror (its `cache/` path, per the root `CLAUDE.md`'s "Working / cache
+files") with a `data/` subfolder there, and copy in only the specific files
+the notebook actually reads (a boundary/positions file, a pre-built
+mosaic-canvas array, one CSV) the first time it needs them. Every later
+cell reads from `DATA_DIR`, never from the original `SAMPLE_DIR`/experiment
+path directly -- that keeps the notebook from silently growing more live
+dependencies as it's extended, and means nothing else has to change when
+the notebook is later copied elsewhere.
+
+**Too big to copy?** Split the notebook into a calculation section (reads
+the real, possibly-huge source once, computes/downsamples, writes the
+result under `DATA_DIR`) and a plotting/analysis section that reads only
+from `DATA_DIR` from then on -- same split as guideline 1, just with the
+boundary drawn at "touches the live experiment tree" instead of "is slow".
+`MERci.acquisition.mosaic.load_or_build_mosaic_canvas_cached`'s own
+`mosaic_canvas.npz` cache (a downsampled array, orders of magnitude smaller
+than the raw mosaic tiles it's built from) is the reference pattern: don't
+depend on the raw tiles at all once that cache exists -- load it directly
+with `load_mosaic_canvas`.
+
+**Note provenance.** Wherever a file under `DATA_DIR` is loaded, a short
+comment or markdown cell should say where it came from: the source
+experiment (by name, not by the path it happened to sit at when copied --
+see the root `CLAUDE.md`'s "No Local-Only References" rule, which applies
+here even though this data itself is gitignored) and which
+notebook/function produced it.
+
+**Prefer library functions over inline logic.** Before writing a
+calculation as bespoke notebook code, check whether `MERci` already has
+something for it (`acquisition/positions.py`'s grid/offset/path functions
+are the usual candidates for FOV-geometry work). If the notebook needs
+something genuinely reusable that doesn't exist yet, add it to `MERci`
+proper and import it, rather than growing the same logic independently in
+several test notebooks -- each new test can then contribute back to the
+shared toolkit instead of duplicating it.
+
+**Porting to a standalone folder**: `/save_test <subfolder> <destination>`
+automates all of the above into a `{destination}/{MERci,data,notebooks,
+figures}` layout -- a fresh `MERci` clone, only the data actually used,
+notebook copies rewired to the local clone/data, and figures saved as
+`{prefix}_{description}.{ext}` (`{prefix}` = the notebook's own leading
+number, e.g. `01`). See that command's own definition for the full
+contract.
