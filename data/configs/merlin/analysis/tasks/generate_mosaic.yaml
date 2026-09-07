@@ -1,8 +1,15 @@
 # Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
 #
-# No parameters set: MERlin exports every data channel (all barcode bits +
-# sequential/immuno channels) and every z index when 'data_channels'/
-# 'z_indexes' are omitted, which is exactly the "all bits, sequential genes
-# etc." default this atom is meant to produce.
-task: GenerateMosaic
+# GenerateMosaicTile computes one fov's contribution to the mosaic, at a
+# single fixed z index, for an explicit list of data channels -- MERlin has
+# no "export everything" default for either (unlike the old, removed
+# GenerateMosaic), so z_index/data_channels must be supplied per pipeline via
+# build_merlin_analysis_parameters' overrides={'generate_mosaic': {...}}.
+# downsample/use_ffc below are the same for every pipeline, so they live here
+# instead of in overrides. use_ffc: true needs a wired ffc_task -- always
+# injected as CreateFfc (see the create_ffc atom).
+task: GenerateMosaicTile
 module: merlin.analysis.generatemosaic
+parameters:
+  downsample: [4]
+  use_ffc: true
