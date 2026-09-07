@@ -101,7 +101,9 @@ merlin:
       decode:                      true
       global_align_least_squares:  true
       global_align_simple:         false
+      create_ffc:                  true
       generate_mosaic:             true
+      combine_mosaic_tiles:        true
       generate_adaptive_threshold: true
       adaptive_filter_barcodes:    true
       export_barcodes:             true
