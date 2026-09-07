@@ -1157,7 +1157,16 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 # a default too, so every experiment's post-decode assembled mosaic (all
 # channels, backed by the real per-FOV LeastSquaresGlobalAlignment
 # transform rather than nominal stage positions) is available for QC and
-# cross-microscope-alignment checks. chromatic_correction_file (an absolute path in that file, tied
+# cross-microscope-alignment checks. generate_mosaic/combine_mosaic_tiles now
+# wire MERlin's GenerateMosaicTile/CombineMosaicTiles pair (replacing the old
+# single-job GenerateMosaic, which recomputed every (fov, channel, z) tile
+# serially on one core and didn't finish within any practical wall-clock
+# limit at real experiment scale). Unlike the old task, z_index/data_channels
+# have no MERlin-side "export everything" default, so callers must supply
+# them via overrides={'generate_mosaic': {'z_index': ..., 'data_channels':
+# [...]}} (mirroring smfish_signal's channel_names below). generate_mosaic
+# also always wires create_ffc as its ffc_task (use_ffc: true is the atom's
+# own default). chromatic_correction_file (an absolute path in that file, tied
 # to a specific machine) is deliberately left unset in
 # optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
 # shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
@@ -1206,6 +1215,7 @@ def build_merlin_analysis_parameters(
         cross-reference this function injects), for per-experiment tuning
         without editing the shared atom/recipe files. ``smfish_signal``
         needs ``channel_names`` supplied this way (no sane shared default);
+        ``generate_mosaic`` needs ``z_index``/``data_channels`` the same way;
         ``optimize_iteration`` overrides apply identically to every
         iteration.
     extra_tasks : optional atom names appended after the recipe's own
@@ -1228,6 +1238,11 @@ def build_merlin_analysis_parameters(
 
     if "smfish_signal" in task_names and not overrides.get("smfish_signal", {}).get("channel_names"):
         raise ValueError("smfish_signal requires overrides={'smfish_signal': {'channel_names': [...]}}.")
+    mosaic_overrides = overrides.get("generate_mosaic", {})
+    if "generate_mosaic" in task_names and (
+            "z_index" not in mosaic_overrides or not mosaic_overrides.get("data_channels")):
+        raise ValueError("generate_mosaic requires overrides={'generate_mosaic': "
+                          "{'z_index': ..., 'data_channels': [...]}}.")
     if "sum_signal" in task_names and "cellpose_segment_3d" not in task_names and "cellpose_segment_sam" not in task_names:
         raise ValueError("sum_signal requires a segmentation atom (cellpose_segment_3d/cellpose_segment_sam) "
                           "in the recipe -- SumSignal needs a segment_task.")
@@ -1279,7 +1294,11 @@ def build_merlin_analysis_parameters(
             params["run_after_task"] = "ExportBarcodes"
         elif name == "generate_mosaic":
             params["warp_task"] = "FiducialCorrelationWarp"
+            params["preprocess_task"] = "DeconvolutionPreprocess"
             params["global_align_task"] = align_task_name
+            params["ffc_task"] = "CreateFfc"
+        elif name == "combine_mosaic_tiles":
+            params["tile_task"] = "GenerateMosaicTile"
         elif name in _SEGMENT_ATOM_NAMES:
             params["warp_task"] = "FiducialCorrelationWarp"
             params["global_align_task"] = align_task_name
