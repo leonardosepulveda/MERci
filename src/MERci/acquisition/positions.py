@@ -36,6 +36,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 from shapely.geometry import Polygon, box as shapely_box
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
 log = logging.getLogger(__name__)
 
@@ -2022,3 +2023,115 @@ def optimize_irregular_grid(
             best_coords, best_offset, best_n = coords, float(off), len(coords)
     return IrregularGridOffsetResult(coords=best_coords, best_offset=best_offset,
                                       n_fovs_per_offset=n_fovs_per_offset)
+
+
+# ── Redundant-FOV removal ──────────────────────────────────────────────────────
+
+@dataclass
+class RedundantFOVResult:
+    """Result of :func:`find_fully_redundant_fovs`."""
+    detected:           List[int]    # indices flagged at least once as fully redundant
+    removed:            Set[int]     # indices verified safe to drop together
+    kept_ids:           List[int]    # indices of *coords* NOT removed, in original order
+    kept_coords:        np.ndarray   # (M, 2) -- coords[kept_ids]
+    n_passes:           int          # iterative fixed-point passes taken to converge
+    uncovered_area_um2: float        # tissue area left uncovered after removing `removed`
+
+
+def find_fully_redundant_fovs(
+    coords:         np.ndarray,
+    tissue_polygon: Polygon,
+    fov_size_um:    float,
+    eps_um2:        float = 1.0,
+) -> RedundantFOVResult:
+    """
+    Find FOVs in *coords* whose entire tissue overlap is already duplicated
+    by some other FOV, and verify they can all be dropped together.
+
+    A FOV is "fully redundant" when subtracting every OTHER FOV's own square
+    from its own tissue-intersection region leaves nothing real (area below
+    *eps_um2*, a noise floor for floating-point-residual polygon slivers):
+    everywhere it touches tissue, some neighbor already reaches the same
+    tissue, so dropping it alone loses no coverage. This shows up in
+    practice at narrow tissue tips/corners, where a diagonally-adjacent
+    FOV's own square already reaches the small sliver of tissue the flagged
+    FOV clips.
+
+    Two FOVs can be redundant only *with each other* though (removing
+    either alone is safe; removing both isn't, since each was only
+    "covered" by the other) -- a single pass over the initially-detected
+    set can't see that. This re-checks each still-flagged FOV against the
+    *currently remaining* grid repeatedly until no more can be dropped (a
+    fixed point), then verifies the final removal leaves no real tissue
+    uncovered (`uncovered_area_um2`, checked against the same *eps_um2*
+    floor).
+
+    Uses an `STRtree` so each FOV only checks the handful of geometric
+    neighbors whose square could possibly overlap it (axis-aligned squares
+    are their own bounding box, so an ``"intersects"`` query against the
+    tree is already exact -- no buffering needed) instead of unioning
+    against every other FOV.
+
+    Parameters
+    ----------
+    coords         : ``(N, 2)`` FOV center coordinates (µm)
+    tissue_polygon : the tissue region FOVs are meant to cover (a boundary
+                     polygon with holes already subtracted, i.e. the same
+                     "effective tissue" *not* the raw boundary)
+    fov_size_um    : camera FOV side length (µm) -- each FOV is modelled as
+                     a square of this size centred at its coordinate
+    eps_um2        : area (µm²) below which a residual is treated as
+                     floating-point noise rather than real tissue
+
+    Returns
+    -------
+    :class:`RedundantFOVResult`
+    """
+    coords = np.asarray(coords, dtype=float)
+    half   = fov_size_um / 2.0
+    boxes  = [shapely_box(x - half, y - half, x + half, y + half) for x, y in coords]
+    tree   = STRtree(boxes)
+    n      = len(boxes)
+
+    # Each FOV's real geometric neighbors (fixed -- doesn't depend on which
+    # FOVs end up removed later), found once up front.
+    neighbor_idx: List[List[int]] = []
+    for i, b in enumerate(boxes):
+        idx = [int(j) for j in tree.query(b, predicate="intersects") if j != i]
+        neighbor_idx.append(idx)
+
+    def exclusive_area(i: int, excluded: frozenset = frozenset()) -> float:
+        own_overlap = boxes[i].intersection(tissue_polygon)
+        if own_overlap.is_empty:
+            return 0.0
+        others = [boxes[j] for j in neighbor_idx[i] if j not in excluded]
+        if not others:
+            return own_overlap.area
+        return own_overlap.difference(unary_union(others)).area
+
+    detected = [i for i in range(n) if exclusive_area(i) < eps_um2]
+
+    removed: Set[int] = set()
+    n_passes = 0
+    changed  = True
+    while changed:
+        changed = False
+        n_passes += 1
+        for i in detected:
+            if i in removed:
+                continue
+            if exclusive_area(i, excluded=removed) < eps_um2:
+                removed.add(i)
+                changed = True
+
+    kept_ids    = [i for i in range(n) if i not in removed]
+    kept_coords = coords[kept_ids] if kept_ids else coords[:0]
+    kept_union  = unary_union([boxes[i] for i in kept_ids]) if kept_ids else None
+    uncovered   = tissue_polygon.difference(kept_union) if kept_union is not None else tissue_polygon
+    uncovered_area_um2 = 0.0 if uncovered.is_empty else uncovered.area
+
+    return RedundantFOVResult(
+        detected=detected, removed=removed, kept_ids=kept_ids,
+        kept_coords=kept_coords, n_passes=n_passes,
+        uncovered_area_um2=uncovered_area_um2,
+    )
