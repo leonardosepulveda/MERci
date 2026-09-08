@@ -129,8 +129,14 @@ def _rewrite_merci_dir_line(notebook: dict) -> bool:
 # Only the MERlin-based pipelines' before_imaging notebooks load a
 # pipeline.yaml (see PIPELINES/pipeline_config.py) -- a miss here is not an
 # error, just a notebook (or whole pipeline) that doesn't use one.
+#
+# Also folds in the preceding `PIPELINE_ID = "..."` line: once exported, the
+# fixed sibling-pipeline.yaml path below no longer needs PIPELINE_ID to find
+# the file, so instead of leaving that hand-typed literal to go stale, derive
+# it from the loaded config's own `id:` field.
 
 _PIPELINE_CONFIG_RE = re.compile(
+    r'PIPELINE_ID\s*=\s*"[^"]*"\s*#[^\n]*\n'
     r'PIPELINE_CONFIG(\s*)=(\s*)load_pipeline_config\('
     r'MERCI_DIR\s*/\s*"data"\s*/\s*"pipelines"\s*/\s*PIPELINE_ID\s*/\s*"pipeline\.yaml"'
     r'\)'
@@ -138,16 +144,18 @@ _PIPELINE_CONFIG_RE = re.compile(
 _PIPELINE_CONFIG_REPLACEMENT = (
     'PIPELINE_CONFIG = load_pipeline_config('
     'Path(os.getcwd()).parent / "pipeline.yaml", data_dir=MERCI_DIR / "data")  '
-    "# edit pipeline.yaml here, not in MERci/"
+    "# edit pipeline.yaml here, not in MERci/\n"
+    'PIPELINE_ID     = PIPELINE_CONFIG.id  '
+    "# derived from pipeline.yaml's own `id:` field, not hand-typed"
 )
 
 
 def _rewrite_pipeline_config_line(notebook: dict) -> bool:
-    """Rewrite `PIPELINE_CONFIG = load_pipeline_config(MERCI_DIR / ...)` to
-    load the pipeline.yaml exported alongside this notebooks/ folder instead
-    (still passing MERCI_DIR/data as data_dir, for the shared power table),
-    in every code cell of `notebook` (in place). Returns whether a match was
-    found."""
+    """Rewrite `PIPELINE_ID = "..."` + `PIPELINE_CONFIG = load_pipeline_config(
+    MERCI_DIR / ...)` to load the pipeline.yaml exported alongside this
+    notebooks/ folder instead (still passing MERCI_DIR/data as data_dir, for
+    the shared power table) and derive PIPELINE_ID from it, in every code
+    cell of `notebook` (in place). Returns whether a match was found."""
     found = False
     for cell in notebook.get("cells", []):
         if cell.get("cell_type") != "code":
