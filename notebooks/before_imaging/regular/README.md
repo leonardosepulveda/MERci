@@ -6,7 +6,7 @@ Pre-experiment notebooks shared by every pipeline **except** `multi_z`
 One notebook set instead of one copy per pipeline -- what used to differ
 between them (microscope, imaging recipe, fluidics, codebook/task menu or
 fishtank targets) now lives entirely in each pipeline's own
-`MERci/data/pipelines/<id>/pipeline.yaml`
+`MERci/data/pipelines/<id>_pipeline.yaml`
 (`MERci.acquisition.pipeline_config.load_pipeline_config`).
 
 These notebooks live **three** levels under the repo root

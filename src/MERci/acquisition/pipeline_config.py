@@ -2,7 +2,7 @@
 """
 Per-pipeline configuration: microscope/imaging-recipe/fluidics/analysis
 defaults for one before_imaging pipeline (tumor/epi, lineage_tracing/lineage,
-etc.), loaded from ``data/pipelines/<pipeline_id>/pipeline.yaml``.
+etc.), loaded from ``data/pipelines/<pipeline_id>_pipeline.yaml``.
 
 Values here are pipeline-level -- the same for every experiment run through
 that pipeline. Per-experiment values (tissue-segmentation thresholds,
@@ -178,8 +178,8 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
 
     `data_dir` locates the shared per-microscope power table
     (``data_dir/configs/power/power_by_microscope.yaml``) -- defaults to
-    ``yaml_path.parents[2]`` (``MERCI_DIR/data``, when `yaml_path` is
-    ``MERCI_DIR/data/pipelines/<id>/pipeline.yaml``, its usual in-repo
+    ``yaml_path.parents[1]`` (``MERCI_DIR/data``, when `yaml_path` is
+    ``MERCI_DIR/data/pipelines/<id>_pipeline.yaml``, its usual in-repo
     location). Pass it explicitly when `yaml_path` is a copy that no longer
     sits at that fixed depth under ``data/`` -- e.g. a pipeline.yaml exported
     into ``SAMPLE_DIR/notebooks/`` by pipeline_export.py, which still needs
@@ -191,7 +191,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
     """
     yaml_path = Path(yaml_path)
     if data_dir is None:
-        data_dir = yaml_path.parents[2]   # .../data/pipelines/<id>/pipeline.yaml -> .../data
+        data_dir = yaml_path.parents[1]   # .../data/pipelines/<id>_pipeline.yaml -> .../data
     raw = yaml.safe_load(yaml_path.read_text())
 
     imaging          = raw["imaging"]
