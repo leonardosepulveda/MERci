@@ -135,12 +135,23 @@ def create_grid_positions(
     cx = (xmin + xmax) / 2.0 + offset[0]
     cy = (ymin + ymax) / 2.0 + offset[1]
 
+    # A shifted centre can sit closer to one bbox edge than the other --
+    # sizing each axis's point count from the ORIGINAL (pre-shift) span
+    # alone (as this used to) can then leave the outermost point short of
+    # the far edge, a real gap confirmed on a real boundary (see
+    # optimize_grid_offset's own docstring). Fixed by sizing each axis
+    # from the LARGER of its two post-shift half-spans (radius) instead --
+    # exactly reduces to the original span when offset=(0, 0) (both halves
+    # equal span/2), so this is a no-op at the default offset.
+    rx = max(cx - xmin, xmax - cx)
+    ry = max(cy - ymin, ymax - cy)
+
     if direction == "vertical":
-        xs = _spaced_coords(cx, xmin, xmax, step_size, even=True)
-        ys = _spaced_coords(cy, ymin, ymax, step_size, even=False)
+        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=True)
+        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=False)
     elif direction == "horizontal":
-        xs = _spaced_coords(cx, xmin, xmax, step_size, even=False)
-        ys = _spaced_coords(cy, ymin, ymax, step_size, even=True)
+        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=False)
+        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=True)
     else:
         raise ValueError("direction must be 'vertical' or 'horizontal'")
 
@@ -1633,8 +1644,12 @@ def build_boundary_path_optimized(
 #                                          ordering
 #   3. generate_irregular_scanning_path - order into a boustrophedon path
 #   4. filter_scanning_path             - same production filter as the regular grid
-#   5. determine_return_side + close_scanning_path - optional loop closure
-#   (build_irregular_boundary_path / optimize_irregular_grid wrap 1-5.)
+#   5. patch_uncovered_gaps             - REQUIRED coverage-guarantee step --
+#                                          closes real tissue gaps this grid's
+#                                          own per-band/per-piece construction
+#                                          can leave (see its own docstring)
+#   6. determine_return_side + close_scanning_path - optional loop closure
+#   (build_irregular_boundary_path / optimize_irregular_grid wrap 1-6.)
 
 def build_irregular_bands(
     boundary_polygon: Polygon,
@@ -1782,7 +1797,17 @@ def fix_overlap_clusters(
     own first and last position via ``linspace``, spreading the excess
     overlap across every gap instead of leaving it concentrated in one
     place. If the reclaimed span doesn't actually need that many FOVs at
-    the standard *step_size* pitch, the surplus is dropped.
+    the standard *step_size* pitch, the surplus is dropped -- sized via
+    ``ceil(span / step_size) + 1`` so the corrected sub-band's own spacing
+    never exceeds *step_size* (**not** ``round(span / step_size) + 1``,
+    which this function used until a real coverage-gap bug was traced back
+    to it: rounding down under-provisions points whenever ``span /
+    step_size`` sits just under a half-integer, opening a real gap in the
+    corrected sub-band -- confirmed directly on a real benchmark boundary,
+    where it caused several hundred to several thousand µm² of real tissue
+    to go uncovered even at ``min_width_frac=0`` -- see
+    `notebooks/tests/create_positions/03_guarantee_irregular_grid_coverage.ipynb`
+    for the diagnosis and the validated before/after numbers).
 
     A total no-op on a band with no bad gaps (in particular, a plain
     rectangular tissue with no holes) -- verified in the notebook above.
@@ -1833,7 +1858,7 @@ def fix_overlap_clusters(
             continue
         span = cross_vals[hi] - cross_vals[lo]
         n_before = hi - lo + 1
-        expected_n = max(2, int(round(span / step_size)) + 1)
+        expected_n = max(2, int(np.ceil(span / step_size)) + 1)
         n_after = min(n_before, expected_n)
         fixed.extend(np.linspace(cross_vals[lo], cross_vals[hi], n_after).tolist())
         applied.append((lo, hi, n_before, n_after))
@@ -1886,6 +1911,113 @@ def generate_irregular_scanning_path(
     return np.array(path) if path else np.empty((0, 2))
 
 
+def patch_uncovered_gaps(
+    coords:         np.ndarray,
+    tissue_polygon: Polygon,
+    step_size:      float,
+    fov_size_um:    float,
+    eps_um2:        float = 1.0,
+    max_iters:      int   = 5,
+) -> Tuple[np.ndarray, int]:
+    """
+    Add FOVs to close any real tissue gap left by *coords* against
+    *tissue_polygon* -- REQUIRED post-processing for
+    :func:`build_irregular_boundary_path`'s output (see its docstring).
+
+    The irregular grid's per-band construction could leave small, real gaps
+    of unphotographed tissue on a complex, multi-hole boundary -- root-
+    caused directly (not assumed) on a real benchmark boundary to
+    :func:`fix_overlap_clusters`'s own ``round()``-based sub-band resizing,
+    now fixed there too (``ceil()``-based, see that function's own
+    docstring -- `notebooks/tests/create_positions/
+    03_guarantee_irregular_grid_coverage.ipynb` for the diagnosis and the
+    validated before/after numbers). This function stays as a second,
+    independent line of defense on top of that fix rather than relying on
+    the upstream arithmetic alone: it measures the true uncovered area
+    (``tissue_polygon`` minus the union of every FOV's own square) and, for
+    each disjoint uncovered piece, tiles that piece's own bounding box with
+    *step_size*-spaced FOV positions (the same :func:`_spaced_coords`
+    pattern every other grid axis in this module already uses, so those
+    added FOVs are on the same lattice pitch, not an arbitrary size) --
+    then re-checks and repeats (fixed-point, capped at *max_iters*) in case
+    a first patch pass doesn't fully close a larger/oddly-shaped gap, or a
+    future change to the upstream construction reopens one.
+
+    A near-instant no-op whenever *coords* already fully covers
+    *tissue_polygon*. Only :func:`build_irregular_boundary_path` calls this
+    -- the regular grid (:func:`build_boundary_path`/
+    :func:`build_boundary_path_optimized`) guarantees full coverage by
+    construction: :func:`create_grid_positions` sizes each axis's point
+    count from the LARGER of its two post-shift half-spans (not the
+    original, pre-shift span alone), so a searched offset can never leave
+    the outermost point short of the far bbox edge -- fixed after a real
+    gap was found this way (175 um² uncovered, ST2 40X objective,
+    LT066_sample_01/merfish boundary -- see
+    `notebooks/tests/create_positions/04_sweep_reduced_fov_path_combinations_40x.ipynb`
+    for the original finding and
+    `notebooks/tests/create_positions/05_guarantee_offset_grid_coverage.ipynb`
+    for the fix's own diagnosis and validation).
+
+    Parameters
+    ----------
+    coords         : ``(N, 2)`` FOV center coordinates (µm)
+    tissue_polygon : the tissue region *coords* is meant to cover (a
+                     boundary polygon with holes -- and, if the caller is
+                     also restricting to a subset, the subset too -- already
+                     subtracted/intersected, i.e. the same "effective
+                     tissue" convention :func:`find_fully_redundant_fovs`
+                     uses)
+    step_size      : lattice spacing (µm) for each patch piece's own tiling
+    fov_size_um    : camera FOV side length (µm)
+    eps_um2        : area (µm²) below which a residual uncovered patch is
+                     treated as floating-point noise rather than a real gap
+    max_iters      : safety cap on patch/re-check passes
+
+    Returns
+    -------
+    (patched_coords, n_added) : *coords* with any needed FOVs appended at
+        the end (never reordered/removed), and how many were added (``0``
+        when nothing needed patching).
+    """
+    half    = fov_size_um / 2.0
+    current = np.asarray(coords, dtype=float)
+    added:  List[Tuple[float, float]] = []
+
+    for _ in range(max_iters):
+        boxes     = [shapely_box(x - half, y - half, x + half, y + half) for x, y in current]
+        covered   = unary_union(boxes) if len(boxes) else None
+        uncovered = tissue_polygon.difference(covered) if covered is not None else tissue_polygon
+        if uncovered.is_empty or uncovered.area < eps_um2:
+            break
+
+        pieces  = list(uncovered.geoms) if hasattr(uncovered, "geoms") else [uncovered]
+        new_pts: List[Tuple[float, float]] = []
+        for piece in pieces:
+            if piece.area < eps_um2:
+                continue
+            pxmin, pymin, pxmax, pymax = piece.bounds
+            xs = _spaced_coords((pxmin + pxmax) / 2.0, pxmin, pxmax, step_size, even=False)
+            ys = _spaced_coords((pymin + pymax) / 2.0, pymin, pymax, step_size, even=False)
+            for x in xs:
+                for y in ys:
+                    fov = shapely_box(x - half, y - half, x + half, y + half)
+                    if fov.intersects(piece):
+                        new_pts.append((float(x), float(y)))
+
+        if not new_pts:
+            # Nothing constructed actually reaches the remaining gap (shouldn't
+            # happen -- fov_size_um is normally far bigger than one gap piece's
+            # own extent) -- stop rather than loop with no progress.
+            break
+        added.extend(new_pts)
+        current = np.concatenate([current, np.array(new_pts)], axis=0)
+
+    if not added:
+        return np.asarray(coords, dtype=float), 0
+    patched = np.concatenate([np.asarray(coords, dtype=float), np.array(added)], axis=0)
+    return patched, len(added)
+
+
 def build_irregular_boundary_path(
     boundary_polygon: Polygon,
     hole_polygons:    List[Polygon],
@@ -1899,6 +2031,8 @@ def build_irregular_boundary_path(
     bad_overlap_frac:  float         = 0.3,
     min_coverage_fraction: float     = 0.0,
     subset_polygons:  Optional[List[Polygon]] = None,
+    guarantee_coverage: bool         = True,
+    coverage_eps_um2: float          = 1.0,
 ) -> np.ndarray:
     """
     Build the ordered FOV path for a single-axis-adaptive irregular grid.
@@ -1907,8 +2041,10 @@ def build_irregular_boundary_path(
     :func:`build_irregular_bands` -> :func:`fix_overlap_clusters` (per band,
     on by default -- see its docstring for why this is required, not
     optional) -> :func:`generate_irregular_scanning_path` ->
-    :func:`filter_scanning_path`, optionally followed by
-    :func:`determine_return_side` + :func:`close_scanning_path`.
+    :func:`filter_scanning_path` -> :func:`patch_uncovered_gaps` (on by
+    default -- see its docstring for why this is required, not optional),
+    optionally followed by :func:`determine_return_side` +
+    :func:`close_scanning_path`.
 
     Parameters
     ----------
@@ -1933,6 +2069,19 @@ def build_irregular_boundary_path(
     min_coverage_fraction, subset_polygons : forwarded to
                        :func:`filter_scanning_path`, same contract as
                        :func:`build_boundary_path`
+    guarantee_coverage : apply :func:`patch_uncovered_gaps` against the
+                       effective tissue (``boundary_polygon`` minus
+                       ``hole_polygons``, intersected with
+                       ``subset_polygons`` when given) after filtering
+                       (default ``True``) -- see that function's docstring
+                       for why this matters. Only applied when
+                       ``min_coverage_fraction == 0.0``: a caller who set
+                       ``min_coverage_fraction > 0`` is deliberately opting
+                       into dropping real low-coverage tissue (see
+                       :func:`filter_scanning_path`'s own docstring), and
+                       patching would silently undo that choice.
+    coverage_eps_um2 : forwarded to :func:`patch_uncovered_gaps` as
+                       ``eps_um2``.
 
     Returns
     -------
@@ -1953,6 +2102,13 @@ def build_irregular_boundary_path(
     filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
                                      min_coverage_fraction=min_coverage_fraction,
                                      subset_polygons=subset_polygons)
+    if guarantee_coverage and min_coverage_fraction == 0.0 and len(filtered) > 0:
+        effective_tissue = (boundary_polygon.difference(unary_union(hole_polygons))
+                             if hole_polygons else boundary_polygon)
+        if subset_polygons:
+            effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
+        filtered, _ = patch_uncovered_gaps(filtered, effective_tissue, step_size, fov_size_um,
+                                            eps_um2=coverage_eps_um2)
     if return_side is not None and len(filtered) > 1:
         if return_side == "auto":
             return_side, _ = determine_return_side(filtered, fixed_axis, step_size)
@@ -1981,6 +2137,8 @@ def optimize_irregular_grid(
     bad_overlap_frac:  float         = 0.3,
     min_coverage_fraction: float     = 0.0,
     subset_polygons:  Optional[List[Polygon]] = None,
+    guarantee_coverage: bool         = True,
+    coverage_eps_um2: float          = 1.0,
 ) -> IrregularGridOffsetResult:
     """
     Search the fixed axis's lattice phase (offset within one *step_size*
@@ -2017,6 +2175,7 @@ def optimize_irregular_grid(
             return_side=return_side, apply_overlap_fix=apply_overlap_fix,
             bad_overlap_frac=bad_overlap_frac, min_coverage_fraction=min_coverage_fraction,
             subset_polygons=subset_polygons,
+            guarantee_coverage=guarantee_coverage, coverage_eps_um2=coverage_eps_um2,
         )
         n_fovs_per_offset.append((float(off), len(coords)))
         if best_n is None or len(coords) < best_n:
@@ -2134,4 +2293,140 @@ def find_fully_redundant_fovs(
         detected=detected, removed=removed, kept_ids=kept_ids,
         kept_coords=kept_coords, n_passes=n_passes,
         uncovered_area_um2=uncovered_area_um2,
+    )
+
+
+# ── Single-call FOV path builder ────────────────────────────────────────────────
+
+@dataclass
+class ReducedFOVPathResult:
+    """Result of :func:`build_reduced_fov_path`."""
+    coords:                  np.ndarray          # (M, 2) -- final path; redundant FOVs already dropped
+                                                  # unless remove_redundant_fovs=False, then == the raw grid
+    n_fovs_before_redundant: int                 # grid size before redundant-FOV removal
+    redundant:               RedundantFOVResult  # full find_fully_redundant_fovs() detail -- always
+                                                  # computed, even when remove_redundant_fovs=False
+
+
+def build_reduced_fov_path(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    irregular_grid:   bool             = False,
+    optimize_offset:  bool             = False,
+    direction:        str              = "vertical",
+    fixed_axis:       str              = "y",
+    return_side:      Optional[str]    = None,
+    n_samples:        int              = 9,
+    min_coverage_fraction: float       = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
+    eps_um2:          float            = 1.0,
+    remove_redundant_fovs: bool        = True,
+) -> ReducedFOVPathResult:
+    """
+    Build one boundary's final FOV path with a single call.
+
+    Wraps the grid-building step (:func:`build_boundary_path` /
+    :func:`build_boundary_path_optimized` / :func:`build_irregular_boundary_path` /
+    :func:`optimize_irregular_grid`, picked by *irregular_grid* x
+    *optimize_offset*) followed by :func:`find_fully_redundant_fovs`
+    (redundant-FOV removal -- drop a FOV only when every bit of tissue it
+    touches is already covered by some other FOV, i.e. its exclusive
+    overlap with every OTHER FOV's own square subtracted out is empty --
+    see that function's own docstring for the underlying rule and
+    `notebooks/tests/decrease_fov_number/04_find_fully_redundant_fovs.ipynb`
+    for the investigation this was validated against).
+
+    ``find_fully_redundant_fovs`` itself always runs (its own detection is
+    cheap and its ``uncovered_area_um2`` is a useful coverage check either
+    way), but whether its removal is actually APPLIED to the returned
+    ``coords`` is controlled by *remove_redundant_fovs* -- default ``True``
+    for backward compatibility (this function originally applied it
+    unconditionally), but real, independent comparisons against
+    *optimize_offset* need it off: with removal always on, a config that
+    genuinely reduces the raw grid (e.g. ``optimize_offset=True``) can look
+    no better, or even worse, than one that doesn't, simply because the two
+    methods draw from the same pool of "wasted" tip/corner FOVs rather than
+    adding independently (see
+    `notebooks/tests/decrease_fov_number/05_combine_offset_and_redundant_
+    removal.ipynb`) -- confounding, not informative, unless the caller can
+    also see each method's effect on its own.
+
+    Parameters
+    ----------
+    boundary_polygon, hole_polygons, step_size, fov_size_um : as in
+        :func:`build_boundary_path`
+    irregular_grid   : ``False`` (default) builds a single regular lattice
+                       (:func:`build_boundary_path`); ``True`` builds a
+                       single-axis-adaptive grid (:func:`build_irregular_boundary_path`)
+                       -- see that section's module-level comment for the tradeoff.
+    optimize_offset  : ``False`` (default) uses the grid's natural (centred)
+                       phase; ``True`` additionally searches the grid's phase
+                       for the one needing fewest FOVs
+                       (:func:`optimize_grid_offset`/:func:`optimize_irregular_grid`,
+                       picked to match *irregular_grid*).
+    direction        : boustrophedon direction -- only used when
+                       ``irregular_grid=False``.
+    fixed_axis       : ``"y"`` or ``"x"`` -- only used when ``irregular_grid=True``
+                       (see :func:`build_irregular_bands`'s docstring).
+    return_side      : forwarded to the picked path builder; ``None``
+                       (default) keeps the raw snake order. Only reorders
+                       the path (see :func:`close_scanning_path`), so it
+                       never affects the final FOV count.
+    n_samples        : candidate offsets evaluated -- only used when
+                       ``optimize_offset=True``.
+    min_coverage_fraction, subset_polygons : forwarded to the picked path
+                       builder, same contract as :func:`build_boundary_path`.
+    eps_um2          : forwarded to :func:`find_fully_redundant_fovs`.
+    remove_redundant_fovs : ``True`` (default) actually drops the FOVs
+                       ``find_fully_redundant_fovs`` finds safe to drop;
+                       ``False`` still runs the detection (so
+                       ``result.redundant`` stays informative -- what
+                       WOULD be dropped, and whether the grid is fully
+                       covered either way) but returns the full,
+                       un-reduced grid as ``coords``.
+
+    Returns
+    -------
+    :class:`ReducedFOVPathResult` -- ``coords`` is the un-reduced grid
+    itself when ``remove_redundant_fovs=False``.
+    """
+    if irregular_grid:
+        if optimize_offset:
+            opt  = optimize_irregular_grid(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                fixed_axis=fixed_axis, n_samples=n_samples,
+                return_side=return_side, min_coverage_fraction=min_coverage_fraction,
+                subset_polygons=subset_polygons,
+            )
+            path = opt.coords
+        else:
+            path = build_irregular_boundary_path(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                fixed_axis=fixed_axis, return_side=return_side,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+    else:
+        if optimize_offset:
+            path = build_boundary_path_optimized(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                direction=direction, return_side=return_side, n_samples=n_samples,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+        else:
+            path = build_boundary_path(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                direction=direction, return_side=return_side,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+
+    effective_tissue = boundary_polygon.difference(unary_union(hole_polygons)) if hole_polygons else boundary_polygon
+    if subset_polygons:
+        effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
+
+    redundant = find_fully_redundant_fovs(path, effective_tissue, fov_size_um, eps_um2=eps_um2)
+    coords = redundant.kept_coords if remove_redundant_fovs else np.asarray(path, dtype=float)
+    return ReducedFOVPathResult(
+        coords=coords, n_fovs_before_redundant=len(path), redundant=redundant,
     )
