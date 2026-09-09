@@ -61,7 +61,7 @@ except `multi_z`: `tumor_epi`, `tumor_disk`, `lineage_tracing_merfish`,
 `lineage_tracing_lineage`. What used to differ between per-pipeline notebook
 copies (microscope, imaging recipe, fluidics, codebook/task menu or fishtank
 targets) now lives entirely in that pipeline's own
-`data/pipelines/<id>/pipeline.yaml` (`acquisition/pipeline_config.py`); every
+`data/pipelines/<id>_pipeline.yaml` (`acquisition/pipeline_config.py`); every
 notebook's second cell sets `PIPELINE_ID` and loads it into
 `PIPELINE_CONFIG`. Steps 05/07 have two files each (`analysis_backend:
 merlin` vs `fishtank`) living side by side — `pipeline_export.py` copies only
@@ -114,7 +114,7 @@ src/MERci/
     fishtank_config.py     fishtank input/config-file generation (lineage_tracing_lineage only)
     display.py             print_frame_table, display_xml
     cluster_submit.py      sbatch script generation for cluster-side QC analysis
-    pipeline_config.py     PipelineConfig/MerlinConfig/FishtankConfig -- loads data/pipelines/<id>/pipeline.yaml
+    pipeline_config.py     PipelineConfig/MerlinConfig/FishtankConfig -- loads data/pipelines/<id>_pipeline.yaml
     pipeline_export.py     export one pipeline's notebooks to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   analysis/
     fov.py                 per-FOV thumbnails/stats/histograms

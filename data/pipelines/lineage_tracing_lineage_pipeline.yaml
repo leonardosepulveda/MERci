@@ -17,7 +17,7 @@ objective: "60X"
 
 imaging:
   file_type: ".zarr"
-  exposure_time: 0.25   # seconds
+  exposure_time: 0.15   # seconds
   # Per-channel laser power is NOT set here -- it's locked to the microscope
   # choice above, not an independent pipeline dial. See
   # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
@@ -25,10 +25,10 @@ imaging:
   # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
   cells_round:
     z_min: 0.5
-    z_max: 100
+    z_max: 50
     z_step: 0.5
     bead_seq: [488]
-    color_seq: [405, 488]
+    color_seq: [405, 560]
     end_seq: [488]
     scan_mode: interleaved
     z_return_mode: progressive
@@ -37,16 +37,16 @@ imaging:
   # z-stack recipe for the "bits" round (lineage-barcode imaging rounds).
   bits_round:
     z_min: 0.5
-    z_max: 100
+    z_max: 50
     z_step: 0.5
     bead_seq: [488]
-    color_seq: [650, 560, 488]
+    color_seq: [650, 560]
     end_seq: [488]
     scan_mode: interleaved
     z_return_mode: progressive
     return_step: 5
 
-  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
+  focus_test_z: 3       # single z position (um above bead_z) for the focus-test sequence
   transit_n_blank: 2      # blank frames per transit FOV
 
 # (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding

@@ -86,7 +86,7 @@ def describe_pipelines(merci_dir: Path) -> Dict[str, PipelineInfo]:
     notebooks_dir = merci_dir / "notebooks"
     out = {}
     for pid, src in PIPELINES.items():
-        yaml_path = merci_dir / "data" / "pipelines" / pid / "pipeline.yaml"
+        yaml_path = merci_dir / "data" / "pipelines" / f"{pid}_pipeline.yaml"
         if yaml_path.exists():
             description = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))["label"]
         else:
@@ -129,25 +129,33 @@ def _rewrite_merci_dir_line(notebook: dict) -> bool:
 # Only the MERlin-based pipelines' before_imaging notebooks load a
 # pipeline.yaml (see PIPELINES/pipeline_config.py) -- a miss here is not an
 # error, just a notebook (or whole pipeline) that doesn't use one.
+#
+# Also folds in the preceding `PIPELINE_ID = "..."` line: once exported, the
+# fixed sibling-pipeline.yaml path below no longer needs PIPELINE_ID to find
+# the file, so instead of leaving that hand-typed literal to go stale, derive
+# it from the loaded config's own `id:` field.
 
 _PIPELINE_CONFIG_RE = re.compile(
+    r'PIPELINE_ID\s*=\s*"[^"]*"\s*#[^\n]*\n'
     r'PIPELINE_CONFIG(\s*)=(\s*)load_pipeline_config\('
-    r'MERCI_DIR\s*/\s*"data"\s*/\s*"pipelines"\s*/\s*PIPELINE_ID\s*/\s*"pipeline\.yaml"'
+    r'MERCI_DIR\s*/\s*"data"\s*/\s*"pipelines"\s*/\s*f"\{PIPELINE_ID\}_pipeline\.yaml"'
     r'\)'
 )
 _PIPELINE_CONFIG_REPLACEMENT = (
     'PIPELINE_CONFIG = load_pipeline_config('
     'Path(os.getcwd()).parent / "pipeline.yaml", data_dir=MERCI_DIR / "data")  '
-    "# edit pipeline.yaml here, not in MERci/"
+    "# edit pipeline.yaml here, not in MERci/\n"
+    'PIPELINE_ID     = PIPELINE_CONFIG.id  '
+    "# derived from pipeline.yaml's own `id:` field, not hand-typed"
 )
 
 
 def _rewrite_pipeline_config_line(notebook: dict) -> bool:
-    """Rewrite `PIPELINE_CONFIG = load_pipeline_config(MERCI_DIR / ...)` to
-    load the pipeline.yaml exported alongside this notebooks/ folder instead
-    (still passing MERCI_DIR/data as data_dir, for the shared power table),
-    in every code cell of `notebook` (in place). Returns whether a match was
-    found."""
+    """Rewrite `PIPELINE_ID = "..."` + `PIPELINE_CONFIG = load_pipeline_config(
+    MERCI_DIR / ...)` to load the pipeline.yaml exported alongside this
+    notebooks/ folder instead (still passing MERCI_DIR/data as data_dir, for
+    the shared power table) and derive PIPELINE_ID from it, in every code
+    cell of `notebook` (in place). Returns whether a match was found."""
     found = False
     for cell in notebook.get("cells", []):
         if cell.get("cell_type") != "code":
@@ -252,8 +260,7 @@ def _copy_pipeline_config(merci_dir: Path, pipeline_id: str, out_dir: Path) -> b
     one was copied."""
     dst_yaml = out_dir / "pipeline.yaml"
     dst_csv  = out_dir / "round_bit_color.csv"
-    src_dir  = merci_dir / "data" / "pipelines" / pipeline_id
-    src_yaml = src_dir / "pipeline.yaml"
+    src_yaml = merci_dir / "data" / "pipelines" / f"{pipeline_id}_pipeline.yaml"
     if not src_yaml.exists():
         dst_yaml.unlink(missing_ok=True)
         dst_csv.unlink(missing_ok=True)
@@ -313,7 +320,7 @@ def export_pipeline_notebooks(
     # copy only the pair matching this pipeline's analysis_backend.
     exclude = set()
     if has_pipeline_yaml:
-        src_yaml_path = merci_dir / "data" / "pipelines" / pipeline_id / "pipeline.yaml"
+        src_yaml_path = merci_dir / "data" / "pipelines" / f"{pipeline_id}_pipeline.yaml"
         backend = yaml.safe_load(src_yaml_path.read_text(encoding="utf-8"))["analysis_backend"]
         exclude = _FISHTANK_ONLY_NAMES if backend == "merlin" else _MERLIN_ONLY_NAMES
 
