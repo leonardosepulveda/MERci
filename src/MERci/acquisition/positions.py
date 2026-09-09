@@ -135,12 +135,23 @@ def create_grid_positions(
     cx = (xmin + xmax) / 2.0 + offset[0]
     cy = (ymin + ymax) / 2.0 + offset[1]
 
+    # A shifted centre can sit closer to one bbox edge than the other --
+    # sizing each axis's point count from the ORIGINAL (pre-shift) span
+    # alone (as this used to) can then leave the outermost point short of
+    # the far edge, a real gap confirmed on a real boundary (see
+    # optimize_grid_offset's own docstring). Fixed by sizing each axis
+    # from the LARGER of its two post-shift half-spans (radius) instead --
+    # exactly reduces to the original span when offset=(0, 0) (both halves
+    # equal span/2), so this is a no-op at the default offset.
+    rx = max(cx - xmin, xmax - cx)
+    ry = max(cy - ymin, ymax - cy)
+
     if direction == "vertical":
-        xs = _spaced_coords(cx, xmin, xmax, step_size, even=True)
-        ys = _spaced_coords(cy, ymin, ymax, step_size, even=False)
+        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=True)
+        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=False)
     elif direction == "horizontal":
-        xs = _spaced_coords(cx, xmin, xmax, step_size, even=False)
-        ys = _spaced_coords(cy, ymin, ymax, step_size, even=True)
+        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=False)
+        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=True)
     else:
         raise ValueError("direction must be 'vertical' or 'horizontal'")
 
@@ -1934,21 +1945,18 @@ def patch_uncovered_gaps(
 
     A near-instant no-op whenever *coords* already fully covers
     *tissue_polygon*. Only :func:`build_irregular_boundary_path` calls this
-    -- :func:`build_boundary_path` (``offset=(0, 0)``) guarantees full
-    coverage by construction (the grid is always centred exactly on the
-    boundary bbox's own midpoint, so the margin on every side is
-    non-negative by :func:`_spaced_coords`'s own ``ceil``-based count).
-    **:func:`build_boundary_path_optimized`/:func:`optimize_grid_offset`
-    do NOT share that guarantee**: a large searched offset combined with a
-    boundary whose bbox span happens to sit just past an exact multiple of
-    *step_size* (little/no slack to absorb the shift) can leave a real gap
-    at the bbox's extreme edge -- confirmed directly (175 um² uncovered,
-    ST2 40X objective, LT066_sample_01/merfish boundary -- see
-    `notebooks/tests/create_positions/04_sweep_reduced_fov_path_combinations_40x.ipynb`).
-    Not yet patched here (`build_reduced_fov_path` catches it downstream
-    via `find_fully_redundant_fovs`'s own `uncovered_area_um2` check, but
-    that only reports it, same as this function would) -- a real, open
-    follow-up.
+    -- the regular grid (:func:`build_boundary_path`/
+    :func:`build_boundary_path_optimized`) guarantees full coverage by
+    construction: :func:`create_grid_positions` sizes each axis's point
+    count from the LARGER of its two post-shift half-spans (not the
+    original, pre-shift span alone), so a searched offset can never leave
+    the outermost point short of the far bbox edge -- fixed after a real
+    gap was found this way (175 um² uncovered, ST2 40X objective,
+    LT066_sample_01/merfish boundary -- see
+    `notebooks/tests/create_positions/04_sweep_reduced_fov_path_combinations_40x.ipynb`
+    for the original finding and
+    `notebooks/tests/create_positions/05_guarantee_offset_grid_coverage.ipynb`
+    for the fix's own diagnosis and validation).
 
     Parameters
     ----------
@@ -2293,9 +2301,11 @@ def find_fully_redundant_fovs(
 @dataclass
 class ReducedFOVPathResult:
     """Result of :func:`build_reduced_fov_path`."""
-    coords:                  np.ndarray          # (M, 2) -- final path, redundant FOVs already dropped
+    coords:                  np.ndarray          # (M, 2) -- final path; redundant FOVs already dropped
+                                                  # unless remove_redundant_fovs=False, then == the raw grid
     n_fovs_before_redundant: int                 # grid size before redundant-FOV removal
-    redundant:               RedundantFOVResult  # full find_fully_redundant_fovs() detail
+    redundant:               RedundantFOVResult  # full find_fully_redundant_fovs() detail -- always
+                                                  # computed, even when remove_redundant_fovs=False
 
 
 def build_reduced_fov_path(
@@ -2312,6 +2322,7 @@ def build_reduced_fov_path(
     min_coverage_fraction: float       = 0.0,
     subset_polygons:  Optional[List[Polygon]] = None,
     eps_um2:          float            = 1.0,
+    remove_redundant_fovs: bool        = True,
 ) -> ReducedFOVPathResult:
     """
     Build one boundary's final FOV path with a single call.
@@ -2319,14 +2330,28 @@ def build_reduced_fov_path(
     Wraps the grid-building step (:func:`build_boundary_path` /
     :func:`build_boundary_path_optimized` / :func:`build_irregular_boundary_path` /
     :func:`optimize_irregular_grid`, picked by *irregular_grid* x
-    *optimize_offset*) followed unconditionally by
-    :func:`find_fully_redundant_fovs` -- redundant-FOV removal (drop a FOV
-    only when every bit of tissue it touches is already covered by some
-    other FOV, i.e. its exclusive overlap with every OTHER FOV's own square
-    subtracted out is empty) is always applied, not a parameter to
-    choose -- see that function's own docstring for the underlying rule and
+    *optimize_offset*) followed by :func:`find_fully_redundant_fovs`
+    (redundant-FOV removal -- drop a FOV only when every bit of tissue it
+    touches is already covered by some other FOV, i.e. its exclusive
+    overlap with every OTHER FOV's own square subtracted out is empty --
+    see that function's own docstring for the underlying rule and
     `notebooks/tests/decrease_fov_number/04_find_fully_redundant_fovs.ipynb`
-    for the investigation this was validated against.
+    for the investigation this was validated against).
+
+    ``find_fully_redundant_fovs`` itself always runs (its own detection is
+    cheap and its ``uncovered_area_um2`` is a useful coverage check either
+    way), but whether its removal is actually APPLIED to the returned
+    ``coords`` is controlled by *remove_redundant_fovs* -- default ``True``
+    for backward compatibility (this function originally applied it
+    unconditionally), but real, independent comparisons against
+    *optimize_offset* need it off: with removal always on, a config that
+    genuinely reduces the raw grid (e.g. ``optimize_offset=True``) can look
+    no better, or even worse, than one that doesn't, simply because the two
+    methods draw from the same pool of "wasted" tip/corner FOVs rather than
+    adding independently (see
+    `notebooks/tests/decrease_fov_number/05_combine_offset_and_redundant_
+    removal.ipynb`) -- confounding, not informative, unless the caller can
+    also see each method's effect on its own.
 
     Parameters
     ----------
@@ -2354,10 +2379,18 @@ def build_reduced_fov_path(
     min_coverage_fraction, subset_polygons : forwarded to the picked path
                        builder, same contract as :func:`build_boundary_path`.
     eps_um2          : forwarded to :func:`find_fully_redundant_fovs`.
+    remove_redundant_fovs : ``True`` (default) actually drops the FOVs
+                       ``find_fully_redundant_fovs`` finds safe to drop;
+                       ``False`` still runs the detection (so
+                       ``result.redundant`` stays informative -- what
+                       WOULD be dropped, and whether the grid is fully
+                       covered either way) but returns the full,
+                       un-reduced grid as ``coords``.
 
     Returns
     -------
-    :class:`ReducedFOVPathResult`
+    :class:`ReducedFOVPathResult` -- ``coords`` is the un-reduced grid
+    itself when ``remove_redundant_fovs=False``.
     """
     if irregular_grid:
         if optimize_offset:
@@ -2393,6 +2426,7 @@ def build_reduced_fov_path(
         effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
 
     redundant = find_fully_redundant_fovs(path, effective_tissue, fov_size_um, eps_um2=eps_um2)
+    coords = redundant.kept_coords if remove_redundant_fovs else np.asarray(path, dtype=float)
     return ReducedFOVPathResult(
-        coords=redundant.kept_coords, n_fovs_before_redundant=len(path), redundant=redundant,
+        coords=coords, n_fovs_before_redundant=len(path), redundant=redundant,
     )
