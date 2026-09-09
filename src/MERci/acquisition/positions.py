@@ -2135,3 +2135,113 @@ def find_fully_redundant_fovs(
         kept_coords=kept_coords, n_passes=n_passes,
         uncovered_area_um2=uncovered_area_um2,
     )
+
+
+# ── Single-call FOV path builder ────────────────────────────────────────────────
+
+@dataclass
+class ReducedFOVPathResult:
+    """Result of :func:`build_reduced_fov_path`."""
+    coords:                  np.ndarray          # (M, 2) -- final path, redundant FOVs already dropped
+    n_fovs_before_redundant: int                 # grid size before redundant-FOV removal
+    redundant:               RedundantFOVResult  # full find_fully_redundant_fovs() detail
+
+
+def build_reduced_fov_path(
+    boundary_polygon: Polygon,
+    hole_polygons:    List[Polygon],
+    step_size:        float,
+    fov_size_um:      float,
+    irregular_grid:   bool             = False,
+    optimize_offset:  bool             = False,
+    direction:        str              = "vertical",
+    fixed_axis:       str              = "y",
+    return_side:      Optional[str]    = None,
+    n_samples:        int              = 9,
+    min_coverage_fraction: float       = 0.0,
+    subset_polygons:  Optional[List[Polygon]] = None,
+    eps_um2:          float            = 1.0,
+) -> ReducedFOVPathResult:
+    """
+    Build one boundary's final FOV path with a single call.
+
+    Wraps the grid-building step (:func:`build_boundary_path` /
+    :func:`build_boundary_path_optimized` / :func:`build_irregular_boundary_path` /
+    :func:`optimize_irregular_grid`, picked by *irregular_grid* x
+    *optimize_offset*) followed unconditionally by
+    :func:`find_fully_redundant_fovs` -- redundant-FOV removal (drop a FOV
+    only when every bit of tissue it touches is already covered by some
+    other FOV, i.e. its exclusive overlap with every OTHER FOV's own square
+    subtracted out is empty) is always applied, not a parameter to
+    choose -- see that function's own docstring for the underlying rule and
+    `notebooks/tests/decrease_fov_number/04_find_fully_redundant_fovs.ipynb`
+    for the investigation this was validated against.
+
+    Parameters
+    ----------
+    boundary_polygon, hole_polygons, step_size, fov_size_um : as in
+        :func:`build_boundary_path`
+    irregular_grid   : ``False`` (default) builds a single regular lattice
+                       (:func:`build_boundary_path`); ``True`` builds a
+                       single-axis-adaptive grid (:func:`build_irregular_boundary_path`)
+                       -- see that section's module-level comment for the tradeoff.
+    optimize_offset  : ``False`` (default) uses the grid's natural (centred)
+                       phase; ``True`` additionally searches the grid's phase
+                       for the one needing fewest FOVs
+                       (:func:`optimize_grid_offset`/:func:`optimize_irregular_grid`,
+                       picked to match *irregular_grid*).
+    direction        : boustrophedon direction -- only used when
+                       ``irregular_grid=False``.
+    fixed_axis       : ``"y"`` or ``"x"`` -- only used when ``irregular_grid=True``
+                       (see :func:`build_irregular_bands`'s docstring).
+    return_side      : forwarded to the picked path builder; ``None``
+                       (default) keeps the raw snake order. Only reorders
+                       the path (see :func:`close_scanning_path`), so it
+                       never affects the final FOV count.
+    n_samples        : candidate offsets evaluated -- only used when
+                       ``optimize_offset=True``.
+    min_coverage_fraction, subset_polygons : forwarded to the picked path
+                       builder, same contract as :func:`build_boundary_path`.
+    eps_um2          : forwarded to :func:`find_fully_redundant_fovs`.
+
+    Returns
+    -------
+    :class:`ReducedFOVPathResult`
+    """
+    if irregular_grid:
+        if optimize_offset:
+            opt  = optimize_irregular_grid(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                fixed_axis=fixed_axis, n_samples=n_samples,
+                return_side=return_side, min_coverage_fraction=min_coverage_fraction,
+                subset_polygons=subset_polygons,
+            )
+            path = opt.coords
+        else:
+            path = build_irregular_boundary_path(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                fixed_axis=fixed_axis, return_side=return_side,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+    else:
+        if optimize_offset:
+            path = build_boundary_path_optimized(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                direction=direction, return_side=return_side, n_samples=n_samples,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+        else:
+            path = build_boundary_path(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                direction=direction, return_side=return_side,
+                min_coverage_fraction=min_coverage_fraction, subset_polygons=subset_polygons,
+            )
+
+    effective_tissue = boundary_polygon.difference(unary_union(hole_polygons)) if hole_polygons else boundary_polygon
+    if subset_polygons:
+        effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
+
+    redundant = find_fully_redundant_fovs(path, effective_tissue, fov_size_um, eps_um2=eps_um2)
+    return ReducedFOVPathResult(
+        coords=redundant.kept_coords, n_fovs_before_redundant=len(path), redundant=redundant,
+    )
