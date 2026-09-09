@@ -568,7 +568,13 @@ def create_dave_config(
     "Hyb 01 Fluidics" precedes "Hyb 01 Imaging").  The hyb-protocol number
     tracks that same bit/hyb index (the count of bits rounds reached so far),
     not the imaging-round number, so a leading cells round does not shift the
-    Kilroy protocol names or the hyb numbering.
+    Kilroy protocol names or the hyb numbering. Past hyb index 24 (see
+    ``MAX_KILROY_HYB``), the Kilroy protocol actually called wraps back to
+    "Hybridize 2"/"Hybridize Adaptors 2" (25 -> 2, 26 -> 3, ...) -- the
+    physical fluidics ports only go up to 24, so a longer protocol reuses an
+    already-used port, reloaded with fresh reagent. Only the Kilroy protocol
+    name wraps; the loop label and data folder for that round still use its
+    own true hyb index.
     The last imaging round has no trailing fluidics unless
     ``include_final_cleave=True``.
 
@@ -732,6 +738,23 @@ def create_dave_config(
             return round_id - first_bits_round + 1
         return round_id
 
+    # The Kilroy configs in data/configs/kilroy/ only define "Hybridize"/
+    # "Hybridize Adaptors" protocols for hyb indices 1-24 (one physical
+    # fluidics port per protocol) -- a >24-round protocol (e.g. the 25-round
+    # lineage_tracing_lineage pipeline) needs the operator to physically
+    # reload an already-used port with fresh reagent for the extra round(s),
+    # so the KILROY PROTOCOL for hyb index 25 onward reuses port 2's name
+    # (26 -> port 3, ...), never port 1. This only changes which protocol
+    # gets called in _add_fluidics below -- the loop label and data folder
+    # for that round still use the true hyb_idx from _hyb_idx above, so
+    # nothing collides with hyb 2's own folder/label.
+    MAX_KILROY_HYB = 24
+
+    def _kilroy_hyb_idx(hyb_idx: int) -> int:
+        if hyb_idx <= MAX_KILROY_HYB:
+            return hyb_idx
+        return hyb_idx - (MAX_KILROY_HYB - 1)
+
     def _imaging_label(round_id: int) -> str:
         """Base loop label for imaging round *round_id*: the fixed \"Cells
         Imaging\" for the (single) non-bits round, else \"Hyb NN Imaging\"."""
@@ -857,10 +880,11 @@ def create_dave_config(
             elif resolver is not None:
                 # Names taken from the Kilroy config (see kilroy_config).
                 cleave = [] if skip_cleave else [resolver.cleave(adaptors=use_adaptors)]
+                kilroy_hyb_idx = _kilroy_hyb_idx(hyb_idx)
                 if use_adaptors:
-                    steps = [resolver.hybridize(hyb_idx, adaptors=True), resolver.readouts()]
+                    steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=True), resolver.readouts()]
                 else:
-                    steps = [resolver.hybridize(hyb_idx, adaptors=False)]
+                    steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=False)]
                 # Some Kilroy protocols (e.g. "Hybridize N") already end by
                 # setting/flowing the imaging buffer themselves -- appending the
                 # standalone image-buffer protocol on top would flow it twice.
