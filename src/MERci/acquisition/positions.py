@@ -1933,11 +1933,22 @@ def patch_uncovered_gaps(
     future change to the upstream construction reopens one.
 
     A near-instant no-op whenever *coords* already fully covers
-    *tissue_polygon* -- the regular grid (:func:`build_boundary_path`/
-    :func:`build_boundary_path_optimized`) already guarantees this by
-    construction (verified directly: 0 combinations tested left any real
-    gap), so it isn't called there; only :func:`build_irregular_boundary_path`
-    calls it.
+    *tissue_polygon*. Only :func:`build_irregular_boundary_path` calls this
+    -- :func:`build_boundary_path` (``offset=(0, 0)``) guarantees full
+    coverage by construction (the grid is always centred exactly on the
+    boundary bbox's own midpoint, so the margin on every side is
+    non-negative by :func:`_spaced_coords`'s own ``ceil``-based count).
+    **:func:`build_boundary_path_optimized`/:func:`optimize_grid_offset`
+    do NOT share that guarantee**: a large searched offset combined with a
+    boundary whose bbox span happens to sit just past an exact multiple of
+    *step_size* (little/no slack to absorb the shift) can leave a real gap
+    at the bbox's extreme edge -- confirmed directly (175 um² uncovered,
+    ST2 40X objective, LT066_sample_01/merfish boundary -- see
+    `notebooks/tests/create_positions/04_sweep_reduced_fov_path_combinations_40x.ipynb`).
+    Not yet patched here (`build_reduced_fov_path` catches it downstream
+    via `find_fully_redundant_fovs`'s own `uncovered_area_um2` check, but
+    that only reports it, same as this function would) -- a real, open
+    follow-up.
 
     Parameters
     ----------
