@@ -158,3 +158,31 @@ notebook copies rewired to the local clone/data, and figures saved as
 `{prefix}_{description}.{ext}` (`{prefix}` = the notebook's own leading
 number, e.g. `01`). See that command's own definition for the full
 contract.
+
+## 8. Default to inline plotting; opt into interactive explicitly
+
+Start with `%matplotlib inline`, and leave a commented line right below it
+for switching to interactive plotting when a specific notebook/session
+actually needs it:
+
+```python
+%matplotlib inline
+# %matplotlib widget  # uncomment for interactive pan/zoom (ipympl) -- roughly
+#                       doubles output size vs. inline: the widget's static-
+#                       html fallback embeds a second copy of each rendered
+#                       image alongside the PNG output
+```
+
+## 9. Clear heavy outputs before committing
+
+Before committing a notebook whose outputs are large/plot-heavy (the usual
+case for `notebooks/tests/` exploration notebooks with embedded PNGs),
+strip them rather than letting every re-save commit a full new multi-MB
+blob to git history:
+
+```bash
+jupyter nbconvert --clear-output --inplace path/to/notebook.ipynb
+```
+
+This never loses a figure that actually mattered -- real figures already
+get saved to `analysis/figures/` separately per guideline 6.
