@@ -393,7 +393,7 @@ def segment_mosaic_tissue(
     min_tissue_area_um2:  float = 1000.0,
     min_hole_area_um2:    float = 500.0,
     min_island_area_um2:  float = 1000.0,
-    simplify_tol_um:      float = 15.0,
+    boundary_max_deviation_um: float = 15.0,
     near_fragment_max_distance_um: float = 0.0,
     min_near_fragment_area_um2:    float = 0.0,
 ) -> MosaicSegmentation:
@@ -434,8 +434,9 @@ def segment_mosaic_tissue(
        ``min_near_fragment_area_um2`` in its own area, in which case it is
        kept anyway (see below). Drop holes below ``min_hole_area_um2``,
        drop islands below ``min_island_area_um2``, and simplify each
-       polygon by ``simplify_tol_um`` (marching squares otherwise produces
-       one vertex per canvas pixel of perimeter).
+       polygon so no point on it deviates from the raw traced contour by
+       more than ``boundary_max_deviation_um`` (marching squares otherwise
+       produces one vertex per canvas pixel of perimeter).
 
     **Recovering small real tissue fragments near an already-kept piece**
     (``near_fragment_max_distance_um``, default ``0.0`` = disabled, exactly
@@ -471,7 +472,12 @@ def segment_mosaic_tissue(
         smaller than this (um^2) -- filters noise specks inside a hole from
         becoming spurious interior rings; a genuine tissue island is
         typically well above this.
-    simplify_tol_um : Shapely ``simplify`` tolerance, in microns.
+    boundary_max_deviation_um : maximum distance (um) any point on the
+        simplified polygon may deviate from the raw traced contour --
+        Shapely ``simplify``'s Douglas-Peucker tolerance. Not a fixed
+        output segment length: straight stretches collapse to few long
+        segments, curvy ones keep more/shorter ones, whatever it takes to
+        stay within this bound.
     near_fragment_max_distance_um : ``0.0`` (default) disables fragment
         recovery entirely. > 0 recovers small tissue components within this
         distance (um) of an already-kept piece -- see above.
@@ -583,11 +589,11 @@ def segment_mosaic_tissue(
     # is primary_ids | recovered_ids), so _contour_polygon's own area gate
     # would otherwise re-exclude every recovered sub-threshold fragment.
     tissue_polygons = [
-        p.simplify(simplify_tol_um) for lid in sorted(keep_tissue_ids)
+        p.simplify(boundary_max_deviation_um) for lid in sorted(keep_tissue_ids)
         if (p := _contour_polygon(tissue_labels, lid, 0)) is not None
     ]
     hole_polygons = [
-        p.simplify(simplify_tol_um) for lid in range(1, n_holes + 1)
+        p.simplify(boundary_max_deviation_um) for lid in range(1, n_holes + 1)
         if (p := _contour_polygon(hole_labels, lid, min_hole_area_px,
                                   min_interior_area_um2=min_island_area_um2)) is not None
     ]
