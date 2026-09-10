@@ -393,7 +393,7 @@ def segment_mosaic_tissue(
     min_tissue_area_um2:  float = 1000.0,
     min_hole_area_um2:    float = 500.0,
     min_island_area_um2:  float = 1000.0,
-    boundary_max_deviation_um: float = 15.0,
+    boundary_max_deviation_um: float = 1.0,
     near_fragment_max_distance_um: float = 0.0,
     min_near_fragment_area_um2:    float = 0.0,
 ) -> MosaicSegmentation:
