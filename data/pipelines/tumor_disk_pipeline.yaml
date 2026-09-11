@@ -79,8 +79,13 @@ fluidics:
 # bits 1/2 (RS0015/RS0083) crashed a real run (BC555_sample_05/disk,
 # 2026-08-29) with `SumSignal: ['H2AX'] not found among sequential channels
 # ['DAPI']`, because both immuno channels were silently reclassified as
-# barcode bits. 28/29 (RS0967/RS0994) sit right after tumor_epi's own
-# sequential range (17-27) and are not in any C3 codebook's bit_names.
+# barcode bits. 28/29 sit right after tumor_epi's own sequential range
+# (17-27) and are not in any C3 codebook's bit_names. The actual probes
+# physically hybridized at bits 28/29 are NDB-series adaptors (`NDB_865`
+# for yH2AX, `NDB_917` for CENPA, per data/ndb_adaptors.csv), not
+# RS-series readouts -- readouts.csv's rows 28/29 were originally filled
+# in with placeholder RS0967/RS0994 entries that were never actually
+# used; corrected 2026-09-11 (confirmed with the user).
 dataorganization:
   round_bit_color_csv: configs/round_bit_color_map/tumor_disk.csv
 
