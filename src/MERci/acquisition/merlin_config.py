@@ -31,6 +31,8 @@ resolve_sequential_codebook_filename — (lib_name, kind="sequential") -> its no
 load_sequential_gene_names       — {bit: gene_name} for lib_name's non-barcode bits
     of the given kind, from that companion file, with an optional per-experiment
     override merged in
+load_readout_name_overrides      — {bit: probe_name} per-experiment override for
+    readoutName (e.g. an NDB-series adaptor bit), no pipeline-level default
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
 load_microscope_orientation      — read a microscope's flip_horizontal/flip_vertical/
     transpose flags (MERlin's own defaults when absent, confirmed against
@@ -159,6 +161,32 @@ def load_sequential_gene_names(
                 gene_names[int(row["bit"])] = row["gene_name"]
 
     return gene_names
+
+
+def load_readout_name_overrides(experiment_override_path: Optional[Path] = None) -> Dict[int, str]:
+    """
+    ``{bit: probe_name}`` for bits whose ``readoutName`` must come from
+    somewhere other than ``data/readouts.csv``'s own ``Bit number`` ->
+    ``Probe name`` lookup -- e.g. a disk pipeline's immuno/adaptor-based
+    channel using an NDB-series adaptor (``data/ndb_adaptors.csv``) rather
+    than an RS-series readout. Unlike ``load_sequential_gene_names``, this
+    has no pipeline-level default: which physical adaptor was hybridized
+    for a given bit is purely a per-experiment wet-lab fact, so this is
+    override-only -- empty dict (no bits overridden) unless
+    *experiment_override_path* is given and exists, e.g.
+    ``metadata/readout_adaptors.csv`` with columns ``bit,probe_name``.
+
+    ``create_data_organization`` validates every returned name against
+    ``readouts.csv``/``ndb_adaptors.csv`` itself (via its own
+    ``readouts``/``adaptors`` parameters) -- this function does no
+    validation, just reads the file.
+    """
+    overrides: Dict[int, str] = {}
+    if experiment_override_path is not None and Path(experiment_override_path).exists():
+        with open(experiment_override_path, newline="") as fh:
+            for row in csv.DictReader(fh):
+                overrides[int(row["bit"])] = row["probe_name"]
+    return overrides
 
 
 def resolve_microscope_parameters_filename(microscope: str, objective: Optional[str] = None) -> str:
