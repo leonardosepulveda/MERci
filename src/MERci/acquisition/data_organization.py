@@ -27,6 +27,8 @@ def create_data_organization(
     include_dapi:      bool = True,
     dapi_bit_number:   int  = 47,
     sequential_gene_names: Optional[Dict[int, str]] = None,
+    readout_name_overrides: Optional[Dict[int, str]] = None,
+    adaptors:          Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Build the MERlin data-organization DataFrame.
@@ -35,7 +37,16 @@ def create_data_organization(
     ----------
     bits_frame_table  : frame table for bits rounds (from ``metadata/frame-table-*.csv``)
     cells_frame_table : frame table for the cells round
-    round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples
+    round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples.
+                        ``bit_number`` is only a row identifier here — MERlin's
+                        own ``DataOrganization`` never reads the ``bitNumber``
+                        column (confirmed directly against its source: barcode
+                        bit <-> data-channel matching goes entirely through
+                        ``readoutName`` string equality against the codebook's
+                        ``bit_names``). It doesn't need to be unused elsewhere
+                        in ``readouts.csv``/any codebook unless this bit's
+                        ``readoutName`` also comes from there (i.e. isn't in
+                        ``readout_name_overrides``).
     readouts          : readouts.csv DataFrame; must have columns
                         ``"Bit number"`` and ``"Probe name"`` (e.g. ``"RS0015"``).
                         ``readoutName`` is built from the bare probe name, not
@@ -56,6 +67,24 @@ def create_data_organization(
                         them by gene); any bit absent from the map (including
                         all bits when this is ``None``) keeps the default
                         ``bitNN`` channelName, unchanged from before.
+    readout_name_overrides : optional ``{bit_number: probe_name}`` map — bits
+                        present here get that literal string as their
+                        ``readoutName`` instead of the ``readouts.csv``
+                        bit-number lookup (e.g. an immuno channel physically
+                        hybridized with an NDB-series adaptor rather than an
+                        RS-series readout). Every override value must appear
+                        in ``readouts["Probe name"]`` or ``adaptors["Name"]``
+                        (see below) — this is a real-value check, not a
+                        formatting one, to catch a typo'd/unregistered probe
+                        name before it's written into a production config.
+    adaptors          : optional second probe-name catalog (e.g.
+                        ``data/ndb_adaptors.csv``, must have a ``"Name"``
+                        column) — consulted only to validate
+                        ``readout_name_overrides`` values that aren't in
+                        ``readouts.csv`` (e.g. NDB-series adaptors, which
+                        have no ``"Bit number"`` column of their own and so
+                        can't be looked up positionally the way RS-series
+                        readouts are).
 
     Returns
     -------
@@ -72,11 +101,31 @@ def create_data_organization(
         zip(readouts["Bit number"].astype(int), readouts["Probe name"].astype(str))
     )
 
+    if readout_name_overrides:
+        known_names = set(readouts["Probe name"].astype(str))
+        if adaptors is not None:
+            known_names |= set(adaptors["Name"].astype(str))
+        unknown = {bit: name for bit, name in readout_name_overrides.items()
+                   if name not in known_names}
+        if unknown:
+            raise ValueError(
+                f"readout_name_overrides has probe name(s) not found in "
+                f"readouts.csv{'/adaptors' if adaptors is not None else ''}: "
+                f"{unknown} -- check for a typo, or pass the right catalog "
+                f"as `adaptors`."
+            )
+
     rows: list[dict] = []
 
     for round_1idx, bit, color_nm in round_bit_color:
+        readout_name = (readout_name_overrides or {}).get(bit, readout_name_map.get(bit))
+        if readout_name is None:
+            raise KeyError(
+                f"No readout probe for bit {bit}: not in readouts.csv and no "
+                f"readout_name_overrides entry given for it."
+            )
         rows.append({
-            "readoutName":         readout_name_map[bit],
+            "readoutName":         readout_name,
             "channelName":         (sequential_gene_names or {}).get(bit, f"bit{bit:02d}"),
             "imageType":           bits_image_type,
             "imageRegExp":         bits_regexp,
