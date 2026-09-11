@@ -1233,6 +1233,7 @@ def build_merlin_analysis_parameters(
     overrides:                Optional[Dict[str, Dict[str, Any]]] = None,
     extra_tasks:              Optional[List[str]] = None,
     n_optimize_iterations:    Optional[int] = None,
+    skip_tasks:                Optional[Sequence[str]] = None,
 ) -> Path:
     """
     Build MERlin's ``analysis_tasks`` recipe from a recipe (explicit ordered
@@ -1263,6 +1264,24 @@ def build_merlin_analysis_parameters(
     n_optimize_iterations : overrides the recipe file's own value if given
         (mirrors ``MerlinAnalysisSpec.n_optimize_iterations``, e.g. sourced
         from ``experiment_info.yaml``'s ``extra.n_opt``).
+    skip_tasks  : optional atom names to leave out of the written
+        ``analysis_tasks`` list while still using them for every structural
+        cross-reference above (``warp_task``/``segment_task``/etc. params,
+        and the ``smfish_signal``/``sum_signal`` "has a segment atom"
+        checks) -- e.g. the segmentation-chain atoms
+        (``cellpose_segment_sam``/``clean_cell_boundaries``/
+        ``combine_cleaned_boundaries``/``refine_cell_databases``/
+        ``export_cell_metadata``), already produced under the same
+        ``analysis_name``s by a prior segmentation-only run
+        (``build_segmentation_only_recipe_tasks``). MERlin resolves a
+        referenced task by looking up its already-saved parameters on disk
+        (``merlin.core.dataset.load_analysis_task``), not by requiring it
+        be declared in *this* run's own tasks list, so downstream tasks
+        (e.g. ``partition_barcodes``) still resolve them correctly; leaving
+        them out here only avoids re-declaring them with this recipe's own
+        (different) ``warp_task``, which would otherwise trip MERlin's
+        ``AnalysisAlreadyExistsException`` guard as soon as this run's
+        Snakefile is generated.
 
     Returns
     -------
@@ -1273,6 +1292,7 @@ def build_merlin_analysis_parameters(
     n_opt = n_optimize_iterations if n_optimize_iterations is not None else recipe.get("n_optimize_iterations", 1)
     task_names = list(recipe.get("tasks", [])) + list(extra_tasks or [])
     overrides = overrides or {}
+    skip_tasks = set(skip_tasks or ())
     tasks_dir = Path(tasks_dir)
 
     if "smfish_signal" in task_names and not overrides.get("smfish_signal", {}).get("channel_names"):
@@ -1300,6 +1320,8 @@ def build_merlin_analysis_parameters(
 
     tasks = []
     for name in task_names:
+        if name in skip_tasks:
+            continue
         atom = _load_task_atom(name, tasks_dir)
 
         if name == "optimize_iteration":
@@ -1455,3 +1477,43 @@ def derive_segmentation_channels(
     params = {**atom.get("parameters", {}), **(overrides or {}).get(segment_atom, {})}
     channels = [params[key] for key in _SEGMENT_ATOM_CHANNEL_PARAMS[segment_atom] if params.get(key)]
     return channels or None
+
+
+def derive_reference_first_channel_order(
+    data_organization_path: Path, reference_channels: Sequence[str],
+) -> List[str]:
+    """
+    Read *data_organization_path*'s ``channelName`` column (one row per
+    data channel, in MERlin's data-channel-index order) and return every
+    channel name reordered so *reference_channels* come first (in the
+    order given), followed by every other channel in its original order.
+
+    Feed the result to the full pipeline's ``fiducial_correlation_warp``
+    atom as an explicit ``channels_to_process`` override
+    (``overrides={"fiducial_correlation_warp": {"channels_to_process":
+    ...}}``), with *reference_channels* set to the segmentation-only
+    atom's own channel(s) (``derive_segmentation_channels``'s return
+    value). MERlin's ``FiducialCorrelationWarp`` always correlates
+    against ``channels_to_process[0]`` (``merlin/analysis/warp.py``'s
+    ``_run_analysis``), so lining up both atoms' first channel makes the
+    full pipeline's DAPI transform bit-for-bit identical to the
+    segmentation-only run's (both correlate DAPI against itself, always
+    the identity) instead of differing by DAPI's true registration drift
+    -- ``channels_to_process``, once set, must list every data channel
+    (requesting the transformation for a channel missing from it raises),
+    so the full ordered list has to come from somewhere; this reads it
+    from the data-organization CSV instead of requiring it hand-maintained
+    per experiment.
+
+    Raises if any *reference_channels* name is missing from the CSV.
+    """
+    with open(data_organization_path, newline="") as fh:
+        channel_names = [row["channelName"] for row in csv.DictReader(fh)]
+    missing = [c for c in reference_channels if c not in channel_names]
+    if missing:
+        raise ValueError(
+            f"reference_channels {missing} not found in {data_organization_path}'s "
+            "channelName column."
+        )
+    rest = [c for c in channel_names if c not in reference_channels]
+    return list(reference_channels) + rest
