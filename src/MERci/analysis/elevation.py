@@ -469,6 +469,48 @@ def _draw_scale_bar(draw, canvas_width: int, canvas_height: int, bar_px: int, la
     draw.text((x0, y0 - font.size - 4), label, fill=fill, font=font)
 
 
+def _scalebar_px_and_label(config, downsample_factor: int, scalebar_um: float) -> Tuple[int, str]:
+    """Physical scale-bar length in downsampled pixels + its label -- shared
+    by :func:`create_gif` and :func:`create_z_mosaic`. Label is
+    ``"<value> mm"`` for *scalebar_um* >= 1000, else ``"<value> um"``."""
+    pixel_size_ds_um = config.pixel_size_um * downsample_factor
+    bar_px = max(1, round(scalebar_um / pixel_size_ds_um))
+    bar_label = f"{scalebar_um / 1000:.3g} mm" if scalebar_um >= 1000 else f"{scalebar_um:.0f} um"
+    return bar_px, bar_label
+
+
+def _render_stitched_frame(
+    stack_paths: Dict[int, Path],
+    fov_ids: List[int],
+    z_pos: int,
+    grid_indices: Dict[int, Tuple[int, int]],
+    r0: int, c0: int, n_rows: int, n_cols: int, crop_px: int,
+    vmin: float, vmax: float,
+    z_um_value: float,
+    bar_px: int, bar_label: str,
+):
+    """
+    Stitch one z-plane (index *z_pos*, read lazily via memory-map from each
+    FOV's own ``.npy`` stack) into one grid-indexed canvas, then annotate it
+    with the ``"z = <value> um"`` label + physical scale bar -- the single-
+    frame building block shared by :func:`create_gif` (one call per z-plane)
+    and :func:`create_z_mosaic` (one call, at one chosen z).
+
+    Returns a PIL ``"L"`` (grayscale) Image at the canvas's native
+    resolution (no resize).
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    tiles = {f: _to_uint8(np.load(stack_paths[f], mmap_mode="r")[z_pos], vmin, vmax) for f in fov_ids}
+    canvas = stitch_by_grid(tiles, grid_indices, r0, c0, n_rows, n_cols, crop_px, fill=0)
+    img = Image.fromarray(canvas.astype(np.uint8), mode="L")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=max(14, img.width // 40))
+    draw.text((8, 8), f"z = {z_um_value:.1f} um", fill=255, font=font)
+    _draw_scale_bar(draw, img.width, img.height, bar_px, bar_label)
+    return img
+
+
 def create_gif(
     stack_paths: Dict[int, Path],
     z_um_values: List[float],
@@ -527,8 +569,6 @@ def create_gif(
     -------
     output_path
     """
-    from PIL import Image, ImageDraw, ImageFont
-
     from MERci.analysis.ffc import compute_mosaic_crop_px
     from MERci.progress_display import ProgressReporter
 
@@ -551,24 +591,15 @@ def create_gif(
     vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
     del mid_pixels
 
-    pixel_size_ds_um = config.pixel_size_um * downsample_factor
-    bar_px = max(1, round(scalebar_um / pixel_size_ds_um))
-    bar_label = f"{scalebar_um / 1000:.3g} mm" if scalebar_um >= 1000 else f"{scalebar_um:.0f} um"
+    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
 
     frames = []
     reporter = ProgressReporter(total=len(z_positions), label="Assembling GIF frames")
     for z_pos in reporter.wrap(z_positions):
-        tiles = {
-            f: _to_uint8(np.load(stack_paths[f], mmap_mode="r")[z_pos], vmin, vmax)
-            for f in fov_ids
-        }
-        canvas = stitch_by_grid(tiles, grid_indices, r0, c0, n_rows, n_cols, crop_px, fill=0)
-        img = Image.fromarray(canvas.astype(np.uint8), mode="L")   # native canvas resolution -- no resize
-        draw = ImageDraw.Draw(img)
-        font = ImageFont.load_default(size=max(14, img.width // 40))
-        draw.text((8, 8), f"z = {z_um_values[z_pos]:.1f} um", fill=255, font=font)
-        _draw_scale_bar(draw, img.width, img.height, bar_px, bar_label)
-        frames.append(img)
+        frames.append(_render_stitched_frame(
+            stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+            vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
+        ))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -576,4 +607,68 @@ def create_gif(
                    duration=frame_duration_ms, loop=0)
     log.info("GIF saved: %s  (%d frame(s), %d x %d px)",
               output_path, len(frames), frames[0].width, frames[0].height)
+    return output_path
+
+
+def create_z_mosaic(
+    stack_paths: Dict[int, Path],
+    z_um_values: List[float],
+    grid_indices: Dict[int, Tuple[int, int]],
+    config,                                     # ExperimentConfig
+    output_path: Path,
+    z_um: float,
+    downsample_factor: int = 16,
+    r0: int = 0,
+    c0: int = 0,
+    n_rows: Optional[int] = None,
+    n_cols: Optional[int] = None,
+    scalebar_um: float = 1000.0,
+    percentile_clip: Tuple[float, float] = (1.0, 99.0),
+) -> Path:
+    """
+    Static single-z-plane sibling of :func:`create_gif`: one stitched,
+    FFC-corrected, downsampled mosaic at the z-plane closest to *z_um* --
+    same shared-scale/z-label/scale-bar convention, same ``stack_paths``
+    input (:func:`compute_fov_elevation`'s own ``ds_stack``), saved as a
+    single PNG instead of a GIF. Useful as a standalone figure at one
+    representative depth, without opening/paging through the full sweep.
+
+    Parameters
+    ----------
+    z_um  : target depth (µm) -- the closest available z-plane in
+            *z_um_values* is used (exact match not required)
+    (all other parameters same as :func:`create_gif`, minus the animation-
+    only ones)
+
+    Returns
+    -------
+    output_path
+    """
+    from MERci.analysis.ffc import compute_mosaic_crop_px
+
+    crop_px = compute_mosaic_crop_px(config) // downsample_factor
+    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
+    fov_ids = [f for f in stack_paths if f in grid_indices]
+    if not fov_ids:
+        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
+
+    z_pos = int(np.argmin(np.abs(np.asarray(z_um_values, dtype=float) - z_um)))
+
+    pooled_pixels = np.concatenate([
+        np.asarray(np.load(stack_paths[f], mmap_mode="r")[z_pos]).ravel() for f in fov_ids
+    ])
+    vmin, vmax = np.percentile(pooled_pixels, [percentile_clip[0], percentile_clip[1]])
+    del pooled_pixels
+
+    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
+    img = _render_stitched_frame(
+        stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+        vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
+    )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path)
+    log.info("Single-z mosaic saved: %s  (z=%.1f um, %d x %d px)",
+              output_path, z_um_values[z_pos], img.width, img.height)
     return output_path
