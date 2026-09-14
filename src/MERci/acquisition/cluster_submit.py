@@ -35,6 +35,7 @@ _CLI_COMPUTE_TEXTURE_STATS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_t
 _CLI_TPC_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_tpc_margin_thumbnails.py"
 _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_gif_frame_thumbnails.py"
 _CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
+_CLI_FOV_PROJECTIONS        = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_projections.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -243,6 +244,55 @@ def build_tpc_margin_array_script(
         f"    --z-um-values {z_um_str} \\\n"
         f"    --margins {margins_str} \\\n"
         f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
+        f"    {orientation_flags}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_fov_projections_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    frame_indices,
+    statistics,
+    orientation:        dict,
+    n_pending:          int,
+    output_path:        Path,
+    array_concurrency:  int = 50,
+    mem:                str = "8gb",
+    time:               str = "00:15:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_fov_proj",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_compute_fov_projections.py`` once per pending FOV listed in
+    *manifest_path* -- each task reads its own FOV's full z-stack once and
+    writes every requested per-pixel projection statistic (a subset of
+    median/max/min) from that same read, in parallel across FOVs. Used by
+    ``notebooks/tests/calculate_ffc/`` to compare projection statistics
+    for FFC-field construction without re-reading raw data once per
+    statistic.
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    frame_idx_str = ",".join(str(i) for i in frame_indices)
+    stats_str     = ",".join(statistics)
+    orientation_flags = " ".join(
+        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
+    )
+    body = (
+        f"python {_CLI_FOV_PROJECTIONS} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir} \\\n"
+        f"    --frame-indices {frame_idx_str} \\\n"
+        f"    --statistics {stats_str} \\\n"
         f"    {orientation_flags}\n"
     )
     return _write_script(output_path, header + "\n" + body)
