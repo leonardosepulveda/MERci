@@ -36,6 +36,7 @@ _CLI_TPC_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_t
 _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_gif_frame_thumbnails.py"
 _CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
 _CLI_FOV_PROJECTIONS        = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_projections.py"
+_CLI_FOV_ELEVATION          = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_elevation.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -344,6 +345,62 @@ def build_gif_frames_array_script(
         f"    --z-positions {z_pos_str} \\\n"
         f"    --frame-indices {frame_idx_str} \\\n"
         f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
+        f"    {orientation_flags}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_fov_elevation_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    frame_indices,
+    z_um_values,
+    ffc_field_path:     Path,
+    threshold:          float,
+    downsample_factor:  int,
+    orientation:        dict,
+    n_pending:          int,
+    output_path:        Path,
+    array_concurrency:  int = 50,
+    mem:                str = "8gb",
+    time:               str = "00:15:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_elevation",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_compute_fov_elevation.py`` once per pending FOV listed in
+    *manifest_path* -- the SLURM-array counterpart to
+    ``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb``'s own
+    section 9 sequential loop (``compute_fov_elevation``), needed at
+    full-FOV-grid production scale
+    (``after_imaging/08_measure_tissue_thickness.ipynb``) where that
+    notebook's own scope note flagged a full-grid run as a multi-hour/
+    cluster job.
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    frame_idx_str = ",".join(str(i) for i in frame_indices)
+    z_um_str      = ",".join(str(z) for z in z_um_values)
+    orientation_flags = " ".join(
+        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
+    )
+    body = (
+        f"python {_CLI_FOV_ELEVATION} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir} \\\n"
+        f"    --ffc-field-path {ffc_field_path} \\\n"
+        f"    --threshold {threshold} \\\n"
+        f"    --downsample-factor {downsample_factor} \\\n"
+        f"    --frame-indices {frame_idx_str} \\\n"
+        f"    --z-um-values {z_um_str} \\\n"
         f"    {orientation_flags}\n"
     )
     return _write_script(output_path, header + "\n" + body)
