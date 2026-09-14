@@ -122,6 +122,7 @@ src/MERci/
     ffc.py                 flat-field correction for round mosaics
     stage_z.py             stage-z drift QC from HAL's .off focus-lock sidecars
     spot_localization.py   bead detection / 3D Gaussian fitting / PSF simulation
+    completeness.py         per-FOV raw-file existence + zarr chunk-integrity checks (no decompression)
     cli_analyze_fov.py     standalone SLURM-array-task script (self-locating, no pip install needed)
     cli_build_round_mosaic.py  same, for round mosaics
   state.py                 ExperimentStateMonitor — imaging vs. fluidics phase detection
@@ -162,6 +163,7 @@ notebooks/
     06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
     07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
     08  measure_tissue_thickness   multi_z only: per-FOV tissue z-extent, feeds multi_z's own notebook 04
+    09  check_fov_completeness     per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map

@@ -37,6 +37,7 @@ _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_g
 _CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
 _CLI_FOV_PROJECTIONS        = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_projections.py"
 _CLI_FOV_ELEVATION          = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_elevation.py"
+_CLI_FOV_COMPLETENESS       = _MERCI_SRC / "MERci" / "analysis" / "cli_check_fov_completeness.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -443,6 +444,51 @@ def build_channel_counters_array_script(
         f"    --output-dir {output_dir} \\\n"
         f"    --frame-indices {frame_idx_str} \\\n"
         f"    --z-um-values {z_um_str}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_fov_completeness_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    output_dir:         Path,
+    round_info_csv:     Path,
+    positions_txt:      Path,
+    data_dir:           Path,
+    image_suffix:       str,
+    round_ids,
+    n_pending:          int,
+    output_path:        Path,
+    array_concurrency:  int = 50,
+    mem:                str = "2gb",
+    time:               str = "00:15:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_completeness",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_check_fov_completeness.py`` once per pending FOV listed in
+    *manifest_path* -- one task checks all of *round_ids* for that one FOV
+    (see ``notebooks/after_imaging/09_check_fov_completeness.ipynb``).
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    round_ids_str = ",".join(str(r) for r in round_ids)
+    body = (
+        f"python {_CLI_FOV_COMPLETENESS} \\\n"
+        f"    --round-info-csv {round_info_csv} \\\n"
+        f"    --positions-txt {positions_txt} \\\n"
+        f"    --data-dir {data_dir} \\\n"
+        f"    --image-suffix {image_suffix} \\\n"
+        f"    --round-ids {round_ids_str} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --output-dir {output_dir}\n"
     )
     return _write_script(output_path, header + "\n" + body)
 
