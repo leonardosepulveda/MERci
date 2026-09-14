@@ -49,7 +49,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 from xml.dom import minidom
 
 import pandas as pd
@@ -210,6 +210,77 @@ def fov_pad_width(total_fovs: int) -> int:
     return len(str(max(total_fovs - 1, 0)))
 
 
+# ── Multi-drive group assignment ────────────────────────────────────────────────
+
+def normalize_drive_root(drive: Union[str, Path]) -> Path:
+    """
+    Normalize a drive-letter/root string into an absolute path anchor.
+
+    A bare drive letter like ``"Z:"`` is a *drive-relative* path under
+    ``pathlib``/Windows: joining onto it (``Path("Z:") / "data"``) depends on
+    that drive's process-wide "current directory", an unpredictable legacy
+    mechanism, and would NOT resolve to ``Z:\\data``. Appending a trailing
+    separator turns it into the drive's root (``"Z:\\"``) so every join below
+    is unambiguously absolute.
+    """
+    s = str(drive)
+    if not s.endswith(("\\", "/")):
+        s += "\\"
+    root = Path(s)
+    if not root.is_absolute():
+        raise ValueError(
+            f"drive {drive!r} does not resolve to an absolute path "
+            f"(got {root!r}) — use a drive letter (e.g. \"Z:\") or an absolute path."
+        )
+    return root
+
+
+def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
+    """
+    Re-root ``sample_dir`` onto a different drive, preserving its subpath.
+
+    A round can land on a physical drive other than the one ``SAMPLE_DIR``
+    itself lives on, but its folder layout on that drive should mirror
+    ``SAMPLE_DIR``'s own structure rather than dumping straight into the
+    drive's root — e.g. ``SAMPLE_DIR = Z:\\Leonardo\\LT058_sample_07\\lineage``
+    rebased onto ``"Y:"`` gives ``Y:\\Leonardo\\LT058_sample_07\\lineage``, not
+    just ``Y:\\``. ``drive_root`` is expected already normalized (see
+    :func:`normalize_drive_root`).
+    """
+    sample_dir = Path(sample_dir)
+    return drive_root / sample_dir.relative_to(sample_dir.anchor)
+
+
+def _expand_hyb_drive_groups(
+    n_bits: int,
+    groups: Sequence[Tuple[int, Union[str, Path]]],
+) -> Dict[int, Union[str, Path]]:
+    """
+    Expand ``(count, drive)`` consecutive-block groups into a ``{bit_idx: drive}``
+    mapping over bit/hyb indices ``1…n_bits``, in order.
+
+    E.g. ``n_bits=25``, ``groups=[(6, "Y:"), (6, "Z:"), (6, "Y:"), (7, "Z:")]``
+    assigns bits 1-6 to ``"Y:"``, 7-12 to ``"Z:"``, 13-18 to ``"Y:"``, 19-25 to
+    ``"Z:"``. The counts must sum to exactly ``n_bits`` -- a mismatch almost
+    always means a typo in the group sizes, and silently imaging some rounds
+    to the wrong (or no) drive is far more expensive to notice than a
+    same-day ``ValueError``.
+    """
+    assignment: Dict[int, Union[str, Path]] = {}
+    bit_idx = 1
+    for count, drive in groups:
+        for _ in range(count):
+            assignment[bit_idx] = drive
+            bit_idx += 1
+    covered = bit_idx - 1
+    if covered != n_bits:
+        raise ValueError(
+            f"hyb_drive_groups covers {covered} rounds but n_bits={n_bits} "
+            f"-- group sizes must sum to n_bits exactly."
+        )
+    return assignment
+
+
 # ── round_info builder ─────────────────────────────────────────────────────────
 
 def create_round_info(
@@ -219,6 +290,8 @@ def create_round_info(
     cells_hal_config: str,
     sample_dir:       Path,
     positions_txt:    Optional[Path] = None,
+    hyb_drive_groups: Optional[Sequence[Tuple[int, Union[str, Path]]]] = None,
+    cells_drive:      Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
     """
     Build the ``round_info.csv`` dataframe for a standard MERFISH experiment.
@@ -244,6 +317,27 @@ def create_round_info(
                         the true FOV count isn't known without it -- pass
                         this whenever the positions file is available, which
                         it should be by the time ``round_info.csv`` is built.
+    hyb_drive_groups  : when given, consecutive blocks of hyb rounds are
+                        assigned to alternating drives instead of all staying
+                        on ``sample_dir``'s own drive -- e.g.
+                        ``[(6, "Y:"), (6, "Z:"), (6, "Y:"), (7, "Z:")]`` for a
+                        25-hyb experiment split into four groups. Each
+                        group's ``data_dir`` is rooted at that drive, rebased
+                        onto ``sample_dir``'s own subpath (see
+                        :func:`rebase_on_drive`) -- so e.g.
+                        ``Z:\\Leonardo\\LT066_sample_02\\lineage`` groups onto
+                        ``"Y:"`` become
+                        ``Y:\\Leonardo\\LT066_sample_02\\lineage``, not just
+                        ``Y:\\``. The group counts must sum to exactly
+                        ``n_bits``. ``create_dave_config`` emits a matching
+                        ``<change_directory>`` before each round's imaging
+                        loop. ``None`` (default) preserves today's
+                        single-drive layout.
+    cells_drive       : when given, the cells round's ``data_dir`` is rooted
+                        at this drive the same way (e.g. so cells lands on
+                        the same drive as the first/last hyb group instead of
+                        always ``sample_dir``'s own drive). ``None`` (default)
+                        keeps the cells round on ``sample_dir``'s own drive.
 
     Returns
     -------
@@ -267,26 +361,40 @@ def create_round_info(
         )
         pad = 3
 
+    drive_for_bit = _expand_hyb_drive_groups(n_bits, hyb_drive_groups) if hyb_drive_groups else {}
+
     # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
+    cells_root = (
+        rebase_on_drive(sample_dir, normalize_drive_root(cells_drive))
+        if cells_drive else sample_dir
+    )
     rows.append({
         "imaging_round": 1,
         "imaging_type":  "cells",
         "series":        f"hal-{mic}-cells_{{fov:0{pad}d}}",
         "hal_config":    cells_hal_config,
-        "data_dir":      str(data / "cells"),
+        "data_dir":      str(Path(cells_root) / "data" / "cells"),
     })
 
     # Imaging Rounds 2 … N+1: bits #1 … #N.  The series number tracks the
     # bit/hyb index (1…N); the imaging_round is bit_idx + 1.  Each bits round
     # writes into its own subfolder ``data/hybs/H{NN}`` (NN = bit/hyb index), so
     # the rounds are spread across folders instead of piling into one ``data/``.
+    # When ``hyb_drive_groups`` is given, that subfolder is additionally rooted
+    # at the group-assigned drive instead of always ``sample_dir`` (see
+    # ``rebase_on_drive``).
     for bit_idx in range(1, n_bits + 1):
+        drive     = drive_for_bit.get(bit_idx)
+        bits_root = (
+            rebase_on_drive(sample_dir, normalize_drive_root(drive))
+            if drive else sample_dir
+        )
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:0{pad}d}}",
             "hal_config":    bits_hal_config,
-            "data_dir":      str(data / "hybs" / f"H{bit_idx:02d}"),
+            "data_dir":      str(Path(bits_root) / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
 
     return pd.DataFrame(
