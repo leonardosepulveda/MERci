@@ -456,17 +456,19 @@ def _to_uint8(arr: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
 
 def _draw_scale_bar(draw, canvas_width: int, canvas_height: int, bar_px: int, label: str, fill: int = 255) -> None:
     """Bottom-left physical scale bar: a horizontal line *bar_px* pixels
-    long, with *label* (e.g. "1 mm") drawn just above its left end -- same
-    PIL-default-font convention as the z label (no font-file dependency)."""
+    long, with *label* (e.g. "1 mm") drawn above its left end, clear of the
+    line by 1% of the canvas height -- same PIL-default-font convention as
+    the z label (no font-file dependency)."""
     from PIL import ImageFont
 
     font = ImageFont.load_default(size=max(14, canvas_width // 40))
     margin = max(10, canvas_width // 50)
+    label_gap = max(4, round(canvas_height * 0.01))
     x0 = margin
     y0 = canvas_height - margin
     x1 = min(x0 + bar_px, canvas_width - margin)
     draw.line([(x0, y0), (x1, y0)], fill=fill, width=max(2, canvas_height // 200))
-    draw.text((x0, y0 - font.size - 4), label, fill=fill, font=font)
+    draw.text((x0, y0 - font.size - label_gap), label, fill=fill, font=font)
 
 
 def _scalebar_px_and_label(config, downsample_factor: int, scalebar_um: float) -> Tuple[int, str]:
@@ -506,7 +508,18 @@ def _render_stitched_frame(
     img = Image.fromarray(canvas.astype(np.uint8), mode="L")
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default(size=max(14, img.width // 40))
-    draw.text((8, 8), f"z = {z_um_value:.1f} um", fill=255, font=font)
+
+    # Lower-right corner, 1% of each dimension clear of the image edge --
+    # measured from the glyphs' own ink extent (textbbox at origin), not the
+    # font's nominal line box, since PIL pads the top of that box by several
+    # px and drawing from it would run the text past the bottom edge.
+    z_label = f"z = {z_um_value:.1f} um"
+    margin_x = max(4, round(img.width * 0.01))
+    margin_y = max(4, round(img.height * 0.01))
+    label_bbox = draw.textbbox((0, 0), z_label, font=font)
+    draw.text((img.width - margin_x - label_bbox[2], img.height - margin_y - label_bbox[3]),
+              z_label, fill=255, font=font)
+
     _draw_scale_bar(draw, img.width, img.height, bar_px, bar_label)
     return img
 
