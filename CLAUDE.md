@@ -163,7 +163,7 @@ notebooks/
     06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
     07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
     08  measure_tissue_thickness   multi_z only: per-FOV tissue z-extent, feeds multi_z's own notebook 04
-    09  check_fov_completeness     per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
+    10  check_fov_completeness     per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
