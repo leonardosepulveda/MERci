@@ -539,6 +539,7 @@ def create_gif(
     frame_duration_ms: int = 300,
     scalebar_um: float = 1000.0,
     percentile_clip: Tuple[float, float] = (1.0, 99.0),
+    frame_cache_dir: Optional[Path] = None,
 ) -> Path:
     """
     Assemble a z-sweep GIF of the same FFC-corrected, downsampled z-stacks
@@ -577,11 +578,23 @@ def create_gif(
                          z-plane pooled across every FOV -- not the whole
                          stack, to avoid reading everything twice at
                          full-grid scale
+    frame_cache_dir    : if given, each rendered frame is saved there as
+                         ``z<index>.png`` and reloaded instead of re-rendered
+                         on a later call -- so a crash during the final GIF
+                         write (the slow full-grid stitching loop is
+                         complete by then; only the encode/save step
+                         remains) doesn't force every frame to be redone.
+                         Like the rest of this module's caches, it is keyed
+                         on z-plane index only -- clear the directory by
+                         hand after changing a display parameter
+                         (*downsample_factor*, *scalebar_um*,
+                         *percentile_clip*, grid window)
 
     Returns
     -------
     output_path
     """
+    from PIL import Image
     from MERci.analysis.ffc import compute_mosaic_crop_px
     from MERci.progress_display import ProgressReporter
 
@@ -606,13 +619,28 @@ def create_gif(
 
     bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
 
+    if frame_cache_dir is not None:
+        frame_cache_dir = Path(frame_cache_dir)
+        frame_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def cached_frame_path(z_pos):
+        return frame_cache_dir / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
+
     frames = []
     reporter = ProgressReporter(total=len(z_positions), label="Assembling GIF frames")
     for z_pos in reporter.wrap(z_positions):
-        frames.append(_render_stitched_frame(
-            stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
-            vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
-        ))
+        cache_path = cached_frame_path(z_pos)
+        if cache_path is not None and cache_path.exists():
+            frame = Image.open(cache_path)
+            frame.load()
+        else:
+            frame = _render_stitched_frame(
+                stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+                vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
+            )
+            if cache_path is not None:
+                frame.save(cache_path)
+        frames.append(frame)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
