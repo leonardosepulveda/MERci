@@ -26,9 +26,8 @@ wiring, including which steps offer a SLURM array option):
 4. :func:`compute_fov_elevation` (per FOV -- typically via a SLURM array, see
    ``MERci.acquisition.cluster_submit.build_fov_elevation_array_script``)
 5. :func:`create_elevation_heatmap`    -- crop + stitch into one grid heatmap
-6. :func:`create_gif`                   -- z-sweep GIF of the same per-FOV
-                                          downsampled stacks, with a scale
-                                          bar + z label
+6. :func:`create_gif`/:func:`create_movie` -- z-sweep GIF/MP4 of the same
+   per-FOV downsampled stacks, with a scale bar + z label
 """
 from __future__ import annotations
 
@@ -524,6 +523,84 @@ def _render_stitched_frame(
     return img
 
 
+def _prepare_sweep_render(
+    stack_paths: Dict[int, Path],
+    z_um_values: List[float],
+    grid_indices: Dict[int, Tuple[int, int]],
+    config,
+    downsample_factor: int,
+    r0: int, c0: int, n_rows: Optional[int], n_cols: Optional[int],
+    z_stride: int,
+    scalebar_um: float,
+    percentile_clip: Tuple[float, float],
+):
+    """
+    Shared setup for :func:`create_gif`/:func:`create_movie`: resolve the
+    grid window and crop size, the shared display-intensity scale (from one
+    representative z-plane, see those functions' own docstrings), the scale
+    bar, and the z-plane indices to render.
+    """
+    from MERci.analysis.ffc import compute_mosaic_crop_px
+
+    crop_px = compute_mosaic_crop_px(config) // downsample_factor
+    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
+    fov_ids = [f for f in stack_paths if f in grid_indices]
+    if not fov_ids:
+        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
+
+    n_z = len(z_um_values)
+    z_positions = list(range(0, n_z, z_stride))
+
+    mid_z = n_z // 2
+    mid_pixels = np.concatenate([
+        np.asarray(np.load(stack_paths[f], mmap_mode="r")[mid_z]).ravel() for f in fov_ids
+    ])
+    vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
+    del mid_pixels
+
+    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
+    return fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label, z_positions
+
+
+def _stitched_frames(
+    stack_paths, fov_ids, z_positions, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+    vmin, vmax, z_um_values, bar_px, bar_label,
+    frame_cache_dir: Optional[Path] = None,
+    progress_label: str = "Assembling frames",
+):
+    """
+    Yield one annotated, stitched frame per entry in *z_positions* (see
+    :func:`_render_stitched_frame`), optionally caching each to
+    *frame_cache_dir* as ``z<index>.png`` and reloading instead of
+    re-rendering on a later call -- shared by :func:`create_gif` and
+    :func:`create_movie` so a GIF and a movie of the same sweep (same cache
+    directory) render every frame's expensive stitching only once between
+    them, and so a crash during either one's final encode/save step (after
+    this generator has already finished) doesn't force a redo.
+    """
+    from PIL import Image
+    from MERci.progress_display import ProgressReporter
+
+    if frame_cache_dir is not None:
+        frame_cache_dir = Path(frame_cache_dir)
+        frame_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    reporter = ProgressReporter(total=len(z_positions), label=progress_label)
+    for z_pos in reporter.wrap(z_positions):
+        cache_path = frame_cache_dir / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
+        if cache_path is not None and cache_path.exists():
+            frame = Image.open(cache_path)
+            frame.load()
+        else:
+            frame = _render_stitched_frame(
+                stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+                vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
+            )
+            if cache_path is not None:
+                frame.save(cache_path)
+        yield frame
+
+
 def create_gif(
     stack_paths: Dict[int, Path],
     z_um_values: List[float],
@@ -557,6 +634,10 @@ def create_gif(
     stack, into memory at once) -- needed at full-grid scale, where every
     FOV's whole stack together can run into the tens of GB.
 
+    Note: a GIF is inserted into PowerPoint as a picture, not a real video
+    (autoplay during a slideshow depends on the PowerPoint version/platform)
+    -- for a slide deck, prefer :func:`create_movie` instead.
+
     Parameters
     ----------
     stack_paths        : ``{fov_id: path}`` to that FOV's ``(n_z, h, w)``
@@ -588,59 +669,24 @@ def create_gif(
                          on z-plane index only -- clear the directory by
                          hand after changing a display parameter
                          (*downsample_factor*, *scalebar_um*,
-                         *percentile_clip*, grid window)
+                         *percentile_clip*, grid window). Share the same
+                         directory with a :func:`create_movie` call over the
+                         same sweep to render each frame only once for both.
 
     Returns
     -------
     output_path
     """
-    from PIL import Image
-    from MERci.analysis.ffc import compute_mosaic_crop_px
-    from MERci.progress_display import ProgressReporter
+    fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label, z_positions = _prepare_sweep_render(
+        stack_paths, z_um_values, grid_indices, config, downsample_factor,
+        r0, c0, n_rows, n_cols, z_stride, scalebar_um, percentile_clip,
+    )
 
-    crop_px = compute_mosaic_crop_px(config) // downsample_factor
-    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
-    fov_ids = [f for f in stack_paths if f in grid_indices]
-    if not fov_ids:
-        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
-
-    n_z = len(z_um_values)
-    z_positions = list(range(0, n_z, z_stride))
-
-    # Shared display scale from one representative (middle) z-plane per FOV
-    # only -- cheap, and representative of the stack's overall brightness
-    # range without reading every plane of every FOV twice.
-    mid_z = n_z // 2
-    mid_pixels = np.concatenate([
-        np.asarray(np.load(stack_paths[f], mmap_mode="r")[mid_z]).ravel() for f in fov_ids
-    ])
-    vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
-    del mid_pixels
-
-    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
-
-    if frame_cache_dir is not None:
-        frame_cache_dir = Path(frame_cache_dir)
-        frame_cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def cached_frame_path(z_pos):
-        return frame_cache_dir / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
-
-    frames = []
-    reporter = ProgressReporter(total=len(z_positions), label="Assembling GIF frames")
-    for z_pos in reporter.wrap(z_positions):
-        cache_path = cached_frame_path(z_pos)
-        if cache_path is not None and cache_path.exists():
-            frame = Image.open(cache_path)
-            frame.load()
-        else:
-            frame = _render_stitched_frame(
-                stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
-                vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
-            )
-            if cache_path is not None:
-                frame.save(cache_path)
-        frames.append(frame)
+    frames = list(_stitched_frames(
+        stack_paths, fov_ids, z_positions, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+        vmin, vmax, z_um_values, bar_px, bar_label,
+        frame_cache_dir=frame_cache_dir, progress_label="Assembling GIF frames",
+    ))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -648,6 +694,77 @@ def create_gif(
                    duration=frame_duration_ms, loop=0)
     log.info("GIF saved: %s  (%d frame(s), %d x %d px)",
               output_path, len(frames), frames[0].width, frames[0].height)
+    return output_path
+
+
+def create_movie(
+    stack_paths: Dict[int, Path],
+    z_um_values: List[float],
+    grid_indices: Dict[int, Tuple[int, int]],
+    config,                                     # ExperimentConfig
+    output_path: Path,
+    downsample_factor: int = 16,
+    r0: int = 0,
+    c0: int = 0,
+    n_rows: Optional[int] = None,
+    n_cols: Optional[int] = None,
+    z_stride: int = 1,
+    fps: Optional[float] = None,
+    frame_duration_ms: int = 300,
+    scalebar_um: float = 1000.0,
+    percentile_clip: Tuple[float, float] = (1.0, 99.0),
+    frame_cache_dir: Optional[Path] = None,
+) -> Path:
+    """
+    MP4 (H.264 video, ``yuv420p`` pixel format) version of the same z-sweep
+    :func:`create_gif` produces -- identical cropped/annotated/shared-scale
+    frames (see that function's own docstring), written via ``imageio``'s
+    ffmpeg backend instead of PIL's GIF encoder. H.264 + ``yuv420p`` in an
+    ``.mp4`` container is the combination PowerPoint (Windows and Mac)
+    embeds as a real, "Insert > Video"-able object -- unlike a GIF, which
+    PowerPoint only ever treats as a picture. Silent (no audio track).
+
+    Pass the *same* `frame_cache_dir` used for a `create_gif` call over the
+    same sweep (same `z_stride`/`downsample_factor`/etc.) to reuse its
+    already-rendered frames instead of re-stitching them.
+
+    Parameters
+    ----------
+    fps                : frames per second; defaults to
+                         ``1000 / frame_duration_ms`` so the movie plays at
+                         the same speed as a `create_gif` call with the same
+                         `frame_duration_ms`, unless overridden
+    (all other parameters : same as :func:`create_gif`)
+
+    Returns
+    -------
+    output_path
+    """
+    import imageio
+
+    fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label, z_positions = _prepare_sweep_render(
+        stack_paths, z_um_values, grid_indices, config, downsample_factor,
+        r0, c0, n_rows, n_cols, z_stride, scalebar_um, percentile_clip,
+    )
+    if fps is None:
+        fps = 1000.0 / frame_duration_ms
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    n_frames = 0
+    writer = imageio.get_writer(output_path, fps=fps, codec="libx264", pixelformat="yuv420p")
+    try:
+        for frame in _stitched_frames(
+            stack_paths, fov_ids, z_positions, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+            vmin, vmax, z_um_values, bar_px, bar_label,
+            frame_cache_dir=frame_cache_dir, progress_label="Assembling movie frames",
+        ):
+            writer.append_data(np.asarray(frame.convert("RGB")))
+            n_frames += 1
+    finally:
+        writer.close()
+    log.info("Movie saved: %s  (%d frame(s) @ %.1f fps)", output_path, n_frames, fps)
     return output_path
 
 
