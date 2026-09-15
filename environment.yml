@@ -21,3 +21,5 @@ dependencies:
     - tifffile
     - pyyaml
     - affine6p
+    - imageio
+    - imageio-ffmpeg

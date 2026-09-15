@@ -25,7 +25,7 @@ in sync with `../lineage_tracing/merfish/` wherever the two share a step
 (round_info, dave config, data organization, experiment info, merlin
 scripts) — change only the experiment parameters here.
 
-## Notebook sequence (9 notebooks here + 1 in `after_imaging/`)
+## Notebook sequence (9 notebooks here + 2 in `after_imaging/`)
 
 The tissue-thickness measurement (below) runs mid-acquisition, after the
 `cells` round has actually been imaged, so it lives in `after_imaging/`
@@ -36,8 +36,9 @@ rather than here -- see that notebook's own docstring.
 | 01 | `01_create_hal_config_and_shutters.ipynb` | Trimmed: **cells + transit only**. The bits HAL config is deliberately deferred to notebook 04 — there is no single bits depth to fix yet. |
 | 02 | `02_create_boundary_from_mosaic.ipynb` | Unchanged — derive tissue boundaries from a Steve mosaic (optional). |
 | 03 | `03_create_positions_from_boundaries.ipynb` | Unchanged — builds the FOV grid + transit segments. |
-| -- | `after_imaging/08_measure_tissue_thickness.ipynb` | Run after the **cells** round finishes: measures each FOV's real z-extent of tissue signal and exports a per-FOV z table. Notebook 04 here reads its output. |
-| 04 | `04_create_hal_config_and_shutters_multi_z.ipynb` | **New**. Reads `after_imaging/08_measure_tissue_thickness.ipynb`'s z table, buckets FOVs into `N_TIERS` z-depth tiers (quantile binning), and generates one bits HAL config + shutter file per tier into `SAMPLE_DIR/multi_z/` (see below). Tags each FOV in the positions file(s) with its assigned tier via a 3rd column. |
+| -- | `after_imaging/08_measure_tissue_thickness.ipynb` | Run after the **cells** round finishes: measures each FOV's real z-extent of tissue signal (heatmap/mosaic/GIF). Useful for any pipeline, not just `multi_z`. |
+| -- | `after_imaging/09_multi_z_margin_export.ipynb` | `multi_z`-specific follow-on to 08 above (re-derives its state from the same cache): margin/savings estimate, a trimmed-depth verification mosaic, and the per-FOV z table. Notebook 04 here reads its output. |
+| 04 | `04_create_hal_config_and_shutters_multi_z.ipynb` | **New**. Reads `after_imaging/09_multi_z_margin_export.ipynb`'s z table, buckets FOVs into `N_TIERS` z-depth tiers (quantile binning), and generates one bits HAL config + shutter file per tier into `SAMPLE_DIR/multi_z/` (see below). Tags each FOV in the positions file(s) with its assigned tier via a 3rd column. |
 | 05 | `05_create_round_info.ipynb` | Renumbered from `merfish`'s `03_create_round_info.ipynb`. Uses the **deepest** tier's HAL config as the representative bits config, and tags bits rows `tissue_thickness="multi"` + `z_lengths` (every tier's frame count, JSON-encoded). |
 | 06 | `06_create_dave_config.ipynb` | Renumbered from `merfish`'s `04_create_dave_config.ipynb`. No functional changes — `create_dave_config` already knows to skip the static per-movie `<length>`/`<parameters>` for a `tissue_thickness="multi"` round, since the positions file's own 3rd column supplies the real per-FOV values (see the Dave patch below). |
 | 07 | `07_create_data_organization.ipynb` | Renumbered from `merfish`'s `05_create_data_organization.ipynb`. Picks the bits frame table with the **most frames** among all `frame-table-bits-*.csv` matches (the deepest tier), so MERlin's declared z-range covers every FOV. |
@@ -88,8 +89,10 @@ defaults until confirmed):
   `N_TRANSIT_BLANK`.
 - `03`: `TRANSIT_SPACING`, `SCAN_DIRECTION`.
 - `after_imaging/08_measure_tissue_thickness.ipynb`: `THRESHOLD`
-  (tissue/background separator), `TPC_THRESHOLD`, `Z_MARGIN_UM` — review the
-  histograms/heatmaps before trusting the exported z table.
+  (tissue/background separator) — review the histograms/heatmaps before
+  trusting the exported z table.
+- `after_imaging/09_multi_z_margin_export.ipynb`: `Z_MARGIN_UM`,
+  `Z_MAX_TRIMMED_UM`.
 - `04`: `N_TIERS`, `MICROSCOPE`, `POWER`, `color_seq` for bits, `EXPOSURE_TIME`
   (must match notebook 01's cells exposure), `z_bead`/`z_step`/etc. for the
   bits sweep.
