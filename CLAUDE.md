@@ -148,7 +148,7 @@ notebooks/
     02a create_boundary_from_mosaic (opt.)   derive tissue boundary from a Steve mosaic
     02b create_positions_from_boundaries     FOV scanning positions
     03  create_round_info                    round-bit-color map, round_info.csv
-    04  create_dave_config                   Dave experiment-recipe XML
+    04  create_dave_config                   Dave experiment-recipe XML, incl. per-round bit/color XML comments
     05  create_data_organization             MERlin data-org CSV (analysis_backend: merlin)
         create_color_usage                   fishtank color_usage/decoding_strategy (analysis_backend: fishtank)
     06  create_experiment_info               metadata/experiment_info.yaml
@@ -170,6 +170,8 @@ notebooks/
     imaged_fovs             live acquisition-progress map
     round_mosaics            live quick-look mosaic (on-demand/catch-up/live modes)
     fast_spot_quantification per-bit hybridization-reagent QC
+    hyb_spot_intensity_qc    experiment-wide spot-intensity overview, N FOVs evenly spaced across the tissue
+    z_profile_spot_intensity per-z (no projection) foci detection for one hyb round + FOV, incl. custom image paths
     dave_timing_accuracy     actual vs. Dave-estimated block timing, real-data ETA for remaining blocks
   misc/              Ad-hoc utilities — see each notebook's own markdown cells for what it does
   tests/             Diagnostic/recovery notebooks for one specific real incident, kept as

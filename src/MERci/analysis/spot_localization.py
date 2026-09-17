@@ -12,6 +12,8 @@ Public API
 
 **Detection and localisation**
     detect_beads_2d          – find bead centres in a z-max projection
+    compute_background_median – Gaussian-smoothed background median of an image
+    detect_foci_per_z        – per-z-plane (no projection) foci detection + intensity
     localize_beads_in_volume – localise in in-memory colour stacks (core)
     localize_beads_in_file   – localise from a DAX file (wraps I/O helpers)
 
@@ -32,7 +34,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -178,6 +180,80 @@ def detect_beads_2d(
     thresh  = bg_med + thresh_sigma * bg_std
     local_mx = maximum_filter(blurred, size=int(min_dist_px)) == blurred
     return np.argwhere(local_mx & (blurred > thresh))
+
+
+def compute_background_median(image: np.ndarray, bg_percentile: float = 80) -> float:
+    """
+    Gaussian-smoothed, bottom-*bg_percentile*-percentile background median --
+    the same convention :func:`detect_beads_2d` itself uses internally for its
+    detection threshold, kept consistent here so the *subtracted* background
+    matches the *detection* background.
+
+    Relocated here (from ``fast_spot_quantification.py``) because it's a
+    generic image-background-estimation helper, not tied to cropping --
+    :func:`detect_foci_per_z` below needs it too, and
+    ``fast_spot_quantification.py`` now imports it from here instead.
+    """
+    blurred = gaussian_filter(image.astype(float), sigma=1.5)
+    bg_mask = blurred < np.percentile(blurred, bg_percentile)
+    return float(np.median(blurred[bg_mask])) if bg_mask.any() else float(np.median(blurred))
+
+
+def detect_foci_per_z(
+    frames: np.ndarray,
+    z_labels: Sequence,
+    min_dist_px: float,
+    thresh_sigma: float,
+) -> pd.DataFrame:
+    """
+    Per-z-plane counterpart to
+    ``MERci.analysis.fast_spot_quantification.detect_foci_in_crop``: that
+    function max-projects every z-plane together before detecting foci
+    (fast, but loses how a focus's intensity varies with z); this instead
+    runs the same background-subtraction + detection pipeline
+    (:func:`compute_background_median`, :func:`detect_beads_2d`)
+    **independently on each z-plane** of *frames* -- no projection or
+    sampling across z -- so a caller can see a detected focus's intensity as
+    a function of real z, e.g. to judge whether it looks like a genuine 3-D
+    punctum (a smooth intensity peak across a few z-planes) versus noise or
+    dirt (a single-plane blip).
+
+    Parameters
+    ----------
+    frames       : ``(n_z, H, W)`` raw array -- one (fov, round, color)
+                   stack, already restricted to whatever z-planes the caller
+                   wants scored.
+    z_labels     : length ``n_z`` -- the value to report as ``z`` for each
+                   plane (e.g. real z in µm). Purely a label for the
+                   caller's own plotting; never used for any calculation
+                   here.
+    min_dist_px  : forwarded to :func:`detect_beads_2d`.
+    thresh_sigma : forwarded to :func:`detect_beads_2d`.
+
+    Returns
+    -------
+    DataFrame with columns ``z``, ``row_px``, ``col_px``, ``intensity``
+    (background-subtracted peak value, same convention as
+    ``fast_spot_quantification.compute_fov_round_color_spots``'s own
+    ``intensity`` column) -- one row per detected focus per z-plane. Empty
+    (but with these columns) if nothing is detected in any plane.
+    """
+    if len(frames) != len(z_labels):
+        raise ValueError(
+            f"frames has {len(frames)} planes but z_labels has {len(z_labels)} entries."
+        )
+
+    rows = []
+    for plane, z in zip(frames, z_labels):
+        plane_f = plane.astype(np.float32)
+        bg_med = compute_background_median(plane_f)
+        candidates = detect_beads_2d(plane_f, min_dist_px, thresh_sigma)
+        for (r, c) in candidates:
+            rows.append({
+                "z": z, "row_px": int(r), "col_px": int(c),
+                "intensity": float(plane_f[r, c] - bg_med),
+            })
+    return pd.DataFrame(rows, columns=["z", "row_px", "col_px", "intensity"])
 
 
 def localize_beads_in_volume(
