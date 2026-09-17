@@ -50,11 +50,11 @@ PIPELINES: Dict[str, str] = {
     "multi_z":                         "before_imaging/multi_z",
 }
 
-# before_imaging/regular/ holds both backends' 05/07 side by side -- exactly
+# before_imaging/regular/ holds both backends' 06/08 side by side -- exactly
 # one pair is copied per export, picked by the chosen pipeline's
 # analysis_backend (see export_pipeline_notebooks).
-_MERLIN_ONLY_NAMES   = {"05_create_data_organization.ipynb", "07_create_merlin_scripts.ipynb"}
-_FISHTANK_ONLY_NAMES = {"05_create_color_usage.ipynb", "07_create_fishtank_scripts.ipynb"}
+_MERLIN_ONLY_NAMES   = {"06_create_data_organization.ipynb", "08_create_merlin_scripts.ipynb"}
+_FISHTANK_ONLY_NAMES = {"06_create_color_usage.ipynb", "08_create_fishtank_scripts.ipynb"}
 
 
 class PipelineInfo(NamedTuple):
@@ -316,7 +316,7 @@ def export_pipeline_notebooks(
 
     has_pipeline_yaml = _copy_pipeline_config(merci_dir, pipeline_id, out_dir)
 
-    # before_imaging/regular/ holds both backends' 05/07 side by side --
+    # before_imaging/regular/ holds both backends' 06/08 side by side --
     # copy only the pair matching this pipeline's analysis_backend.
     exclude = set()
     if has_pipeline_yaml:

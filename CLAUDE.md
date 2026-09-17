@@ -149,10 +149,11 @@ notebooks/
     02b create_positions_from_boundaries     FOV scanning positions
     03  create_round_info                    round-bit-color map, round_info.csv
     04  create_dave_config                   Dave experiment-recipe XML
-    05  create_data_organization             MERlin data-org CSV (analysis_backend: merlin)
+    05  annotate_dave_protocol               per-round bit/color XML comments on the Dave recipe (either backend)
+    06  create_data_organization             MERlin data-org CSV (analysis_backend: merlin)
         create_color_usage                   fishtank color_usage/decoding_strategy (analysis_backend: fishtank)
-    06  create_experiment_info               metadata/experiment_info.yaml
-    07  create_merlin_scripts                SAMPLE_DIR/merlin/ (analysis_backend: merlin)
+    07  create_experiment_info               metadata/experiment_info.yaml
+    08  create_merlin_scripts                SAMPLE_DIR/merlin/ (analysis_backend: merlin)
         create_fishtank_scripts              SAMPLE_DIR/fishtank/ (analysis_backend: fishtank)
   after_imaging/     Online analysis, run during the experiment
     01  fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
@@ -179,13 +180,14 @@ notebooks/
 
 ## Architecture
 
-**Pre-experiment workflow**: run the 8 `regular/` notebooks (or the 9
+**Pre-experiment workflow**: run the 9 `regular/` notebooks (or the 9
 `multi_z/` ones, plus `after_imaging/08_measure_tissue_thickness.ipynb`
 mid-sequence) above in order for the acquisition being prepared. Each writes
 inputs the next one reads (HAL/shutter → positions → round_info → Dave
-config → data-organization/color-usage → experiment_info → merlin/fishtank
-scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)
-shared across HAL config, shutter file, and frame table for one round.
+config → Dave protocol annotation → data-organization/color-usage →
+experiment_info → merlin/fishtank scripts). Naming convention:
+`{kind}-{name}` stems (`bits`/`cells`/`transit`) shared across HAL config,
+shutter file, and frame table for one round.
 
 **Online-analysis**: `ExperimentConfig` holds paths/tunables.
 `ExperimentMetadata` cross-references round/FOV/series/paths.
