@@ -1723,9 +1723,10 @@ def _fmt_bytes(n: int) -> str:
 
 def _fmt_dt(dt: datetime) -> str:
     """Format a datetime as ``Month D YYYY, HH:MM`` (e.g. ``"September 5 2026,
-    13:05"``). ``%-d`` (no leading zero) is a glibc/BSD strftime extension --
-    fine on this project's Linux/Mac targets, not on Windows."""
-    return dt.strftime("%B %-d %Y, %H:%M")
+    13:05"``). Built without ``%-d``/``%#d`` (no-leading-zero day) since
+    those platform-specific strftime extensions raise ``ValueError`` on
+    Windows -- ``dt.day`` gives the same result portably."""
+    return f"{dt.strftime('%B')} {dt.day} {dt.year}, {dt.strftime('%H:%M')}"
 
 
 def format_experiment_estimate(
