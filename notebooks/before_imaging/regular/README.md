@@ -20,7 +20,7 @@ Every notebook's second cell sets `PIPELINE_ID` (one of the ids in
 `pipeline.yaml` into `PIPELINE_CONFIG` -- everything else in the notebook
 reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 
-## Notebook sequence (11 notebooks, two pairs)
+## Notebook sequence (10 notebooks, two pairs)
 
 | # | Notebook | Backend |
 |---|----------|---------|
@@ -29,14 +29,13 @@ reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 | 02 | `02_create_positions_from_boundaries.ipynb` | either |
 | 03 | `03_create_round_info.ipynb` | either |
 | 04 | `04_create_dave_config.ipynb` | either |
-| 05 | `05_annotate_dave_protocol.ipynb` | either |
-| 06 | `06_create_data_organization.ipynb` | `analysis_backend: merlin` |
-| 06 | `06_create_color_usage.ipynb` | `analysis_backend: fishtank` |
-| 07 | `07_create_experiment_info.ipynb` | either |
-| 08 | `08_create_merlin_scripts.ipynb` | `analysis_backend: merlin` |
-| 08 | `08_create_fishtank_scripts.ipynb` | `analysis_backend: fishtank` |
+| 05 | `05_create_data_organization.ipynb` | `analysis_backend: merlin` |
+| 05 | `05_create_color_usage.ipynb` | `analysis_backend: fishtank` |
+| 06 | `06_create_experiment_info.ipynb` | either |
+| 07 | `07_create_merlin_scripts.ipynb` | `analysis_backend: merlin` |
+| 07 | `07_create_fishtank_scripts.ipynb` | `analysis_backend: fishtank` |
 
-Run steps 01-05 and 07 regardless of pipeline; for 06/08, run the file
+Run steps 01-04 and 06 regardless of pipeline; for 05/07, run the file
 matching your pipeline's `analysis_backend` (`00_select_pipeline.ipynb`
 exports the right one automatically once you pick a pipeline).
 
