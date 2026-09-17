@@ -22,22 +22,39 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.ndimage import gaussian_filter
 
 from ..common.config import ExperimentConfig
 from ..common.metadata import ExperimentMetadata, SeriesInfo
 from ..common.io import read_image_frames
 from ..acquisition.configs import find_frame_table_for_hal_config, get_all_color_frame_indices
-from .spot_localization import detect_beads_2d
+from .spot_localization import detect_beads_2d, compute_background_median
+
+
+def evenly_spaced_picks(items: Sequence, n: int) -> List:
+    """Evenly-spaced picks from *items* (already in ascending/meaningful
+    order) -- if there are fewer items than requested, just return all of
+    them. Shared core of :func:`sample_z_frame_indices` (z-planes) and
+    :func:`select_evenly_spaced_fovs` (FOV ids)."""
+    items = list(items)
+    if len(items) <= n:
+        return items
+    positions = np.linspace(0, len(items) - 1, n)
+    return sorted({items[int(round(p))] for p in positions})
 
 
 def sample_z_frame_indices(all_indices: Sequence[int], n_samples: int) -> List[int]:
     """Evenly-spaced picks from *all_indices* (already ascending z order) --
     if there are fewer real z-planes than requested, just use all of them."""
-    if len(all_indices) <= n_samples:
-        return list(all_indices)
-    positions = np.linspace(0, len(all_indices) - 1, n_samples)
-    return sorted({all_indices[int(round(p))] for p in positions})
+    return evenly_spaced_picks(all_indices, n_samples)
+
+
+def select_evenly_spaced_fovs(fov_ids: Sequence[int], n: int) -> List[int]:
+    """Evenly-spaced picks from *fov_ids* (already ascending), spanning the
+    first to the last id -- thin wrapper around :func:`evenly_spaced_picks`,
+    used to pick a small representative FOV sample across the whole
+    experiment footprint (see ``hyb_spot_intensity_qc.ipynb``), analogous to
+    how :func:`sample_z_frame_indices` picks representative z-planes."""
+    return evenly_spaced_picks(fov_ids, n)
 
 
 def resolve_round_color_frame_indices(
@@ -71,8 +88,11 @@ def resolve_round_color_frame_indices(
     return color_frames
 
 
-def crop_center(frame: np.ndarray, crop_size: int) -> np.ndarray:
-    """Square crop of side *crop_size*, centered on *frame*."""
+def crop_center(frame: np.ndarray, crop_size: Optional[int]) -> np.ndarray:
+    """Square crop of side *crop_size*, centered on *frame* -- or *frame*
+    itself, unchanged, when *crop_size* is None (no crop, full frame)."""
+    if crop_size is None:
+        return frame
     h, w = frame.shape
     y0 = max(0, h // 2 - crop_size // 2)
     x0 = max(0, w // 2 - crop_size // 2)
@@ -81,22 +101,12 @@ def crop_center(frame: np.ndarray, crop_size: int) -> np.ndarray:
     return frame[y0:y1, x0:x1]
 
 
-def compute_background_median(image: np.ndarray, bg_percentile: float = 80) -> float:
-    """
-    Gaussian-smoothed, bottom-*bg_percentile*-percentile background median --
-    the same convention :func:`MERci.analysis.spot_localization.detect_beads_2d`
-    itself uses internally for its detection threshold, kept consistent here
-    so the *subtracted* background matches the *detection* background.
-    """
-    blurred = gaussian_filter(image.astype(float), sigma=1.5)
-    bg_mask = blurred < np.percentile(blurred, bg_percentile)
-    return float(np.median(blurred[bg_mask])) if bg_mask.any() else float(np.median(blurred))
-
-
-def detect_foci_in_crop(frames: np.ndarray, crop_size: int, min_dist_px: float, thresh_sigma: float):
+def detect_foci_in_crop(frames: np.ndarray, crop_size: Optional[int], min_dist_px: float, thresh_sigma: float):
     """
     *frames*: ``(n_z, H, W)`` raw array for one (fov, round, color). Crops
-    every z-plane to *crop_size*, max-projects, then detects candidate foci.
+    every z-plane to *crop_size* (or leaves it as the full frame when
+    *crop_size* is None -- see :func:`crop_center`), max-projects, then
+    detects candidate foci.
 
     Returns
     -------
@@ -118,7 +128,7 @@ def spot_cache_path(output_dir: Path, round_id: int, color_nm: float, fov_id: in
 def compute_fov_round_color_spots(
     fov_id: int, round_id: int, color_nm: float, frame_indices: List[int],
     series: List[SeriesInfo], config: ExperimentConfig,
-    crop_size: int, min_dist_px: float, thresh_sigma: float,
+    crop_size: Optional[int], min_dist_px: float, thresh_sigma: float,
 ) -> Optional[pd.DataFrame]:
     """
     Detected foci for one (fov, round, color) combination, or None if

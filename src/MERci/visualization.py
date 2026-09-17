@@ -185,6 +185,7 @@ def plot_fov_layout(
     highlight_fov_ids=None,         # optional list[int]
     title: Optional[str] = None,
     save_path: Optional[Path] = None,
+    boundary_polygons=None,         # optional Sequence[shapely.geometry.Polygon]
 ) -> None:
     """
     Scatter plot of all FOV stage positions.
@@ -195,6 +196,11 @@ def plot_fov_layout(
     highlight_fov_ids : optional list of FOV ids to mark in a different colour
     title             : plot title
     save_path         : if given, figure is saved here (300 dpi)
+    boundary_polygons : optional sequence of Shapely Polygons -- each one's
+                        exterior ring is drawn as a thin dark outline on top
+                        of the FOV scatter (e.g. the tissue boundary(ies) the
+                        FOVs were generated from), added to the legend.
+                        ``None`` (default) draws no outline.
     """
     xs = [v.position[0] for v in metadata.fovs.values()]
     ys = [v.position[1] for v in metadata.fovs.values()]
@@ -208,6 +214,13 @@ def plot_fov_layout(
         hys = [metadata.fovs[i].position[1] for i in highlight_fov_ids
                if i in metadata.fovs]
         ax.scatter(hxs, hys, s=30, color="red", zorder=5, label="highlighted")
+
+    if boundary_polygons:
+        for n, poly in enumerate(boundary_polygons):
+            ax.plot(*poly.exterior.xy, color="0.2", linewidth=1.0, zorder=4,
+                    label="tissue boundary" if n == 0 else None)
+
+    if highlight_fov_ids or boundary_polygons:
         ax.legend(fontsize=8)
 
     ax.set_xlabel("Stage X (µm)")
