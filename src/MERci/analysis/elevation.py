@@ -768,6 +768,184 @@ def create_movie(
     return output_path
 
 
+# libx264's own peak (steady-state, not leaked) memory use for a
+# rawvideo-piped encode scales with frame resolution -- empirically, during
+# development: 1920x1080 plateaus around 0.6 GB, 4096x2944 (12 MP) around
+# 2.8 GB; a single acquisition's own full-grid frame (6512x4560, 30 MP) is
+# already close to the edge of what a modest interactive session's memory
+# allows, and this function's own combined (two full grids wide) frame before
+# any resizing is roughly double that again (60 MP) -- reliably exceeded a
+# 4 GB SLURM cgroup and got the ffmpeg child OOM-killed partway through the
+# encode (confirmed via dmesg) well before finishing. Cap the ENCODED frame's
+# own pixel count so its steady-state memory stays modest regardless of how
+# many FOVs either side's own grid has.
+_DEFAULT_MAX_OUTPUT_PIXELS = 12_000_000   # ~2.8 GB peak, verified empirically
+
+
+def _fit_frame_for_movie_encode(img, max_pixels=_DEFAULT_MAX_OUTPUT_PIXELS):
+    """
+    Downscale *img* (if needed) so its own pixel count stays under
+    *max_pixels* -- see :data:`_DEFAULT_MAX_OUTPUT_PIXELS`'s own note on why
+    -- then pad up to a multiple of 16 px (libx264's macroblock size);
+    otherwise imageio_ffmpeg inserts its own auto ``-vf scale`` filter for a
+    non-aligned size, which destabilized the encode at this function's own
+    frame sizes just as reliably as skipping the resize entirely.
+    """
+    from PIL import Image
+
+    if img.width * img.height > max_pixels:
+        scale = (max_pixels / (img.width * img.height)) ** 0.5
+        img = img.resize((max(16, round(img.width * scale)), max(16, round(img.height * scale))), Image.LANCZOS)
+
+    width  = -(-img.width // 16) * 16
+    height = -(-img.height // 16) * 16
+    if (width, height) != img.size:
+        padded = Image.new(img.mode, (width, height))
+        padded.paste(img, (0, 0))
+        img = padded
+    return img
+
+
+def create_paired_movie(
+    stack_paths_a: Dict[int, Path],
+    z_um_values_a: List[float],
+    grid_indices_a: Dict[int, Tuple[int, int]],
+    config_a,                                    # ExperimentConfig
+    stack_paths_b: Dict[int, Path],
+    z_um_values_b: List[float],
+    grid_indices_b: Dict[int, Tuple[int, int]],
+    config_b,                                    # ExperimentConfig
+    target_z_um_values: List[float],
+    output_path: Path,
+    downsample_factor: int = 16,
+    fps: Optional[float] = None,
+    frame_duration_ms: int = 300,
+    scalebar_um: float = 1000.0,
+    percentile_clip: Tuple[float, float] = (1.0, 99.0),
+    frame_cache_dir_a: Optional[Path] = None,
+    frame_cache_dir_b: Optional[Path] = None,
+    max_output_pixels: int = _DEFAULT_MAX_OUTPUT_PIXELS,
+) -> Path:
+    """
+    Side-by-side (rotated 90 deg CCW, panel *a* on the left) MP4 pairing two
+    independent z-sweeps -- e.g. two sibling acquisitions of the same sample
+    (see :func:`MERci.common.experiment_info.resolve_sample_identity`'s own
+    "split layout" note) -- frame by frame at the SAME physical depth: for
+    every value in *target_z_um_values*, each side independently renders its
+    own nearest available z-plane (same "closest z_um" convention as
+    :func:`create_z_mosaic`). Caller resolves *target_z_um_values* (typically
+    the overlap of both sides' own z ranges) so this function stays agnostic
+    to how that list was chosen -- a step-size/offset mismatch between the
+    two acquisitions' own z-stacks then never lets the two panels drift out
+    of sync, at the cost of each side showing its true nearest frame rather
+    than an exact depth match.
+
+    Each side's own display-intensity scale (vmin/vmax) is fixed once from
+    its own representative (middle-of-its-own-stack) frame -- same
+    shared-scale-across-frames convention as :func:`create_movie` -- so
+    brightness stays comparable frame to frame within that side; the two
+    sides are not forced to share one scale, since two different
+    acquisitions' raw intensities are not directly comparable anyway. Both
+    panels DO share one physical scale bar (same *scalebar_um* /
+    *downsample_factor* for both), so a different pixel_size_um between the
+    two acquisitions' own microscopes still draws the same PHYSICAL bar
+    length -- only its pixel length (and thus *config_a*/*config_b*'s own
+    crop size) can differ.
+
+    Parameters
+    ----------
+    stack_paths_a/b, z_um_values_a/b, grid_indices_a/b, config_a/b : per-side
+        versions of :func:`create_movie`'s own same-named parameters
+    target_z_um_values : depths (um) to render, one output frame each
+    frame_cache_dir_a/b : per-side frame cache (keyed on that side's own
+        nearest z-plane index), same reuse contract as
+        :func:`create_movie`'s own `frame_cache_dir`
+    max_output_pixels : downscale the combined (both panels, post-rotation)
+        frame to stay under this pixel count -- see
+        :data:`_DEFAULT_MAX_OUTPUT_PIXELS`'s own note on why; raise it if
+        the caller's own session has memory to spare and wants sharper
+        output, lower it if the encode is running somewhere more memory-
+        constrained than that default was verified against
+    (all other parameters : same as :func:`create_movie`)
+
+    Returns
+    -------
+    output_path
+    """
+    import imageio
+    from PIL import Image
+
+    from MERci.analysis.ffc import compute_mosaic_crop_px
+    from MERci.progress_display import ProgressReporter
+
+    def _prepare_side(stack_paths, z_um_values, grid_indices, config):
+        crop_px = compute_mosaic_crop_px(config) // downsample_factor
+        n_rows, n_cols = _resolve_grid_window(grid_indices, 0, 0, None, None)
+        fov_ids = [f for f in stack_paths if f in grid_indices]
+        if not fov_ids:
+            raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
+
+        mid_z = len(z_um_values) // 2
+        mid_pixels = np.concatenate([
+            np.asarray(np.load(stack_paths[f], mmap_mode="r")[mid_z]).ravel() for f in fov_ids
+        ])
+        vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
+        del mid_pixels
+
+        bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
+        return dict(crop_px=crop_px, n_rows=n_rows, n_cols=n_cols, fov_ids=fov_ids,
+                    vmin=vmin, vmax=vmax, bar_px=bar_px, bar_label=bar_label,
+                    z_arr=np.asarray(z_um_values, dtype=float))
+
+    side_a = _prepare_side(stack_paths_a, z_um_values_a, grid_indices_a, config_a)
+    side_b = _prepare_side(stack_paths_b, z_um_values_b, grid_indices_b, config_b)
+
+    def _side_frame(stack_paths, grid_indices, side, target_z, frame_cache_dir):
+        z_pos = int(np.argmin(np.abs(side["z_arr"] - target_z)))
+        cache_path = Path(frame_cache_dir) / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
+        if cache_path is not None and cache_path.exists():
+            img = Image.open(cache_path)
+            img.load()
+            return img
+        img = _render_stitched_frame(
+            stack_paths, side["fov_ids"], z_pos, grid_indices,
+            0, 0, side["n_rows"], side["n_cols"], side["crop_px"],
+            side["vmin"], side["vmax"], side["z_arr"][z_pos], side["bar_px"], side["bar_label"],
+        )
+        if cache_path is not None:
+            img.save(cache_path)
+        return img
+
+    if frame_cache_dir_a is not None:
+        Path(frame_cache_dir_a).mkdir(parents=True, exist_ok=True)
+    if frame_cache_dir_b is not None:
+        Path(frame_cache_dir_b).mkdir(parents=True, exist_ok=True)
+    if fps is None:
+        fps = 1000.0 / frame_duration_ms
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    n_frames = 0
+    reporter = ProgressReporter(total=len(target_z_um_values), label="Assembling paired movie frames")
+    writer = imageio.get_writer(output_path, fps=fps, codec="libx264", pixelformat="yuv420p")
+    try:
+        for target_z in reporter.wrap(target_z_um_values):
+            img_a = _side_frame(stack_paths_a, grid_indices_a, side_a, target_z, frame_cache_dir_a).rotate(90, expand=True)
+            img_b = _side_frame(stack_paths_b, grid_indices_b, side_b, target_z, frame_cache_dir_b).rotate(90, expand=True)
+
+            combined = Image.new("L", (img_a.width + img_b.width, max(img_a.height, img_b.height)))
+            combined.paste(img_a, (0, 0))
+            combined.paste(img_b, (img_a.width, 0))
+            combined = _fit_frame_for_movie_encode(combined, max_output_pixels)
+            writer.append_data(np.asarray(combined.convert("RGB")))
+            n_frames += 1
+    finally:
+        writer.close()
+    log.info("Paired movie saved: %s  (%d frame(s) @ %.1f fps)", output_path, n_frames, fps)
+    return output_path
+
+
 def create_z_mosaic(
     stack_paths: Dict[int, Path],
     z_um_values: List[float],
