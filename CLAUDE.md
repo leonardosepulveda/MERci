@@ -165,6 +165,9 @@ notebooks/
     08  measure_tissue_thickness   per-FOV tissue z-extent + thickness heatmap/mosaic/GIF (any pipeline)
     09  multi_z_margin_export      multi_z only: margin/savings + trimmed-depth verify + z-table export, feeds multi_z's own notebook 04 -- continues 08's own state (see its own intro cell)
     10  check_fov_completeness     per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
+    11  compare_tissue_thickness_merfish_lineage  lineage_tracing only: 08's heatmap/mosaic/movie for a
+                                              sample's merfish + lineage sibling acquisitions, side by
+                                              side (single colorbar/scale bar/z, depth-matched movie)
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
