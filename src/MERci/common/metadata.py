@@ -9,6 +9,8 @@ SeriesInfo        – one row of round_info.csv
 FOVInfo           – per-FOV container: position + expected file paths
 RoundInfo         – per-round container: series list + file paths by FOV
 ExperimentMetadata – top-level object; build with ExperimentMetadata.load()
+discover_ad_hoc_round_dirs – find undeclared "<round>_old[_N]" sibling
+                    folders next to a declared round's own data folder
 """
 from __future__ import annotations
 
@@ -564,3 +566,59 @@ def _build_metadata(
         n_rounds     = len(round_ids),
         image_suffix = image_suffix,
     )
+
+
+# ── Ad hoc (undeclared) round folders ───────────────────────────────────────
+
+_OLD_SUFFIX_RE = re.compile(r"^(?P<base>.+?)_old(?:_\d+)?$")
+
+
+def discover_ad_hoc_round_dirs(meta: ExperimentMetadata) -> Dict[str, SeriesInfo]:
+    """
+    Scan the parent directory of every declared round's own resolved data
+    folder for sibling folders round_info.csv never listed -- ad hoc/test
+    re-imaging folders (e.g. ``H01_old``, ``H01_old_1`` next to a declared
+    ``H01``) written for troubleshooting during acquisition, never wired
+    into round_info.csv.
+
+    A sibling folder is only recognised when its name is exactly a
+    declared round's own folder name plus an ``_old``/``_old_<N>`` suffix
+    (e.g. ``H01`` -> ``H01_old``, ``H01_old_1``); it then borrows that
+    declared round's series pattern/hal_config (same imaging recipe, just
+    a re-image) pointed at the new folder, so per-FOV file resolution
+    (:meth:`SeriesInfo.resolve_path`) works unchanged.
+
+    Returns
+    -------
+    ``{folder_name: SeriesInfo}`` -- keyed by the ad hoc folder's own name
+    (e.g. ``"H01_old"``), distinct from any declared round_id so callers
+    can key caches/output on it without collision.
+    """
+    declared_dirs: Dict[Path, SeriesInfo] = {}
+    for s in meta.all_series:
+        for d in s.candidate_dirs:
+            declared_dirs.setdefault(Path(d), s)
+
+    ad_hoc: Dict[str, SeriesInfo] = {}
+    for parent in sorted({d.parent for d in declared_dirs}):
+        if not _path_exists_safe(parent):
+            continue
+        declared_names = {d.name for d in declared_dirs if d.parent == parent}
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            continue
+        for entry in sorted(entries):
+            if not entry.is_dir() or entry.name in declared_names:
+                continue
+            m = _OLD_SUFFIX_RE.match(entry.name)
+            if m is None or m.group("base") not in declared_names:
+                continue
+            base_series = declared_dirs[parent / m.group("base")]
+            ad_hoc[entry.name] = SeriesInfo(
+                name=base_series.name, round_id=base_series.round_id,
+                imaging_type=base_series.imaging_type, hal_config=base_series.hal_config,
+                shutter_file=base_series.shutter_file, data_dir=entry,
+                candidate_dirs=[entry],
+            )
+    return ad_hoc

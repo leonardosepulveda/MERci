@@ -117,7 +117,7 @@ src/MERci/
     pipeline_config.py     PipelineConfig/MerlinConfig/FishtankConfig -- loads data/pipelines/<id>_pipeline.yaml
     pipeline_export.py     export one pipeline's notebooks to SAMPLE_DIR/notebooks/ (sibling of MERci/)
   analysis/
-    fov.py                 per-FOV thumbnails/stats/histograms
+    fov.py                 per-FOV thumbnails/stats/histograms/intensity-percentiles
     round.py               round-level mosaics (plain + flat-field-corrected)
     ffc.py                 flat-field correction for round mosaics
     stage_z.py             stage-z drift QC from HAL's .off focus-lock sidecars
@@ -168,6 +168,12 @@ notebooks/
     11  compare_tissue_thickness_merfish_lineage  lineage_tracing only: 08's heatmap/mosaic/movie for a
                                               sample's merfish + lineage sibling acquisitions, side by
                                               side (single colorbar/scale bar/z, depth-matched movie)
+    12  measure_intensity_percentiles  per-frame (frame, z, color, min, p25/p50/p75/p95, max)
+                                              intensity table, one SLURM array task per FOV movie file,
+                                              across every declared round plus any undeclared
+                                              "<round>_old[_N]" test-reimage folder (see
+                                              MERci.common.metadata.discover_ad_hoc_round_dirs);
+                                              cached as parquet
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map

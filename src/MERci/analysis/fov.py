@@ -19,6 +19,11 @@ counter_mean/counter_percentile/rebin_counter/tpc_from_counter
                               no raw pixel re-read needed
 tpc_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
                               is_contiguous) purely from a compute_channel_counters() result
+intensity_percentiles_from_counters/measure_intensity_percentiles/
+load_intensity_percentiles/load_all_intensity_percentiles
+                            – per-frame (frame, z, color, min, p<N>..., max) intensity
+                              table, exact percentiles derived from a
+                              compute_channel_counters() result, saved/loaded as parquet
 resolve_round_by_imaging_type – (imaging_round, frame_table) for round_info.csv's first
                               row matching a given imaging_type (e.g. "cells")
 compute_tissue_fraction     – per-FOV true-pixel-count tissue coverage (0-1), same
@@ -466,6 +471,115 @@ def rebin_counter(values: np.ndarray, counts: np.ndarray, bin_edges: np.ndarray)
 def tpc_from_counter(values: np.ndarray, counts: np.ndarray, threshold: float) -> int:
     """True-pixel count (# pixels with intensity >= *threshold*) from a ``(values, counts)`` Counter."""
     return int(counts[values >= threshold].sum())
+
+
+# ── Per-frame intensity percentile table (Frame/z/color/min/p<N>.../max) ───────
+
+def intensity_percentiles_from_counters(
+    channel_counters: Dict,
+    frame_table: pd.DataFrame,
+    percentiles: Tuple[int, ...] = (25, 50, 75, 95),
+) -> pd.DataFrame:
+    """
+    Build a per-frame ``frame, z, color, min, p<N>..., max`` intensity table
+    from a :func:`compute_channel_counters` result -- pure in-memory
+    arithmetic (:func:`counter_percentile` per frame), no raw pixel or disk
+    re-read, since every frame's exact per-intensity counts are already
+    available.
+
+    Parameters
+    ----------
+    channel_counters : a :func:`compute_channel_counters` result covering
+                        every frame of interest (its own ``frame_indices``
+                        decide which frames appear in the table)
+    frame_table       : this round's frame table (``pd.read_csv(...,
+                        index_col=0)``), providing ``z``/``color`` per frame
+                        index -- a frame index missing from it gets ``None``
+    percentiles       : which percentiles to report as ``p<N>`` columns
+
+    Returns
+    -------
+    pd.DataFrame with columns ``frame, z, color, min, p<N>..., max``, one
+    row per frame in *channel_counters*, in its original order.
+    """
+    rows = []
+    for i, fidx in enumerate(channel_counters["frame_indices"]):
+        fidx = int(fidx)
+        values, counts = channel_counters["values_per_z"][i], channel_counters["counts_per_z"][i]
+        row = {
+            "frame": fidx,
+            "z":     float(frame_table.at[fidx, "z"]) if fidx in frame_table.index else None,
+            "color": frame_table.at[fidx, "color"] if fidx in frame_table.index else None,
+            "min":   float(values[0]),
+        }
+        for p in percentiles:
+            row[f"p{p}"] = counter_percentile(values, counts, p)
+        row["max"] = float(values[-1])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def measure_intensity_percentiles(
+    image_path:   Path,
+    frame_table:  pd.DataFrame,
+    output_path:  Path,
+    percentiles:  Tuple[int, ...]    = (25, 50, 75, 95),
+    frame_width:  Optional[int]      = None,
+    frame_height: Optional[int]      = None,
+) -> pd.DataFrame:
+    """
+    Compute the exact per-frame ``frame, z, color, min, p<N>..., max``
+    intensity table for one image file and save it as parquet.
+
+    Reads every frame in *frame_table* via :func:`compute_channel_counters`
+    (frame-selective, one frame decoded at a time) rather than a single
+    whole-stack :func:`~MERci.common.io.read_image` call -- a benchmark
+    against real lineage-tracing FOVs (215 frames, 2304x2304 uint16) showed
+    both approaches cost about the same wall time (~45-55s, dominated by
+    215 calls to ``numpy.unique``, not by I/O), but the frame-selective
+    read peaks at ~250MB instead of ~4.8GB, since it never holds the whole
+    stack in memory at once.
+
+    Parameters
+    ----------
+    image_path   : image file to read
+    frame_table  : this round's frame table (``pd.read_csv(..., index_col=0)``)
+    output_path  : destination; suffix is forced to ``.parquet``
+    percentiles  : which percentiles to report as ``p<N>`` columns
+
+    Returns
+    -------
+    pd.DataFrame, the same one written to *output_path*
+    """
+    z_frame_indices = list(zip(frame_table.index.tolist(), frame_table["z"].tolist()))
+    channel_counters = compute_channel_counters(
+        image_path, z_frame_indices, frame_width=frame_width, frame_height=frame_height,
+    )
+    df = intensity_percentiles_from_counters(channel_counters, frame_table, percentiles)
+
+    output_path = Path(output_path).with_suffix(".parquet")
+    _atomic_save(output_path, lambda tmp: df.to_parquet(str(tmp), index=False))
+    log.debug("Intensity percentiles saved (%d frames): %s", len(df), output_path)
+    return df
+
+
+def load_intensity_percentiles(parquet_path: Path) -> pd.DataFrame:
+    """Load a previously saved :func:`measure_intensity_percentiles` parquet file."""
+    return pd.read_parquet(parquet_path)
+
+
+def load_all_intensity_percentiles(output_dir: Path) -> pd.DataFrame:
+    """
+    Concatenate every ``*_intensity_percentiles.parquet`` written by
+    ``cli_measure_intensity_percentiles.py`` array tasks under
+    *output_dir* into one ``pandas.DataFrame`` (empty, same columns, if
+    none exist yet).
+    """
+    paths = sorted(Path(output_dir).glob("*_intensity_percentiles.parquet"))
+    if not paths:
+        return pd.DataFrame(columns=["round_label", "fov_id", "frame", "z", "color",
+                                      "min", "p25", "p50", "p75", "p95", "max"])
+    return pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True)
 
 
 def _summarize_tpc_profile(z_um: np.ndarray, tpc: np.ndarray, tpc_threshold: float) -> Dict:

@@ -38,6 +38,7 @@ _CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_c
 _CLI_FOV_PROJECTIONS        = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_projections.py"
 _CLI_FOV_ELEVATION          = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_elevation.py"
 _CLI_FOV_COMPLETENESS       = _MERCI_SRC / "MERci" / "analysis" / "cli_check_fov_completeness.py"
+_CLI_INTENSITY_PERCENTILES  = _MERCI_SRC / "MERci" / "analysis" / "cli_measure_intensity_percentiles.py"
 
 _DEFAULT_PARTITION = "zhuang,sapphire,shared"
 _DEFAULT_CONDA_ENV = "merci_env"
@@ -489,6 +490,49 @@ def build_fov_completeness_array_script(
         f"    --round-ids {round_ids_str} \\\n"
         f"    --manifest {manifest_path} \\\n"
         f"    --output-dir {output_dir}\n"
+    )
+    return _write_script(output_path, header + "\n" + body)
+
+
+def build_intensity_percentiles_array_script(
+    sample_dir:         Path,
+    manifest_path:      Path,
+    n_pending:          int,
+    output_path:        Path,
+    percentiles:        tuple      = (25, 50, 75, 95),
+    array_concurrency:  int = 50,
+    mem:                str = "1gb",
+    time:               str = "00:10:00",
+    partition:          str = _DEFAULT_PARTITION,
+    conda_env:          str = _DEFAULT_CONDA_ENV,
+    job_name:           str = "merci_intensity_pctl",
+) -> Path:
+    """
+    Write an sbatch array-job script that runs
+    ``cli_measure_intensity_percentiles.py`` once per pending
+    (round/hyb x FOV) image file listed in *manifest_path* (see that
+    script's own docstring for the manifest's 5-column format) -- one task
+    per individual FOV movie, as
+    ``after_imaging/12_measure_intensity_percentiles.ipynb`` requires.
+
+    ``mem``/``time`` defaults come from a real benchmark against
+    LT066_sample_01's lineage-tracing data (215-frame, 2304x2304 uint16
+    FOVs): ~45-55s wall time, ~250-260MB peak RSS per file (see that
+    notebook's own intro cell for the numbers) -- comfortably covered by
+    the ~4x memory / ~10x time margin here.
+    """
+    log_dir = Path(sample_dir) / "analysis" / "logs"
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(log_dir / "%x_%A_%a.out"),
+        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
+        conda_env=conda_env,
+    )
+    percentiles_str = ",".join(str(p) for p in percentiles)
+    body = (
+        f"python {_CLI_INTENSITY_PERCENTILES} \\\n"
+        f"    --manifest {manifest_path} \\\n"
+        f"    --percentiles {percentiles_str}\n"
     )
     return _write_script(output_path, header + "\n" + body)
 
