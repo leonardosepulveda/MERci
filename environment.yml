@@ -19,6 +19,7 @@ dependencies:
     - ipywidgets
     - zarr
     - tifffile
+    - pyarrow
     - pyyaml
     - affine6p
     - imageio
