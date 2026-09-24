@@ -23,7 +23,7 @@ import pandas as pd
 
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
-from .common.io       import discover_image_files
+from .common.io       import filter_stable_paths, find_image_paths
 from .transfer        import transfer_round, mirror_tree
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
@@ -339,19 +339,16 @@ class FOVScheduler:
         """
         root = self.config.analysis_data_dir
         try:
-            all_files = sorted(set(discover_image_files(root, self.config.image_suffix)))
+            all_files = find_image_paths(root, self.config.image_suffix)
         except OSError:
             log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
             all_files = []
+        # Cheap sentinel/subset filters first; the stability wait only for what's left.
         pending = self.tracker.pending_fov_files(all_files)
-
-        # Restrict to the requested FOV subset when specified
         if self.config.fov_subset is not None:
             fov_set = set(self.config.fov_subset)
-            pending = [
-                f for f in pending
-                if self.meta.fov_id_of_file(f) in fov_set
-            ]
+            pending = [f for f in pending if self.meta.fov_id_of_file(f) in fov_set]
+        pending = filter_stable_paths(pending)
 
         log.info(
             "Pending: %d of %d image files need FOV analysis.",

@@ -185,9 +185,9 @@ class ProgressTracker:
 
     def pending_fov_files(self, candidate_files: List[Path]) -> List[Path]:
         """
-        Filter *candidate_files* to those that are stable on disk but lack a
-        FOV-level sentinel.  Files still being written are not excluded here;
-        that check belongs in ``discover_image_files()``.
+        Filter *candidate_files* to those that exist but lack a FOV-level
+        sentinel. Files still being written are not excluded here (see
+        ``common.io.filter_stable_paths``).
         """
         return [
             f for f in candidate_files
