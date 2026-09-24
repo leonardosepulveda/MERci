@@ -22,7 +22,13 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from .io import load_positions, load_round_info
+
 log = logging.getLogger(__name__)
+
+# Round id for the focus-lock test, a calibration run that isn't in
+# round_info.csv. Real imaging_round values start at 1, so 0 is free.
+FOCUSTEST_ROUND_ID = 0
 
 
 def _path_exists_safe(p: Path) -> bool:

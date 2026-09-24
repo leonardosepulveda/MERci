@@ -67,7 +67,7 @@ from skimage.transform import resize as sk_resize
 
 from .common.config import ExperimentConfig
 from .common.io import is_path_stable, read_image_frames
-from .common.metadata import ExperimentMetadata, RoundInfo, SeriesInfo
+from .common.metadata import FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo
 from .acquisition.configs import find_frame_table_for_hal_config
 from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
 from .acquisition.positions import find_exterior_fovs
@@ -77,9 +77,6 @@ from .analysis.round import _layout_tiles
 from .scheduler import resolve_round_flip_y
 from .plots.round_mosaic_plots import show_round_mosaic
 
-# Real imaging_round values start at 1 (acquisition.dave.create_round_info),
-# so 0 is never a real round id.
-FOCUSTEST_ROUND_ID = 0
 
 
 def register_focustest_round(
@@ -95,7 +92,7 @@ def register_focustest_round(
 
     It's a standalone calibration procedure, not a real imaging round in
     ``round_info.csv``, so :meth:`ExperimentMetadata.load` never sees it.
-    Registering it here (as *focustest_round_id*, default 0) lets it show up
+    Registering it here (as *focustest_round_id*) lets it show up
     in a round-selection UI exactly like any other round, with no further
     setup, whenever this experiment actually has a focus-test HAL config and
     its own ``data/focus_test/`` movies.

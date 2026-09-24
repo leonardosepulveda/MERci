@@ -24,18 +24,18 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..common.metadata import FOCUSTEST_ROUND_ID
+
 CACHE_COLUMNS = [
     "round_id", "fov_id", "series", "off_path",
     "first_stage_z", "min_stage_z", "max_stage_z", "all_same",
 ]
 
-# Sentinel (round_id, series) tag for focus-lock-test rows in the same cache --
-# the focus-lock test (MERci.acquisition.dave.create_focus_test_dave_config) is
-# a standalone calibration procedure, not a real imaging round in
-# round_info.csv, so it has no real round_id of its own to reuse. -1 is never
-# a real imaging_round value (those start at 1).
-FOCUSTEST_ROUND_ID    = -1
+# Series tag for focus-lock-test rows in the cache (round_id is
+# FOCUSTEST_ROUND_ID).
 FOCUSTEST_SERIES_NAME = "focustest"
+# Caches written before FOCUSTEST_ROUND_ID was shared used -1.
+_LEGACY_FOCUSTEST_ROUND_ID = -1
 
 
 def off_path_for(image_path: Path) -> Path:
@@ -171,13 +171,18 @@ def _coerce_bool_column(series: pd.Series) -> pd.Series:
     ``cache[~cache["all_same"]]`` raise ``KeyError`` (pandas reads the
     resulting ``-2``s as column labels to select, not a boolean mask).
     """
-    return series.map(_BOOL_LIKE_MAP).astype(bool)
+    mapped = series.map(_BOOL_LIKE_MAP)
+    unknown = series[mapped.isna()]
+    if len(unknown):
+        raise ValueError(f"Not boolean-like: {sorted(set(map(repr, unknown)))[:5]}")
+    return mapped.astype(bool)
 
 
 def load_stage_z_cache(cache_path: Path) -> pd.DataFrame:
     """Load the on-disk stage-z summary cache, or an empty frame if none exists yet."""
     if Path(cache_path).exists():
         cache = pd.read_csv(cache_path)
+        cache["round_id"] = cache["round_id"].replace(_LEGACY_FOCUSTEST_ROUND_ID, FOCUSTEST_ROUND_ID)
         if "all_same" in cache.columns:
             cache["all_same"] = _coerce_bool_column(cache["all_same"])
         return cache
