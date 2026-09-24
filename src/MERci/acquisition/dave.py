@@ -54,7 +54,7 @@ from xml.dom import minidom
 
 import pandas as pd
 
-from .configs import get_camera_frame_size
+from .configs import get_camera_frame_size, read_hal_exposure_time, read_hal_frame_count
 from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
@@ -133,13 +133,10 @@ def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
 
 def get_hal_frame_count(hal_config_path: Path) -> int:
     """Return the ``<frames>`` value from a HAL config XML file."""
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
-    root = ET.fromstring(text)
-    el = root.find(".//frames")
-    if el is None:
+    n = read_hal_frame_count(hal_config_path)
+    if n is None:
         raise ValueError(f"No <frames> element found in {hal_config_path}")
-    return int(el.text.strip())
+    return n
 
 
 def resolve_hal_config_path(settings_dir: Path, hal_stem: str) -> Path:
@@ -1476,20 +1473,6 @@ class ExperimentEstimate:
     warnings:        List[str]  = field(default_factory=list)
 
 
-def _read_hal_exposure(hal_config_path: Path) -> Optional[float]:
-    """Return the camera ``<exposure_time>`` (seconds) from a HAL config, or None."""
-    try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
-        root = ET.fromstring(text)
-        el = root.find(".//exposure_time")
-        if el is not None and el.text:
-            return float(el.text.strip())
-    except (OSError, ValueError, ET.ParseError):
-        pass
-    return None
-
-
 def estimate_dave_experiment(
     dave_recipe:          Path,
     kilroy_config:        Optional[Path] = None,
@@ -1571,7 +1554,7 @@ def estimate_dave_experiment(
         if frame_time_s is not None:
             return frame_time_s
         if hal_stem not in exposure_cache:
-            exp = _read_hal_exposure(resolve_hal_config_path(settings_dir, hal_stem)) \
+            exp = read_hal_exposure_time(resolve_hal_config_path(settings_dir, hal_stem)) \
                   if settings_dir is not None else None
             exposure_cache[hal_stem] = exp
         exp = exposure_cache[hal_stem]

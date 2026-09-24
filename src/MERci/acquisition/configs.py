@@ -679,14 +679,18 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
 
 # ── HAL config inspection helpers ────────────────────────────────────────────
 
+def _read_hal_text(hal_config_path: Path) -> str:
+    with open(hal_config_path, "rb") as fh:
+        return fh.read().decode("ISO-8859-1")
+
+
 def read_hal_flip_vertical(hal_config_path: Path) -> bool:
     """
     Return ``True`` if ``<flip_vertical>1</flip_vertical>`` is set in the
     HAL config at *hal_config_path*.  Returns ``False`` on any parse error.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<flip_vertical[^>]*>(\d+)</flip_vertical>", text)
         return bool(m and int(m.group(1)) == 1)
     except Exception:
@@ -699,8 +703,7 @@ def read_hal_exposure_time(hal_config_path: Path) -> "Optional[float]":
     *hal_config_path*, or ``None`` on any parse error or missing element.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<exposure_time[^>]*>([\d.]+)</exposure_time>", text)
         return float(m.group(1)) if m else None
     except Exception:
@@ -722,8 +725,7 @@ def find_frame_table_for_hal_config(
     Returns ``None`` when the frame table cannot be found.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
         if not m:
             return None
@@ -857,8 +859,7 @@ def read_shutter_reference(hal_config_path: Path) -> str:
     ValueError
         If no ``<shutters>`` element is found.
     """
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
     if not m:
         raise ValueError(
@@ -869,8 +870,7 @@ def read_shutter_reference(hal_config_path: Path) -> str:
 
 def read_hal_frame_count(hal_config_path: Path) -> "Optional[int]":
     """Return the ``<frames>`` value from the HAL config, or ``None`` if absent."""
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<frames[^>]*>\s*(\d+)\s*</frames>", text)
     return int(m.group(1)) if m else None
 
@@ -888,8 +888,7 @@ def parse_z_offsets(hal_config_path: Path) -> List[float]:
         does not use the hardware Z-nanopositioner scan — so per-frame z cannot
         be determined.
     """
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<z_offsets[^>]*>(.*?)</z_offsets>", text, flags=re.DOTALL)
     if not m or not m.group(1).strip():
         raise ValueError(
