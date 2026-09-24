@@ -114,9 +114,9 @@ material, a collaborator without access to the source experiment tree).
 Write them so that move is a copy, not a rewrite.
 
 **Start from a local data folder, not the live experiment tree.** At the
-top of the notebook, resolve a `DATA_DIR` under that notebook's own cache
-mirror (its `cache/` path, per the root `CLAUDE.md`'s "Working / cache
-files") with a `data/` subfolder there, and copy in only the specific files
+top of the notebook, resolve a `DATA_DIR` in that notebook's own cache
+folder (`cache/{prompt_date}/<...>/<notebook_name>/data/`, per the root
+`CLAUDE.md`'s "Working / cache files"), and copy in only the specific files
 the notebook actually reads (a boundary/positions file, a pre-built
 mosaic-canvas array, one CSV) the first time it needs them. Every later
 cell reads from `DATA_DIR`, never from the original `SAMPLE_DIR`/experiment

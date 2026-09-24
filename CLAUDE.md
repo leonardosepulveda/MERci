@@ -251,8 +251,8 @@ absolute paths.
 ## Test notebooks: stay portable
 
 `notebooks/tests/<subfolder>/` notebooks should read real data through a
-local copy under that notebook's own `cache/` mirror (see "Working / cache
-files" below) in a `data/` subfolder there, not directly from the live
+local copy in a `data/` subfolder of that notebook's own cache folder (see
+"Working / cache files" below), not directly from the live
 experiment tree in every cell -- see
 [`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md)'s "Test notebooks: stay
 portable" section for the full rule (folder layout, provenance comments,
@@ -285,20 +285,27 @@ Commit and push as you go — do not leave finished work uncommitted.
 ## Working / cache files
 
 Any working/intermediate file Claude generates (notebook-generator scripts,
-diagnostic images, migration backups, the verbatim-capture buffer) goes
-under `cache/` (repo root, gitignored) — never the session scratchpad or
-anywhere outside this repo. Distinct from `analysis/cache/<notebook_name>/`
-(a per-*experiment* cache under `SAMPLE_DIR/`, not this repo).
+diagnostic images, migration backups) goes under `cache/{prompt_date}/`
+(repo root, gitignored) — never the session scratchpad or anywhere outside
+this repo. `{prompt_date}` is the `YYYY_MM_DD_HHMM` timestamp of the
+`prompt_history/` entry for the request that created the file (e.g. work
+for an entry named `2026_09_21_1816_<description>.md` goes in a
+`2026_09_21_1816` folder under `cache/`). Subfolders inside it are
+free-form -- name them after the notebook or task. Distinct from
+`analysis/cache/<notebook_name>/` (a per-*experiment* cache under
+`SAMPLE_DIR/`, not this repo).
 
-Mirror the notebook's own path under `cache/`: work done while on some
-`notebooks/<...>/<notebook_name>.ipynb` goes under
-`cache/<...>/<notebook_name>/`, matching that notebook's path relative to
-`notebooks/`.
+A `notebooks/tests/` notebook's local data copy lives in the folder of the
+request that created that notebook, at
+`cache/{prompt_date}/<...>/<notebook_name>/data/`, and the notebook
+hardcodes that path -- later requests reuse it instead of copying the data
+again. See [`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md)'s "Test
+notebooks: stay portable" section.
 
-For a `notebooks/tests/` notebook specifically, that mirror also holds its
-local data copy, at `cache/<...>/<notebook_name>/data/` -- see
-[`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md)'s "Test notebooks: stay
-portable" section.
+Two fixed exceptions directly under `cache/`: the verbatim-capture buffer
+folder (written by the Stop hook, see below) and an `unsorted` folder
+(files from before this convention whose creating request could not be
+identified).
 
 ## Remembering task history
 
