@@ -8,28 +8,13 @@ z/color, into one DataFrame for plotting (see
 """
 from __future__ import annotations
 
-from typing import Optional
 
 import pandas as pd
 
 from ..common.config import ExperimentConfig
 from ..common.metadata import ExperimentMetadata
 from ..progress import ProgressTracker
-from ..acquisition.configs import find_frame_table_for_hal_config
-
-
-def load_frame_table(config: ExperimentConfig, metadata: ExperimentMetadata, round_id: int) -> Optional[pd.DataFrame]:
-    """Return the frame table DataFrame for *round_id*, or None if unavailable."""
-    if config.settings_dir is None:
-        return None
-    for s in metadata.series_for_round(round_id):
-        if not s.hal_config:
-            continue
-        hal_path = config.settings_dir / s.hal_config
-        ft_path = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
-        if ft_path and ft_path.exists():
-            return pd.read_csv(ft_path, index_col=0)
-    return None
+from ..acquisition.configs import iter_round_frame_tables
 
 
 def load_stats_with_annotations(
@@ -44,7 +29,7 @@ def load_stats_with_annotations(
 
     for round_id in metadata.valid_round_ids():
         if round_id not in ft_cache:
-            ft_cache[round_id] = load_frame_table(config, metadata, round_id)
+            ft_cache[round_id] = next((ft for _, ft in iter_round_frame_tables(round_id, config, metadata)), None)
         ft = ft_cache[round_id]
 
         # Build frame-info lookup (frame -> color, z)

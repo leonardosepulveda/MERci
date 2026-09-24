@@ -26,7 +26,7 @@ import pandas as pd
 from ..common.config import ExperimentConfig
 from ..common.metadata import ExperimentMetadata, SeriesInfo
 from ..common.io import read_image_frames
-from ..acquisition.configs import find_frame_table_for_hal_config, get_all_color_frame_indices
+from ..acquisition.configs import get_all_color_frame_indices, iter_round_frame_tables
 from .spot_localization import detect_foci_with_background
 
 
@@ -70,14 +70,7 @@ def resolve_round_color_frame_indices(
     ascending-z list for that color.
     """
     color_frames: Dict[float, List[int]] = {}
-    for s in metadata.series_for_round(round_id):
-        if not s.hal_config:
-            continue
-        frame_table_path = find_frame_table_for_hal_config(
-            config.settings_dir / s.hal_config, config.metadata_dir)
-        if frame_table_path is None:
-            continue
-        frame_table = pd.read_csv(frame_table_path)
+    for _, frame_table in iter_round_frame_tables(round_id, config, metadata):
         for color in sorted(frame_table["color"].dropna().unique()):
             if any(round(color) == round(excluded) for excluded in excluded_colors):
                 continue

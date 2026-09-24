@@ -68,7 +68,7 @@ from skimage.transform import resize as sk_resize
 from .common.config import ExperimentConfig
 from .common.io import is_path_stable, read_image_frames
 from .common.metadata import FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo
-from .acquisition.configs import find_frame_table_for_hal_config
+from .acquisition.configs import iter_round_frame_tables
 from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
 from .acquisition.positions import find_exterior_fovs
 from .analysis.ffc import apply_ffc, compute_ffc_field_for_color, load_ffc_field, save_ffc_field
@@ -230,14 +230,7 @@ class LiveRoundMosaicBuilder:
         leave the round with no resolved colors at all.
         """
         color_frames: Dict[float, int] = {}
-        for s in self.metadata.series_for_round(round_id):
-            if not s.hal_config:
-                continue
-            frame_table_path = find_frame_table_for_hal_config(
-                self.config.settings_dir / s.hal_config, self.config.metadata_dir)
-            if frame_table_path is None:
-                continue
-            frame_table = pd.read_csv(frame_table_path)
+        for _, frame_table in iter_round_frame_tables(round_id, self.config, self.metadata):
             for color in sorted(frame_table["color"].dropna().unique()):
                 if round_id != self.focustest_round_id and any(
                     round(color) == round(excluded) for excluded in self.excluded_colors
@@ -252,31 +245,15 @@ class LiveRoundMosaicBuilder:
                           f"{resolved_z:.1f} um (requested {self.target_z_um:.1f} um) -- frame {frame_idx}")
         return color_frames
 
-    def resolve_round_by_imaging_type(self, imaging_type: str) -> Optional[int]:
-        """Return the round id whose series has ``imaging_type == imaging_type``, else None."""
-        target = imaging_type.strip().lower()
-        for round_id in sorted(self.metadata.rounds):
-            for s in self.metadata.series_for_round(round_id):
-                if (s.imaging_type or "").strip().lower() == target:
-                    return round_id
-        return None
-
     def resolve_round_token(self, token) -> int:
         """``int`` -> that round id directly; ``str`` -> resolved by imaging_type."""
         if isinstance(token, str):
-            round_id = self.resolve_round_by_imaging_type(token)
-            if round_id is None:
-                raise ValueError(f"No round has a series with imaging_type={token!r} "
-                                  f"-- check round_info.csv, or use an explicit round id.")
-            return round_id
+            return self.metadata.round_for_imaging_type(token)
         return int(token)
 
     def round_label_for(self, round_id: int):
         """``"cells"`` if *round_id* has a cells series, else *round_id* itself."""
-        for s in self.metadata.series_for_round(round_id):
-            if (s.imaging_type or "").strip().lower() == "cells":
-                return "cells"
-        return round_id
+        return "cells" if self.metadata.is_cells_round(round_id) else round_id
 
     # ── FOV / processed-state bookkeeping ───────────────────────────────────
 

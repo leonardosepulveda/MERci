@@ -24,8 +24,6 @@ load_intensity_percentiles/load_all_intensity_percentiles
                             – per-frame (frame, z, color, min, p<N>..., max) intensity
                               table, exact percentiles derived from a
                               compute_channel_counters() result, saved/loaded as parquet
-resolve_round_by_imaging_type – (imaging_round, frame_table) for round_info.csv's first
-                              row matching a given imaging_type (e.g. "cells")
 compute_tissue_fraction     – per-FOV true-pixel-count tissue coverage (0-1), same
                               method/estimator as misc/measure_tissue_thickness_test.ipynb
 resolve_barcode_bit_lookup  – {bit: (round_id, frame_index)} for every combinatorial
@@ -638,30 +636,6 @@ def tpc_profile_from_counters(channel_counters: Dict, threshold: float, tpc_thre
 
 # ── Tissue fraction (per-FOV, single-channel true-pixel-count coverage) ────────
 
-def resolve_round_by_imaging_type(config, imaging_type: str) -> Tuple[int, pd.DataFrame]:
-    """
-    ``(imaging_round, frame_table)`` for ``round_info.csv``'s first row whose
-    ``imaging_type`` matches (e.g. ``"cells"``).
-
-    Raises
-    ------
-    ValueError if no round has that ``imaging_type``.
-    """
-    from ..acquisition.configs import find_frame_table_for_hal_config
-    from ..common.io import load_round_info
-
-    round_info = load_round_info(config.round_info_csv)
-    match = round_info.loc[round_info["imaging_type"] == imaging_type]
-    if match.empty:
-        raise ValueError(f"No round with imaging_type={imaging_type!r} in {config.round_info_csv}")
-    row = match.iloc[0]
-    round_id = int(row["round_id"])
-    hal_path = config.settings_dir / row["hal_config"]
-    ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
-    frame_table = pd.read_csv(ft_path, index_col=0)
-    return round_id, frame_table
-
-
 def compute_tissue_fraction(
     config, meta, cache_dir: Path, label: str,
     *, channel_nm: float = 405.0, n_background_frames: int = 10,
@@ -700,7 +674,9 @@ def compute_tissue_fraction(
     from ..common.io import read_image_frames
     from ..progress_display import ProgressReporter
 
-    round_id, frame_table = resolve_round_by_imaging_type(config, "cells")
+    from ..acquisition.configs import load_round_frame_table
+    round_id = meta.round_for_imaging_type("cells")
+    frame_table = load_round_frame_table(round_id, config, meta)
     channel_frames  = frame_table[frame_table["color"].round(0) == round(channel_nm)].sort_values("z")
     z_frame_indices = list(zip(channel_frames.index.tolist(), channel_frames["z"].tolist()))
     if not z_frame_indices:

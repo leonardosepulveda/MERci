@@ -872,6 +872,42 @@ def find_grid_neighbor(
     return fov_ids[int(idx)]
 
 
+def find_3x3_block(
+    fov_ids:            Sequence[int],
+    positions:          Dict[int, Tuple[float, float]],
+    step_size:          float,
+    tolerance_fraction: float = 0.25,
+) -> Optional[Dict[str, int]]:
+    """
+    First FOV in *fov_ids* with all 8 grid neighbours imaged (see
+    :func:`find_grid_neighbor`), as ``{"center", "up", "down", "left",
+    "right", "up_left", "up_right", "down_left", "down_right": fov_id}``;
+    ``None`` if no FOV has a complete neighbourhood. A diagonal is looked up
+    from the vertical neighbour first, then from the horizontal one.
+    """
+    def nb(fov, direction):
+        return find_grid_neighbor(fov, positions, direction, step_size, tolerance_fraction)
+
+    def diag(fov_a, dir_a, fov_b, dir_b):
+        d = nb(fov_a, dir_a)
+        return d if d is not None else nb(fov_b, dir_b)
+
+    for center in fov_ids:
+        up, down, left, right = (nb(center, d) for d in ("up", "down", "left", "right"))
+        if None in (up, down, left, right):
+            continue
+        diagonals = {
+            "up_left":    diag(up, "left", left, "up"),
+            "up_right":   diag(up, "right", right, "up"),
+            "down_left":  diag(down, "left", left, "down"),
+            "down_right": diag(down, "right", right, "down"),
+        }
+        if None in diagonals.values():
+            continue
+        return {"center": center, "up": up, "down": down, "left": left, "right": right, **diagonals}
+    return None
+
+
 # ── Multi-tissue / multi-boundary discovery ─────────────────────────────────────
 
 @dataclass

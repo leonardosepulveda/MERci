@@ -321,18 +321,9 @@ def compute_and_cache_ffc(
         if not candidates:
             samples = []
         else:
-            from MERci.acquisition.configs import find_frame_table_for_hal_config
+            from MERci.acquisition.configs import iter_round_frame_tables
             fov_path = candidates[0][0]
-            series = next(
-                (s for s in metadata.series_for_round(ref_round) if s.hal_config), None,
-            )
-            frame_table = None
-            if series is not None and config.settings_dir is not None:
-                ft_path = find_frame_table_for_hal_config(
-                    config.settings_dir / series.hal_config, config.metadata_dir,
-                )
-                if ft_path is not None:
-                    frame_table = pd.read_csv(ft_path, index_col=0)
+            frame_table = next((ft for _, ft in iter_round_frame_tables(ref_round, config, metadata)), None)
             samples = (
                 select_all_frames_of_fov(fov_path, frame_table, color)
                 if frame_table is not None else [(fov_path, frame_idx)]

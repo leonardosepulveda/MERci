@@ -19,7 +19,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-import pandas as pd
 
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
@@ -35,8 +34,8 @@ from .analysis.round  import (
 from .analysis import ffc as ffc_mod
 from .acquisition.configs import (
     read_hal_flip_vertical,
-    find_frame_table_for_hal_config,
     get_color_frame_indices,
+    iter_round_frame_tables,
 )
 
 log = logging.getLogger(__name__)
@@ -98,15 +97,10 @@ def resolve_round_color_frame_indices(
     if config.settings_dir is None or config.metadata_dir is None:
         return {}
 
-    for s in metadata.series_for_round(round_id):
-        if s.hal_config:
-            hal_path = config.settings_dir / s.hal_config
-            ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
-            if ft_path is not None:
-                ft = pd.read_csv(ft_path, index_col=0)
-                indices = get_color_frame_indices(ft)
-                if indices:
-                    return indices
+    for _, ft in iter_round_frame_tables(round_id, config, metadata):
+        indices = get_color_frame_indices(ft)
+        if indices:
+            return indices
     log.warning(
         "Could not determine color frame indices for round %d; "
         "falling back to frame 0.", round_id

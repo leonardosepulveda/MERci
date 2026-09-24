@@ -146,6 +146,13 @@ class MosaicCanvas:
         x0, y0 = self.origin_um
         return (x0 + col * self.pixel_size_um, y0 + row * self.pixel_size_um)
 
+    def to_px(self, x_um, y_um) -> Tuple[np.ndarray, np.ndarray]:
+        """Stage (x_um, y_um), scalars or arrays, to canvas pixels as ``(col, row)``
+        -- x then y, the order matplotlib plots in. Inverse of :meth:`to_um`."""
+        x0, y0 = self.origin_um
+        return ((np.asarray(x_um) - x0) / self.pixel_size_um,
+                (np.asarray(y_um) - y0) / self.pixel_size_um)
+
 
 @dataclass
 class MosaicSegmentation:

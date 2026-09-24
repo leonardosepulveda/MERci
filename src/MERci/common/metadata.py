@@ -302,6 +302,19 @@ class ExperimentMetadata:
         """All round ids, sorted."""
         return sorted(self.rounds)
 
+    def round_for_imaging_type(self, imaging_type: str) -> int:
+        """First round id with a series of this ``imaging_type`` (case-insensitive).
+        Raises ValueError if there is none."""
+        target = imaging_type.strip().lower()
+        for rid in self.valid_round_ids():
+            if any((s.imaging_type or "").strip().lower() == target for s in self.series_for_round(rid)):
+                return rid
+        raise ValueError(f"No round found with imaging_type={imaging_type!r}")
+
+    def is_cells_round(self, round_id: int) -> bool:
+        """True if any of *round_id*'s series is the cells series."""
+        return any(_is_cells_series(s) for s in self.series_for_round(round_id))
+
     def round_fully_written(self, round_id: int) -> bool:
         """
         True iff every expected raw image file for *round_id* already exists

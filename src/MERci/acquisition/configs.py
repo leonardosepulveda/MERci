@@ -744,6 +744,31 @@ def find_frame_table_for_hal_config(
         return None
 
 
+def iter_round_frame_tables(round_id: int, config, metadata):
+    """
+    Yield ``(series, frame_table)`` for each of *round_id*'s series whose HAL
+    config resolves to a frame table (:func:`find_frame_table_for_hal_config`).
+    Frame tables are read with ``index_col=0``: the index is the frame number.
+    """
+    if config.settings_dir is None:
+        return
+    for s in metadata.series_for_round(round_id):
+        if not s.hal_config:
+            continue
+        ft_path = find_frame_table_for_hal_config(Path(config.settings_dir) / s.hal_config,
+                                                  config.metadata_dir)
+        if ft_path is not None:
+            yield s, pd.read_csv(ft_path, index_col=0)
+
+
+def load_round_frame_table(round_id: int, config, metadata) -> pd.DataFrame:
+    """Frame table of *round_id*'s first series that has one (see
+    :func:`iter_round_frame_tables`). Raises FileNotFoundError if none does."""
+    for _, frame_table in iter_round_frame_tables(round_id, config, metadata):
+        return frame_table
+    raise FileNotFoundError(f"No frame table found for round {round_id}")
+
+
 def get_color_frame_indices(
     frame_table: pd.DataFrame,
     bead_z:      float = 0.0,

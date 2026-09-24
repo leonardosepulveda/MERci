@@ -8,32 +8,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Tuple
 
-import numpy as np
-
 from ..common.config import ExperimentConfig
+from ..common.io import path_mtime as io_path_mtime
 from ..common.metadata import ExperimentMetadata
-from ..acquisition.mosaic import MosaicCanvas
-
-
-def um_to_px(x, y, canvas: MosaicCanvas):
-    """Convert stage micron coordinates to *canvas*'s own pixel coordinates."""
-    return ((np.asarray(x) - canvas.origin_um[0]) / canvas.pixel_size_um,
-             (np.asarray(y) - canvas.origin_um[1]) / canvas.pixel_size_um)
 
 
 def path_mtime(path: Path) -> float:
-    """
-    Most-recent modification time of *path*.
-
-    A ``.zarr`` store is a directory -- its own mtime doesn't reliably
-    reflect a chunk file written inside it, so fall back to the newest
-    member file.
-    """
-    path = Path(path)
-    if path.is_dir():
-        member_mtimes = [f.stat().st_mtime for f in path.rglob("*") if f.is_file()]
-        return max(member_mtimes) if member_mtimes else path.stat().st_mtime
-    return path.stat().st_mtime
+    """:func:`MERci.common.io.path_mtime`, falling back to the store's own
+    mtime while a directory store is still empty."""
+    try:
+        return io_path_mtime(path)
+    except FileNotFoundError:
+        return Path(path).stat().st_mtime
 
 
 def round_progress(round_id: int, config: ExperimentConfig, metadata: ExperimentMetadata) -> Tuple[int, Optional[float]]:
