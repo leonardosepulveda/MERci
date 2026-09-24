@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from .io import load_positions, load_round_info
+from .io import is_path_stable, load_positions, load_round_info
 
 log = logging.getLogger(__name__)
 
@@ -325,6 +325,18 @@ class ExperimentMetadata:
         """
         files = self.files_for_round(round_id)
         return bool(files) and all(_path_exists_safe(f) for f in files)
+
+
+def first_existing_path(
+    series: List[SeriesInfo], fov_id: int, image_suffix: str, stable: bool = False,
+) -> Optional[Path]:
+    """First of *series*' paths for *fov_id* that exists (and, with
+    ``stable=True``, is not still being written); None if none does."""
+    for s in series:
+        p = s.resolve_path(fov_id, image_suffix)
+        if p.exists() and (not stable or is_path_stable(p)):
+            return p
+    return None
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────

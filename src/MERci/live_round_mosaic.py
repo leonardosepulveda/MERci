@@ -67,7 +67,9 @@ from skimage.transform import resize as sk_resize
 
 from .common.config import ExperimentConfig
 from .common.io import is_path_stable, read_image_frames
-from .common.metadata import FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo
+from .common.metadata import (
+    FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo, first_existing_path,
+)
 from .acquisition.configs import iter_round_frame_tables
 from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
 from .acquisition.positions import find_exterior_fovs
@@ -261,7 +263,7 @@ class LiveRoundMosaicBuilder:
         series = self.metadata.series_for_round(round_id)
         return [
             fov_id for fov_id in sorted(self.metadata.fovs)
-            if any(s.resolve_path(fov_id, self.config.image_suffix).exists() for s in series)
+            if first_existing_path(series, fov_id, self.config.image_suffix) is not None
         ]
 
     def thumbnail_path_for(self, image_path: Path, frame_idx: int) -> Path:
@@ -271,11 +273,9 @@ class LiveRoundMosaicBuilder:
         self, round_id: int, fov_id: int, color_frames: Dict[float, int], series: List[SeriesInfo],
     ) -> bool:
         """True iff *fov_id* has a cached thumbnail for EVERY color of this round."""
-        existing = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-        existing = [p for p in existing if p.exists()]
-        if not existing:
+        image_path = first_existing_path(series, fov_id, self.config.image_suffix)
+        if image_path is None:
             return False
-        image_path = existing[0]
         return all(self.thumbnail_path_for(image_path, frame_idx).exists()
                    for frame_idx in color_frames.values())
 
@@ -403,10 +403,9 @@ class LiveRoundMosaicBuilder:
 
         samples = []
         for fov_id in candidate_ids:
-            paths = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-            existing = [p for p in paths if p.exists() and is_path_stable(p)]
-            if existing:
-                samples.append((existing[0], frame_idx))
+            path = first_existing_path(series, fov_id, self.config.image_suffix, stable=True)
+            if path is not None:
+                samples.append((path, frame_idx))
         if not samples:
             return None
 
@@ -458,18 +457,13 @@ class LiveRoundMosaicBuilder:
             if self.enable_ffc else None
         pooled = []
         for fov_id in sample_ids:
-            paths = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-            # is_path_stable, not just .exists(): a sampled FOV's file can
-            # already exist while HAL is still mid-write -- reading a
-            # not-yet-written frame from it would raise the same
-            # IndexError/truncated-read build_round_mosaic otherwise guards
-            # against. Skipping it here just shrinks this one-time sample
-            # pool by one; a later cycle recomputes and caches the real range.
-            existing = [p for p in paths if p.exists() and is_path_stable(p)]
-            if not existing:
+            # stable=True: a file HAL is still writing can't be read yet;
+            # skipping it only shrinks this one-time sample.
+            path = first_existing_path(series, fov_id, self.config.image_suffix, stable=True)
+            if path is None:
                 continue
             try:
-                frame = read_image_frames(existing[0], [frame_idx],
+                frame = read_image_frames(path, [frame_idx],
                                            frame_width=self.config.frame_width,
                                            frame_height=self.config.frame_height)[0]
             except Exception as exc:
@@ -545,11 +539,9 @@ class LiveRoundMosaicBuilder:
             vmin_vmax = self.get_or_compute_contrast_range(round_id, color_nm, frame_idx, series, fov_ids)
 
             for fov_id in still_pending:
-                existing = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-                existing = [p for p in existing if p.exists()]
-                if not existing:
+                image_path = first_existing_path(series, fov_id, self.config.image_suffix)
+                if image_path is None:
                     continue
-                image_path = existing[0]
 
                 if not is_path_stable(image_path):
                     print(f"  round {round_id}, {color_nm:.0f} nm, FOV {fov_id}: "

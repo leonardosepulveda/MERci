@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from ..common.config import ExperimentConfig
-from ..common.metadata import ExperimentMetadata, SeriesInfo
+from ..common.metadata import ExperimentMetadata, SeriesInfo, first_existing_path
 from ..common.io import read_image_frames
 from ..acquisition.configs import get_all_color_frame_indices, iter_round_frame_tables
 from .spot_localization import detect_foci_with_background
@@ -127,10 +127,10 @@ def compute_fov_round_color_spots(
     *fov_id* isn't imaged yet for this round -- so the caller can retry on a
     later run rather than caching an empty/wrong result.
     """
-    existing = [p for p in (s.resolve_path(fov_id, config.image_suffix) for s in series) if p.exists()]
-    if not existing:
+    image_path = first_existing_path(series, fov_id, config.image_suffix)
+    if image_path is None:
         return None
-    frames = read_image_frames(existing[0], frame_indices,
+    frames = read_image_frames(image_path, frame_indices,
                                 frame_width=config.frame_width, frame_height=config.frame_height)
     max_proj, bg_med, candidates = detect_foci_in_crop(frames, crop_size, min_dist_px, thresh_sigma)
     rows = [
