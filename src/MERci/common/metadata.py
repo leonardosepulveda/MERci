@@ -518,7 +518,7 @@ def _build_metadata(
 
         for fov_id in fov_ids:
             try:
-                fname = s.build_filename(fov_id, image_suffix)
+                s.build_filename(fov_id, image_suffix)   # only checks it can be built
             except (KeyError, TypeError) as exc:
                 log.warning(
                     "Cannot build filename for series '%s' fov %d: %s",

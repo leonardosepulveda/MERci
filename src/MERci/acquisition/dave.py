@@ -335,7 +335,6 @@ def create_round_info(
     ``hal_config``, ``data_dir``
     """
     mic  = microscope.lower()
-    data = Path(sample_dir) / "data"
     rows: List[dict] = []
 
     if positions_txt is not None:

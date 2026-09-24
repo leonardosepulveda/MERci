@@ -62,14 +62,13 @@ from __future__ import annotations
 
 import json
 import pickle
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy import ndimage
 from shapely.geometry import Polygon
-from shapely.ops import unary_union
 from skimage import filters, measure, morphology
 
 from MERci.common.io import save_positions_array

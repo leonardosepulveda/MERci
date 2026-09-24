@@ -741,7 +741,7 @@ def plot_max_projections(
 
     if print_stats:
         header = f"{'Projection':<14}" + "".join(f"  p{p:>3}" for p in stat_pcts)
-        header += f"   vmin    vmax"
+        header += "   vmin    vmax"
         print(header)
         print("-" * len(header))
 
