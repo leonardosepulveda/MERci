@@ -88,12 +88,8 @@ def main(argv=None) -> None:
     round_id = _resolve_round_id(args)
     sample_dir = args.sample_dir
 
-    config = ExperimentConfig(
-        data_dir       = sample_dir / "data",
-        metadata_dir   = sample_dir / "metadata",
-        analysis_dir   = sample_dir / "analysis",
-        settings_dir   = sample_dir / "settings",
-        round_info_csv = sample_dir / "metadata" / "round_info.csv",
+    config = ExperimentConfig.from_sample_dir(
+        sample_dir,
         positions_txt  = _resolve_positions_file(sample_dir, args.positions_file),
         image_suffix   = args.image_suffix,
     )

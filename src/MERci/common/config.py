@@ -152,6 +152,24 @@ class ExperimentConfig:
         import os
         return max(1, (os.cpu_count() or 2) - 2)
 
+    @classmethod
+    def from_sample_dir(cls, sample_dir: Path, **kwargs) -> "ExperimentConfig":
+        """
+        Config for the standard experiment layout under *sample_dir*:
+        ``data/``, ``metadata/``, ``analysis/``, ``settings/`` and
+        ``metadata/round_info.csv``. *kwargs* give ``positions_txt`` (required)
+        and any other field, and can override these defaults.
+        """
+        sample_dir = Path(sample_dir)
+        defaults = dict(
+            data_dir       = sample_dir / "data",
+            metadata_dir   = sample_dir / "metadata",
+            analysis_dir   = sample_dir / "analysis",
+            settings_dir   = sample_dir / "settings",
+            round_info_csv = sample_dir / "metadata" / "round_info.csv",
+        )
+        return cls(**{**defaults, **kwargs})
+
     # ── Initialisation ─────────────────────────────────────────────────────────
 
     def __post_init__(self) -> None:

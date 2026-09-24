@@ -84,12 +84,8 @@ def main(argv=None) -> None:
     # left as plausible-but-unchecked paths (ExperimentConfig never validates
     # their existence in __post_init__).
     sample_dir = args.sample_dir
-    config = ExperimentConfig(
-        data_dir       = sample_dir / "data",
-        metadata_dir   = sample_dir / "metadata",
-        analysis_dir   = sample_dir / "analysis",
-        settings_dir   = sample_dir / "settings",
-        round_info_csv = sample_dir / "metadata" / "round_info.csv",
+    config = ExperimentConfig.from_sample_dir(
+        sample_dir,
         positions_txt  = sample_dir / "positions" / "positions.txt",
         image_suffix   = args.image_suffix,
     )
