@@ -500,22 +500,22 @@ class LiveRoundMosaicBuilder:
         arrays :meth:`get_canvas` holds).
         """
         series = self.metadata.series_for_round(round_id)
-        last_redraw = [0.0]      # mutable cells so maybe_redraw can update them
-        last_disk_save = [0.0]
+        last_redraw = last_disk_save = 0.0
 
         def maybe_redraw(force: bool = False) -> None:
+            nonlocal last_redraw, last_disk_save
             now = time.time()
-            if not (force or (now - last_redraw[0]) >= self.live_redraw_min_interval_sec):
+            if not (force or (now - last_redraw) >= self.live_redraw_min_interval_sec):
                 return
-            save_full_res = force or (now - last_disk_save[0]) >= self.disk_save_min_interval_sec
+            save_full_res = force or (now - last_disk_save) >= self.disk_save_min_interval_sec
             show_round_mosaic(
                 round_id, {c: self.get_canvas(round_id, c) for c in color_frames}, label,
                 mosaic_paths={c: self.mosaic_path(round_id, c) for c in color_frames},
                 live_preview_max_px=self.live_preview_max_px, save_full_res=save_full_res,
             )
-            last_redraw[0] = now
+            last_redraw = now
             if save_full_res:
-                last_disk_save[0] = now
+                last_disk_save = now
 
         for color_nm, frame_idx in color_frames.items():
             ffc_field = self.get_or_compute_ffc_field(color_nm, frame_idx, fov_ids, series)

@@ -481,7 +481,7 @@ def generate_emitter_positions(
     if density_per_um3 is not None:
         n_emitters = max(1, int(round(density_per_um3 * x_um * y_um * z_um)))
 
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
     return pd.DataFrame({
         "x_um": gen.uniform(0.0, x_um, n_emitters),
         "y_um": gen.uniform(0.0, y_um, n_emitters),
@@ -533,7 +533,7 @@ def simulate_psf_image(
     """
     import math
 
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
     n_z, n_y, n_x = volume_shape_px
     vx, vy, vz    = voxel_size_um
 
@@ -638,7 +638,7 @@ def simulate_multicolor_stack(
     -------
     {color_nm: (n_z, H, W) uint16 array}
     """
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
 
     # Build per-colour position tables
     if color_shifts_um is not None:

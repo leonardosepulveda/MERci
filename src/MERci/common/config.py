@@ -136,13 +136,8 @@ class ExperimentConfig:
         ``data_dir`` in same-drive mode; ``analysis_source_dir`` (the second-drive
         mirror) in mirror mode.
         """
-        if self.analysis_mode == "mirror_drive":
-            if self.analysis_source_dir is None:
-                raise ValueError(
-                    "analysis_mode='mirror_drive' requires analysis_source_dir to be set."
-                )
-            return self.analysis_source_dir
-        return self.data_dir
+        # __post_init__ guarantees analysis_source_dir is set in mirror mode.
+        return self.analysis_source_dir if self.analysis_mode == "mirror_drive" else self.data_dir
 
     @property
     def resolved_n_workers(self) -> int:
