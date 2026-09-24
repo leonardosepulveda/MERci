@@ -23,7 +23,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -53,11 +53,10 @@ def _sbatch_header(
     cpus_per_task: int = 1,
     array:         Optional[str] = None,
     conda_env:     str = _DEFAULT_CONDA_ENV,
+    gres:          Optional[str] = None,
 ) -> str:
-    """Same shape as ``fishtank_config.py``'s own ``_sbatch_header``,
-    generalised with a configurable conda env (MERci's own analysis code
-    needs only the scientific-stack env mirroring ``merci_env``, not
-    ``fishtank_env``)."""
+    """``#SBATCH`` lines plus ``module load python`` / ``source activate
+    <conda_env>`` (also used by ``fishtank_config``)."""
     lines = [
         "#!/bin/bash",
         f"#SBATCH --job-name={job_name}",
@@ -66,6 +65,10 @@ def _sbatch_header(
         f"#SBATCH --cpus-per-task={cpus_per_task}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --time={time}",
+    ]
+    if gres is not None:
+        lines.append(f"#SBATCH --gres={gres}")
+    lines += [
         f"#SBATCH --partition={partition}",
         f"#SBATCH --output={output_log}",
     ]
@@ -83,6 +86,39 @@ def _write_script(output_path: Path, text: str) -> Path:
     return output_path
 
 
+def _csv(values) -> str:
+    return ",".join(str(v) for v in values)
+
+
+def _orientation_flags(orientation: dict) -> str:
+    """``--flip-horizontal --transpose``-style flags for the True entries."""
+    return " ".join(f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on)
+
+
+def _job_script(
+    cli_path: Path, arg_lines: List[str], sample_dir: Path, output_path: Path, array: Optional[str],
+    mem: str, time: str, partition: str, conda_env: str, job_name: str,
+) -> Path:
+    """Write an sbatch script running ``python <cli_path> <arg_lines...>``
+    (one line per argument group; empty lines are dropped), logging to
+    ``<sample_dir>/analysis/logs``."""
+    header = _sbatch_header(
+        job_name=job_name, mem=mem, time=time,
+        output_log=str(Path(sample_dir) / "analysis" / "logs" / "%x_%A_%a.out"),
+        partition=partition, array=array, conda_env=conda_env,
+    )
+    body = f"python {cli_path}" + "".join(f" \\\n    {line}" for line in arg_lines if line) + "\n"
+    return _write_script(output_path, header + "\n" + body)
+
+
+def _array(n_pending: int, concurrency: int) -> str:
+    return f"0-{n_pending - 1}%{concurrency}"
+
+
+# Each build_*_script below writes an sbatch array job running one
+# cli_*.py script once per manifest entry ($SLURM_ARRAY_TASK_ID selects the
+# entry); see that script's own docstring for its manifest format.
+
 def build_fov_array_script(
     sample_dir:         Path,
     manifest_path:      Path,
@@ -95,24 +131,12 @@ def build_fov_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_fov",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs ``cli_analyze_fov.py`` once
-    per pending FOV file listed in *manifest_path* (one path per line,
-    ``$SLURM_ARRAY_TASK_ID`` selects the line).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_analyze_fov.py`` per pending image file (manifest: one path per line)."""
+    return _job_script(
+        _CLI_ANALYZE_FOV, [f"--sample-dir {sample_dir}", f"--manifest {manifest_path}"],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    body = (
-        f"python {_CLI_ANALYZE_FOV} \\\n"
-        f"    --sample-dir {sample_dir} \\\n"
-        f"    --manifest {manifest_path}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_round_mosaic_script(
@@ -127,33 +151,19 @@ def build_round_mosaic_script(
     job_name:      str = "merci_mosaic",
 ) -> Path:
     """
-    Write an sbatch job script that runs ``cli_build_round_mosaic.py`` for
-    the round(s) listed in *manifest_path* (one round id per line) --
-    submitted as an array job when there is more than one pending round,
-    or a single plain job (``--round-id``) when there's exactly one.
+    ``cli_build_round_mosaic.py`` for the round(s) in *manifest_path* (one
+    round id per line): an array job for several rounds, a plain job
+    (``--round-id``) for exactly one.
     """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    array = f"0-{n_pending - 1}" if n_pending > 1 else None
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=array,
-        conda_env=conda_env,
-    )
     if n_pending > 1:
-        body = (
-            f"python {_CLI_BUILD_ROUND_MOSAIC} \\\n"
-            f"    --sample-dir {sample_dir} \\\n"
-            f"    --manifest {manifest_path}\n"
-        )
+        round_arg, array = f"--manifest {manifest_path}", f"0-{n_pending - 1}"
     else:
-        round_id = int(Path(manifest_path).read_text().strip().splitlines()[0])
-        body = (
-            f"python {_CLI_BUILD_ROUND_MOSAIC} \\\n"
-            f"    --sample-dir {sample_dir} \\\n"
-            f"    --round-id {round_id}\n"
-        )
-    return _write_script(output_path, header + "\n" + body)
+        round_id = int(Path(manifest_path).read_text(encoding="utf-8").split()[0])
+        round_arg, array = f"--round-id {round_id}", None
+    return _job_script(
+        _CLI_BUILD_ROUND_MOSAIC, [f"--sample-dir {sample_dir}", round_arg],
+        sample_dir, output_path, array, mem, time, partition, conda_env, job_name,
+    )
 
 
 def build_texture_stats_array_script(
@@ -171,31 +181,14 @@ def build_texture_stats_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_texture",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs ``cli_compute_texture_stats.py``
-    once per pending FOV file listed in *manifest_path* -- the SLURM-array
-    counterpart to ``measure_tissue_thickness.ipynb`` section 14's own
-    sequential loop, for experiments where computing every FOV's texture
-    profile locally would take too long (each task re-reads one FOV's own
-    z-stack of full-resolution frames, unlike sections 4/11-13 which reuse
-    already-cached intensity Counters).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_texture_stats.py`` per pending FOV (re-reads each FOV's z-stack)."""
+    return _job_script(
+        _CLI_COMPUTE_TEXTURE_STATS,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--frame-indices {_csv(frame_indices)}", f"--sigma {sigma}"],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    frame_indices_str = ",".join(str(i) for i in frame_indices)
-    body = (
-        f"python {_CLI_COMPUTE_TEXTURE_STATS} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --frame-indices {frame_indices_str} \\\n"
-        f"    --sigma {sigma}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_tpc_margin_array_script(
@@ -216,40 +209,17 @@ def build_tpc_margin_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_tpc_margin",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_compute_tpc_margin_thumbnails.py`` once per pending FOV listed in
-    *manifest_path* -- the SLURM-array counterpart to
-    ``measure_tissue_thickness.ipynb`` section 23's own sequential loop,
-    for experiments where reading every FOV's bounded margin-sweep window
-    locally would take too long (each task still only reads its own FOV's
-    window once, covering every margin candidate).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_tpc_margin_thumbnails.py`` per pending FOV (one read covers every margin)."""
+    tw, th = thumbnail_size
+    return _job_script(
+        _CLI_TPC_MARGIN_THUMBNAILS,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--frame-indices {_csv(frame_indices)}", f"--z-um-values {_csv(z_um_values)}",
+         f"--margins {_csv(margins)}", f"--thumbnail-width {tw} --thumbnail-height {th}",
+         _orientation_flags(orientation)],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    frame_idx_str = ",".join(str(i) for i in frame_indices)
-    z_um_str      = ",".join(str(z) for z in z_um_values)
-    margins_str   = ",".join(str(m) for m in margins)
-    tw, th        = thumbnail_size
-    orientation_flags = " ".join(
-        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
-    )
-    body = (
-        f"python {_CLI_TPC_MARGIN_THUMBNAILS} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --frame-indices {frame_idx_str} \\\n"
-        f"    --z-um-values {z_um_str} \\\n"
-        f"    --margins {margins_str} \\\n"
-        f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
-        f"    {orientation_flags}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_fov_projections_array_script(
@@ -268,37 +238,16 @@ def build_fov_projections_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_fov_proj",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_compute_fov_projections.py`` once per pending FOV listed in
-    *manifest_path* -- each task reads its own FOV's full z-stack once and
-    writes every requested per-pixel projection statistic (a subset of
-    median/max/min) from that same read, in parallel across FOVs. Used by
-    ``notebooks/tests/calculate_ffc/`` to compare projection statistics
-    for FFC-field construction without re-reading raw data once per
-    statistic.
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_fov_projections.py`` per pending FOV: every requested
+    per-pixel z projection from one read of the stack."""
+    return _job_script(
+        _CLI_FOV_PROJECTIONS,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--frame-indices {_csv(frame_indices)}", f"--statistics {_csv(statistics)}",
+         _orientation_flags(orientation)],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    frame_idx_str = ",".join(str(i) for i in frame_indices)
-    stats_str     = ",".join(statistics)
-    orientation_flags = " ".join(
-        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
-    )
-    body = (
-        f"python {_CLI_FOV_PROJECTIONS} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --frame-indices {frame_idx_str} \\\n"
-        f"    --statistics {stats_str} \\\n"
-        f"    {orientation_flags}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_gif_frames_array_script(
@@ -318,38 +267,16 @@ def build_gif_frames_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_gif_frames",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_compute_gif_frame_thumbnails.py`` once per pending FOV listed in
-    *manifest_path* -- the SLURM-array counterpart to
-    ``measure_tissue_thickness.ipynb`` section 24's own sequential loop,
-    for experiments where reading every FOV at every GIF_Z_STRIDE-selected
-    z-step locally would take too long (each task still reads its own
-    FOV's selected z-steps in one batched call, not one read per step).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_gif_frame_thumbnails.py`` per pending FOV (the selected z-steps only)."""
+    tw, th = thumbnail_size
+    return _job_script(
+        _CLI_GIF_FRAME_THUMBNAILS,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--z-positions {_csv(z_positions)}", f"--frame-indices {_csv(frame_indices)}",
+         f"--thumbnail-width {tw} --thumbnail-height {th}", _orientation_flags(orientation)],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    z_pos_str     = ",".join(str(z) for z in z_positions)
-    frame_idx_str = ",".join(str(i) for i in frame_indices)
-    tw, th        = thumbnail_size
-    orientation_flags = " ".join(
-        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
-    )
-    body = (
-        f"python {_CLI_GIF_FRAME_THUMBNAILS} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --z-positions {z_pos_str} \\\n"
-        f"    --frame-indices {frame_idx_str} \\\n"
-        f"    --thumbnail-width {tw} --thumbnail-height {th} \\\n"
-        f"    {orientation_flags}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_fov_elevation_array_script(
@@ -371,41 +298,17 @@ def build_fov_elevation_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_elevation",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_compute_fov_elevation.py`` once per pending FOV listed in
-    *manifest_path* -- the SLURM-array counterpart to
-    ``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb``'s own
-    section 9 sequential loop (``compute_fov_elevation``), needed at
-    full-FOV-grid production scale
-    (``after_imaging/08_measure_tissue_thickness.ipynb``) where that
-    notebook's own scope note flagged a full-grid run as a multi-hour/
-    cluster job.
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_fov_elevation.py`` per pending FOV
+    (``analysis.elevation.compute_fov_elevation`` at full-grid scale)."""
+    return _job_script(
+        _CLI_FOV_ELEVATION,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--ffc-field-path {ffc_field_path}", f"--threshold {threshold}",
+         f"--downsample-factor {downsample_factor}", f"--frame-indices {_csv(frame_indices)}",
+         f"--z-um-values {_csv(z_um_values)}", _orientation_flags(orientation)],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    frame_idx_str = ",".join(str(i) for i in frame_indices)
-    z_um_str      = ",".join(str(z) for z in z_um_values)
-    orientation_flags = " ".join(
-        f"--{flag.replace('_', '-')}" for flag, on in orientation.items() if on
-    )
-    body = (
-        f"python {_CLI_FOV_ELEVATION} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --ffc-field-path {ffc_field_path} \\\n"
-        f"    --threshold {threshold} \\\n"
-        f"    --downsample-factor {downsample_factor} \\\n"
-        f"    --frame-indices {frame_idx_str} \\\n"
-        f"    --z-um-values {z_um_str} \\\n"
-        f"    {orientation_flags}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_channel_counters_array_script(
@@ -423,30 +326,14 @@ def build_channel_counters_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_channel_counters",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_compute_channel_counters.py`` once per pending FOV listed in
-    *manifest_path* -- the SLURM-array counterpart to
-    ``measure_tissue_thickness``-style notebooks' own section-4 sequential
-    loop (the heaviest read step: one full channel z-sweep per FOV).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_compute_channel_counters.py`` per pending FOV (one channel z-sweep each)."""
+    return _job_script(
+        _CLI_CHANNEL_COUNTERS,
+        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
+         f"--frame-indices {_csv(frame_indices)}", f"--z-um-values {_csv(z_um_values)}"],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    frame_idx_str = ",".join(str(i) for i in frame_indices)
-    z_um_str      = ",".join(str(z) for z in z_um_values)
-    body = (
-        f"python {_CLI_CHANNEL_COUNTERS} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir} \\\n"
-        f"    --frame-indices {frame_idx_str} \\\n"
-        f"    --z-um-values {z_um_str}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_fov_completeness_array_script(
@@ -467,31 +354,17 @@ def build_fov_completeness_array_script(
     conda_env:          str = _DEFAULT_CONDA_ENV,
     job_name:           str = "merci_completeness",
 ) -> Path:
-    """
-    Write an sbatch array-job script that runs
-    ``cli_check_fov_completeness.py`` once per pending FOV listed in
-    *manifest_path* -- one task checks all of *round_ids* for that one FOV
-    (see ``notebooks/after_imaging/09_check_fov_completeness.ipynb``).
-    """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    """``cli_check_fov_completeness.py`` per pending FOV, checking all of
+    *round_ids* (``after_imaging/10_check_fov_completeness.ipynb``)."""
+    return _job_script(
+        _CLI_FOV_COMPLETENESS,
+        [f"--round-info-csv {round_info_csv}", f"--positions-txt {positions_txt}",
+         f"--data-dir {data_dir}", f"--image-suffix {image_suffix}",
+         f"--round-ids {_csv(round_ids)}", f"--manifest {manifest_path}",
+         f"--output-dir {output_dir}"],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    round_ids_str = ",".join(str(r) for r in round_ids)
-    body = (
-        f"python {_CLI_FOV_COMPLETENESS} \\\n"
-        f"    --round-info-csv {round_info_csv} \\\n"
-        f"    --positions-txt {positions_txt} \\\n"
-        f"    --data-dir {data_dir} \\\n"
-        f"    --image-suffix {image_suffix} \\\n"
-        f"    --round-ids {round_ids_str} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --output-dir {output_dir}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 def build_intensity_percentiles_array_script(
@@ -508,33 +381,17 @@ def build_intensity_percentiles_array_script(
     job_name:           str = "merci_intensity_pctl",
 ) -> Path:
     """
-    Write an sbatch array-job script that runs
-    ``cli_measure_intensity_percentiles.py`` once per pending
-    (round/hyb x FOV) image file listed in *manifest_path* (see that
-    script's own docstring for the manifest's 5-column format) -- one task
-    per individual FOV movie, as
-    ``after_imaging/12_measure_intensity_percentiles.ipynb`` requires.
-
-    ``mem``/``time`` defaults come from a real benchmark against
-    LT066_sample_01's lineage-tracing data (215-frame, 2304x2304 uint16
-    FOVs): ~45-55s wall time, ~250-260MB peak RSS per file (see that
-    notebook's own intro cell for the numbers) -- comfortably covered by
-    the ~4x memory / ~10x time margin here.
+    ``cli_measure_intensity_percentiles.py`` per image file
+    (``after_imaging/12_measure_intensity_percentiles.ipynb``). Defaults are
+    sized from a real run on 215-frame 2304x2304 FOVs: about 50 s and 260 MB
+    per file.
     """
-    log_dir = Path(sample_dir) / "analysis" / "logs"
-    header = _sbatch_header(
-        job_name=job_name, mem=mem, time=time,
-        output_log=str(log_dir / "%x_%A_%a.out"),
-        partition=partition, array=f"0-{n_pending - 1}%{array_concurrency}",
-        conda_env=conda_env,
+    return _job_script(
+        _CLI_INTENSITY_PERCENTILES,
+        [f"--manifest {manifest_path}", f"--percentiles {_csv(percentiles)}"],
+        sample_dir, output_path, _array(n_pending, array_concurrency),
+        mem, time, partition, conda_env, job_name,
     )
-    percentiles_str = ",".join(str(p) for p in percentiles)
-    body = (
-        f"python {_CLI_INTENSITY_PERCENTILES} \\\n"
-        f"    --manifest {manifest_path} \\\n"
-        f"    --percentiles {percentiles_str}\n"
-    )
-    return _write_script(output_path, header + "\n" + body)
 
 
 _SBATCH_JOB_ID_RE = re.compile(r"Submitted batch job (\d+)")
@@ -623,7 +480,7 @@ def submit_pending_fov_analysis(
             continue
 
         manifest_path = manifests_dir / f"pending_fovs_round{rid:03d}.txt"
-        manifest_path.write_text("\n".join(str(f) for f in round_files) + "\n")
+        manifest_path.write_text("\n".join(str(f) for f in round_files) + "\n", encoding="utf-8", newline="\n")
         script_path = manifests_dir / f"fov_array_round{rid:03d}.sh"
         build_fov_array_script(
             sample_dir=sample_dir, manifest_path=manifest_path, n_pending=len(round_files),
@@ -663,7 +520,7 @@ def submit_pending_round_mosaics(
         return []
 
     manifest_path = manifests_dir / "pending_rounds.txt"
-    manifest_path.write_text("\n".join(str(r) for r in pending_rounds) + "\n")
+    manifest_path.write_text("\n".join(str(r) for r in pending_rounds) + "\n", encoding="utf-8", newline="\n")
     script_path = manifests_dir / "round_mosaic.sh"
     build_round_mosaic_script(
         sample_dir=sample_dir, manifest_path=manifest_path, n_pending=len(pending_rounds),
