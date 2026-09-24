@@ -27,7 +27,7 @@ from ..common.config import ExperimentConfig
 from ..common.metadata import ExperimentMetadata, SeriesInfo
 from ..common.io import read_image_frames
 from ..acquisition.configs import find_frame_table_for_hal_config, get_all_color_frame_indices
-from .spot_localization import detect_beads_2d, compute_background_median
+from .spot_localization import detect_foci_with_background
 
 
 def evenly_spaced_picks(items: Sequence, n: int) -> List:
@@ -116,8 +116,7 @@ def detect_foci_in_crop(frames: np.ndarray, crop_size: Optional[int], min_dist_p
     """
     cropped = np.stack([crop_center(f, crop_size) for f in frames], axis=0)
     max_proj = cropped.max(axis=0).astype(np.float32)
-    bg_med = compute_background_median(max_proj)
-    candidates = detect_beads_2d(max_proj, min_dist_px, thresh_sigma)
+    bg_med, candidates = detect_foci_with_background(max_proj, min_dist_px, thresh_sigma)
     return max_proj, bg_med, candidates
 
 
