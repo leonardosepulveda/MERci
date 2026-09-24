@@ -39,17 +39,12 @@ load_microscope_orientation      — read a microscope's flip_horizontal/flip_ve
     merlin.core.dataset.py, not assumed)
 apply_microscope_orientation     — apply those flags to a raw frame in MERlin's own
     order (transpose, then flip_horizontal, then flip_vertical)
-MerlinAnalysisSpec / create_merlin_analysis_parameters — build MERlin's
-    warp/optimize/decode/segment task-parameters JSON from a compact spec
-    (which steps to include), instead of copying and hand-editing a prior
-    experiment's file.
-build_merlin_analysis_parameters — the notebooks' DEFAULT analysis-JSON
-    builder: assembles the same task-parameters JSON from atomic per-task
-    YAML files (data/configs/merlin/analysis/tasks/) plus an explicit
-    ordered recipe YAML (data/configs/merlin/analysis/recipes/) naming which
-    tasks to include, instead of MerlinAnalysisSpec's Python dataclass/
-    booleans -- see that function's own docstring and the module comment
-    above it for the recipe/atom format and how its defaults were chosen.
+build_merlin_analysis_parameters — assemble MERlin's task-parameters
+    JSON/YAML from atomic per-task YAML files (data/configs/merlin/analysis/
+    tasks/) plus an explicit ordered recipe YAML (data/configs/merlin/
+    analysis/recipes/) -- see that function's own docstring and the module
+    comment above it for the recipe/atom format and how its defaults were
+    chosen.
 """
 from __future__ import annotations
 
@@ -58,7 +53,6 @@ import csv
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -869,307 +863,8 @@ date +'Finished at %R.'
     return output_path
 
 
-# ── MERlin analysis-parameters JSON ─────────────────────────────────────────
-# Replaces "copy a prior experiment's file and hand-edit" entirely. Verified
-# against 4 real files: merlin_analysis_LT048.json (== merlin_analysis_
-# ref_no_cells.json byte-for-byte -- the no-segmentation baseline these
-# defaults are copied from), merlin_analysis_BC522.json (baseline + reporting
-# + full CellPoseSegment3D chain), analysis_cellposeSAM_Dark_only.json
-# (the lighter CellPoseSegmentSAM variant), and analysis_decode_v2_
-# aaron_260816.json (same overall task chain -- FiducialCorrelationWarp ->
-# DeconvolutionPreprocess -> chained OptimizeIteration -> Decode ->
-# GenerateAdaptiveThreshold -> AdaptiveFilterBarcodes -> ExportBarcodes ->
-# PlotPerformance -- with a global-alignment task in the mix).
-
-# The global-alignment task used everywhere below. LeastSquaresGlobalAlignment
-# (`merlin.analysis.globalalign`) corrects each FOV's nominal position via a
-# joint sparse least-squares solve over real pairwise image-registration
-# measurements, instead of trusting the nominal stage position outright like
-# SimpleGlobalAlignment does. See that class's own docstring for why a joint
-# per-FOV solve is needed rather than one global affine transform.
-_GLOBAL_ALIGN_TASK = "LeastSquaresGlobalAlignment"
-
-_WARP_DEFAULTS = {
-    "highpass_sigma": 20,
-    "median_filter": True,
-    "percentile_pixel_to_keep": 10,
-    "edge_width_to_remove": 300,
-    "write_fiducial_images": True,
-    "write_aligned_images": False,
-}
-_PREPROCESS_DEFAULTS = {
-    "decon_iterations": 5,
-    "save_pixel_histogram": True,
-    "write_preprocess_images": False,
-}
-_OPTIMIZE_DEFAULTS = {
-    "area_threshold": 4,
-    "fov_per_iteration": 50,
-    "optimize_chromatic_correction": True,
-    "use_gpu": False,
-    "optimize_background": True,
-    "write_decoded_images": True,
-    "distance_threshold": 0.52,
-    "min_barcodes_for_refactoring": 3,
-}
-_DECODE_DEFAULTS = {
-    "minimum_area": 3,
-    "lowpass_sigma": 1,
-    "crop_width": 106,
-    "distance_threshold": 0.65,
-    "write_decoded_images": True,
-    "use_gpu": False,
-}
-_FILTER_DEFAULTS = {
-    "misidentification_rate": 0.05,
-    "remove_z_duplicated_barcodes": False,
-    "z_duplicate_zPlane_threshold": 2,
-    "z_duplicate_xy_pixel_threshold": 1.4,
-}
-_EXPORT_COLUMNS_DEFAULT = [
-    "barcode_id", "global_x", "global_y", "global_z", "x", "y", "fov", "cell_index",
-]
-
-# CellPoseSegment3D defaults, from merlin_analysis_BC522.json.
-_SEGMENT_3D_DEFAULTS = {
-    "diameter": 50,
-    "channel_1_name": "DAPI",
-    "cellpose_2D_3D_stitching": True,
-    "stitch_threshold": 0.2,
-    "dump_segmented_masks": True,
-    "dump_segmented_images": True,
-    "dump_rgb_masks": True,
-}
-# CellPoseSegmentSAM defaults, from analysis_cellposeSAM_Dark_only.json.
-_SEGMENT_SAM_DEFAULTS = {
-    "channel_1_name": "DAPI",
-    "do_3D": True,
-    "dump_segmented_masks": True,
-    "dump_segmented_images": False,
-    "downsample_factor": 4,
-    "flow3D_smooth": 1,
-    "expand_mask": 2,
-    "min_size": 100,
-}
-
-
-@dataclass
-class MerlinAnalysisSpec:
-    """
-    A compact description of which MERlin analysis steps to include and how
-    to tune them — the "smaller file that describes which steps want to be
-    included", replacing copy+hand-edit of a prior experiment's task-
-    parameters JSON. Each ``*_params`` dict is merged OVER the verified
-    defaults above (only override what differs for this experiment).
-
-    Round-trips to/from YAML via :meth:`save`/:meth:`load`, so a spec can live
-    as its own small per-experiment (or shared default) file.
-    """
-    n_optimize_iterations: int = 15
-    warp_params:           Dict[str, Any] = field(default_factory=dict)
-    preprocess_params:     Dict[str, Any] = field(default_factory=dict)
-    optimize_params:       Dict[str, Any] = field(default_factory=dict)
-    decode_params:         Dict[str, Any] = field(default_factory=dict)
-    filter_params:         Dict[str, Any] = field(default_factory=dict)
-    export_columns:        List[str] = field(default_factory=lambda: list(_EXPORT_COLUMNS_DEFAULT))
-    include_reporting:     bool = True
-    include_segmentation:  bool = False
-    segmentation_method:   str  = "CellPoseSegment3D"   # or "CellPoseSegmentSAM"
-    segmentation_params:   Dict[str, Any] = field(default_factory=dict)
-    include_smfish:        bool = False   # smFISH spot detection on sequential (non-barcode) bits
-    smfish_channel_names:  List[str] = field(default_factory=list)
-    smfish_params:         Dict[str, Any] = field(default_factory=dict)
-    include_sum_signal:    bool = False   # simple summed per-cell intensity on sequential bits
-    sum_signal_params:     Dict[str, Any] = field(default_factory=dict)
-
-    def save(self, path: Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(asdict(self), fh, sort_keys=False, default_flow_style=False)
-
-    @classmethod
-    def load(cls, path: Path) -> "MerlinAnalysisSpec":
-        with open(path, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        return cls(**data)
-
-
-def _task(task: str, module: str, parameters: Optional[dict] = None,
-          analysis_name: Optional[str] = None) -> dict:
-    entry: Dict[str, Any] = {"task": task, "module": module}
-    if analysis_name is not None:
-        entry["analysis_name"] = analysis_name
-    if parameters is not None:
-        entry["parameters"] = parameters
-    return entry
-
-
-def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Path) -> Path:
-    """
-    Build MERlin's ``analysis_tasks`` JSON from *spec*.
-
-    Assembles, in order: FiducialCorrelationWarp, DeconvolutionPreprocess,
-    ``n_optimize_iterations`` chained OptimizeIteration tasks, Decode,
-    LeastSquaresGlobalAlignment, GenerateAdaptiveThreshold, AdaptiveFilterBarcodes,
-    ExportBarcodes — the verified no-segmentation baseline (matches
-    ``merlin_analysis_ref_no_cells.json``/``merlin_analysis_LT048.json``
-    exactly when every ``*_params`` override is empty, aside from the global-
-    alignment task -- those two reference files, like
-    ``analysis_decode_v2_aaron_260816.json``, still use the older
-    ``SimpleGlobalAlignment``) — then, if requested,
-    PlotPerformance + SlurmReport (``include_reporting``), then a full
-    segmentation chain (``include_segmentation``): CellPoseSegment3D or
-    CellPoseSegmentSAM -> CleanCellBoundaries -> CombineCleanedBoundaries ->
-    RefineCellDatabases -> PartitionBarcodes -> ExportPartitionedBarcodes ->
-    ExportCellMetadata (matches ``merlin_analysis_BC522.json``'s tail) -- and
-    finally two independent optional tail steps for sequential (non-barcode)
-    bits: ``include_smfish`` (SmfishSignal spot detection) and
-    ``include_sum_signal`` (SumSignal + ExportSumSignals, simple summed
-    per-cell intensity). Both read the bits MERlin considers "sequential"
-    from the data-organization file itself (any ``readoutName`` absent from
-    the codebook's ``bit_names``) -- see ``merlin.data.dataorganization.
-    DataOrganization.get_sequential_rounds``.
-
-    Building this programmatically (rather than copying and hand-editing, as
-    before) also avoids a real bug present in the live ``merlin_analysis_
-    LT048.json`` template: a copy-pasted duplicate ``"warp_task"`` key inside
-    its ``Optimize05`` block's parameters.
-    """
-    warp_params       = {**_WARP_DEFAULTS, **spec.warp_params}
-    preprocess_params = {**_PREPROCESS_DEFAULTS, "warp_task": "FiducialCorrelationWarp",
-                          **spec.preprocess_params}
-    decode_params     = {**_DECODE_DEFAULTS, "preprocess_task": "DeconvolutionPreprocess",
-                          "optimize_task": f"Optimize{spec.n_optimize_iterations:02d}",
-                          "global_align_task": _GLOBAL_ALIGN_TASK,
-                          **spec.decode_params}
-    filter_params     = {**_FILTER_DEFAULTS, "decode_task": "Decode",
-                          "adaptive_task": "GenerateAdaptiveThreshold", **spec.filter_params}
-
-    tasks = [
-        _task("FiducialCorrelationWarp", "merlin.analysis.warp", warp_params),
-        _task("DeconvolutionPreprocess", "merlin.analysis.preprocess", preprocess_params),
-    ]
-
-    for i in range(1, spec.n_optimize_iterations + 1):
-        name = f"Optimize{i:02d}"
-        params = {
-            "preprocess_task": "DeconvolutionPreprocess",
-            "warp_task": "FiducialCorrelationWarp",
-            **_OPTIMIZE_DEFAULTS,
-            "random_seed": i,
-            **spec.optimize_params,
-        }
-        if i > 1:
-            params["previous_iteration"] = f"Optimize{i - 1:02d}"
-        tasks.append(_task("OptimizeIteration", "merlin.analysis.optimize", params, name))
-
-    tasks.append(_task("Decode", "merlin.analysis.decode", decode_params, "Decode"))
-    tasks.append(_task(_GLOBAL_ALIGN_TASK, "merlin.analysis.globalalign"))
-    tasks.append(_task(
-        "GenerateAdaptiveThreshold", "merlin.analysis.filterbarcodes",
-        {"decode_task": "Decode", "run_after_task": "Decode"},
-    ))
-    tasks.append(_task("AdaptiveFilterBarcodes", "merlin.analysis.filterbarcodes", filter_params))
-    tasks.append(_task(
-        "ExportBarcodes", "merlin.analysis.exportbarcodes",
-        {"filter_task": "AdaptiveFilterBarcodes", "columns": list(spec.export_columns),
-         "exclude_blanks": False},
-    ))
-
-    if spec.include_reporting:
-        tasks.append(_task(
-            "PlotPerformance", "merlin.analysis.plotperformance",
-            {"preprocess_task": "DeconvolutionPreprocess",
-             "optimize_task": f"Optimize{spec.n_optimize_iterations:02d}",
-             "decode_task": "Decode", "filter_task": "AdaptiveFilterBarcodes",
-             "run_after_task": "ExportBarcodes"},
-        ))
-        tasks.append(_task(
-            "SlurmReport", "merlin.analysis.slurmreport",
-            {"run_after_task": "ExportBarcodes"}, "SlurmReport",
-        ))
-
-    if spec.include_segmentation:
-        method = spec.segmentation_method
-        if method == "CellPoseSegment3D":
-            seg_params = {"warp_task": "FiducialCorrelationWarp",
-                          "global_align_task": _GLOBAL_ALIGN_TASK,
-                          **_SEGMENT_3D_DEFAULTS, **spec.segmentation_params}
-        elif method == "CellPoseSegmentSAM":
-            seg_params = {"warp_task": "FiducialCorrelationWarp",
-                          "global_align_task": _GLOBAL_ALIGN_TASK,
-                          **_SEGMENT_SAM_DEFAULTS, **spec.segmentation_params}
-        else:
-            raise ValueError(
-                f"Unknown segmentation_method={method!r}; "
-                f"expected 'CellPoseSegment3D' or 'CellPoseSegmentSAM'."
-            )
-        tasks.append(_task(method, "merlin.analysis.segment", seg_params))
-        tasks.append(_task(
-            "CleanCellBoundaries", "merlin.analysis.segment",
-            {"segment_task": method, "global_align_task": _GLOBAL_ALIGN_TASK},
-        ))
-        tasks.append(_task(
-            "CombineCleanedBoundaries", "merlin.analysis.segment",
-            {"cleaning_task": "CleanCellBoundaries"},
-        ))
-        tasks.append(_task(
-            "RefineCellDatabases", "merlin.analysis.segment",
-            {"segment_task": method, "combine_cleaning_task": "CombineCleanedBoundaries"},
-        ))
-        tasks.append(_task(
-            "PartitionBarcodes", "merlin.analysis.partition",
-            {"filter_task": "AdaptiveFilterBarcodes", "assignment_task": "RefineCellDatabases",
-             "alignment_task": _GLOBAL_ALIGN_TASK, "codebook_index": 0},
-            "PartitionBarcodes",
-        ))
-        tasks.append(_task(
-            "ExportPartitionedBarcodes", "merlin.analysis.partition",
-            {"partition_task": "PartitionBarcodes", "codebook_index": 0},
-            "ExportPartitionedBarcodes",
-        ))
-        tasks.append(_task(
-            "ExportCellMetadata", "merlin.analysis.segment",
-            {"segment_task": "RefineCellDatabases"},
-        ))
-
-    if spec.include_smfish:
-        if not spec.smfish_channel_names:
-            raise ValueError("include_smfish=True requires smfish_channel_names.")
-        smfish_params = {
-            "warp_task": "FiducialCorrelationWarp",
-            "global_align_task": _GLOBAL_ALIGN_TASK,
-            "channel_names": list(spec.smfish_channel_names),
-            **({"segment_task": "RefineCellDatabases"} if spec.include_segmentation else {}),
-            **spec.smfish_params,
-        }
-        tasks.append(_task("SmfishSignal", "merlin.analysis.sequential", smfish_params))
-
-    if spec.include_sum_signal:
-        if not spec.include_segmentation:
-            raise ValueError("include_sum_signal=True requires include_segmentation=True "
-                              "(SumSignal needs a segment_task).")
-        sum_signal_params = {
-            "warp_task": "FiducialCorrelationWarp",
-            "global_align_task": _GLOBAL_ALIGN_TASK,
-            "segment_task": "RefineCellDatabases",
-            **spec.sum_signal_params,
-        }
-        tasks.append(_task("SumSignal", "merlin.analysis.sequential", sum_signal_params, "SumSignal"))
-        tasks.append(_task("ExportSumSignals", "merlin.analysis.sequential",
-                            {"sequential_task": "SumSignal"}))
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as fh:
-        json.dump({"analysis_tasks": tasks}, fh, indent=4)
-    return output_path
-
-
-# ── MERlin analysis-parameters JSON, atomic-task/recipe path (default) ──────
-# Replaces the MerlinAnalysisSpec/create_merlin_analysis_parameters path above
-# as the notebooks' default: each MERlin task's own tunable defaults live in
+# ── MERlin analysis-parameters JSON (atomic tasks + recipe) ─────────────────
+# Each MERlin task's own tunable defaults live in
 # its own small YAML file under data/configs/merlin/analysis/tasks/ (one file
 # per literal MERlin task, including pure cross-reference "wiring" tasks that
 # carry no independent tunables), and a "recipe" YAML under
@@ -1186,8 +881,8 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 # Default recipe values (data/configs/merlin/analysis/recipes/default_*.yaml)
 # match analysis_decode_v2_aaron_260816.json field-for-field for every task
 # it defines (warp, preprocess, optimize, decode, filter, export, plot) --
-# a deliberate departure from the OLDER MerlinAnalysisSpec Python defaults
-# above: n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5),
+# a deliberate departure from the older Python-dataclass defaults this
+# replaced: n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5),
 # highpass_sigma 3 (not 20), crop_width 100 (not 106); several fields that
 # reference file doesn't set at all (median_filter, percentile_pixel_to_keep,
 # edge_width_to_remove, min_barcodes_for_refactoring, use_gpu,
@@ -1214,8 +909,8 @@ def create_merlin_analysis_parameters(spec: MerlinAnalysisSpec, output_path: Pat
 # to a specific machine) is deliberately left unset in
 # optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
 # shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
-# reference file entirely) keep the older MerlinAnalysisSpec defaults'
-# values, since there's nothing in the reference file to match them against.
+# reference file entirely) keep those older defaults' values, since there's
+# nothing in the reference file to match them against.
 
 # Atom names that name ONE of several mutually-exclusive alternatives for the
 # same structural role -- build_merlin_analysis_parameters uses whichever one
@@ -1252,6 +947,16 @@ def _load_task_atom(name: str, tasks_dir: Path) -> dict:
     path = Path(tasks_dir) / f"{name}.yaml"
     with open(path, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def _task(task: str, module: str, parameters: Optional[dict] = None,
+          analysis_name: Optional[str] = None) -> dict:
+    entry: Dict[str, Any] = {"task": task, "module": module}
+    if analysis_name is not None:
+        entry["analysis_name"] = analysis_name
+    if parameters is not None:
+        entry["parameters"] = parameters
+    return entry
 
 
 # Structural cross-references injected into each atom's parameters by
@@ -1301,8 +1006,7 @@ def build_merlin_analysis_parameters(
 ) -> Path:
     """
     Build MERlin's ``analysis_tasks`` recipe from a recipe (explicit ordered
-    list of atomic task-file names -- see the module comment above) instead
-    of a :class:`MerlinAnalysisSpec`. Written as YAML or JSON depending on
+    list of atomic task-file names -- see the module comment above). Written as YAML or JSON depending on
     *output_path*'s extension (``.yaml``/``.yml`` vs anything else),
     matching MERlin's own ``merlin.py`` dispatch.
 
@@ -1326,8 +1030,7 @@ def build_merlin_analysis_parameters(
         ``tasks`` list (e.g. ``["smfish_signal"]``), for opt-in tails the
         shared default recipe doesn't include.
     n_optimize_iterations : overrides the recipe file's own value if given
-        (mirrors ``MerlinAnalysisSpec.n_optimize_iterations``, e.g. sourced
-        from ``experiment_info.yaml``'s ``extra.n_opt``).
+        (e.g. sourced from ``experiment_info.yaml``'s ``extra.n_opt``).
     skip_tasks  : optional atom names to leave out of the written
         ``analysis_tasks`` list while still using them for every structural
         cross-reference above (``warp_task``/``segment_task``/etc. params,

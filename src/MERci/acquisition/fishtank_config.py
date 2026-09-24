@@ -232,7 +232,7 @@ class FishtankScriptsSpec:
     """
     Compact description of every fishtank run script's parameters — every
     field overridable, defaulting to the reference experiment's verified
-    values (mirrors ``merlin_config.MerlinAnalysisSpec``).
+    values.
 
     ``n_fovs_lineage``/``n_fovs_merfish`` set each per-FOV array job's
     ``--array=0-{n_fovs-1}%{array_concurrency}`` range (the two acquisitions
