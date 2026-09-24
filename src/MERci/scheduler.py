@@ -1,15 +1,12 @@
 # MERci/scheduler.py
 """
-High-level scheduling logic for the three notebook types.
+High-level scheduling logic for the scheduler notebooks.
 
 FOVScheduler
     → continuously processes new image files during fluidics windows
 
 RoundScheduler
     → monitors FOV progress; creates mosaics as soon as each round is complete
-
-ExperimentScheduler
-    → blocks until all rounds are done, then runs an experiment-level callback
 """
 from __future__ import annotations
 
@@ -504,59 +501,3 @@ class RoundScheduler:
                 log.error("Round %d: transfer failed — will retry next tick.", round_id)
 
         transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
-
-
-# ── Experiment Scheduler ──────────────────────────────────────────────────────
-
-class ExperimentScheduler:
-    """
-    Waits until all round-level analyses are complete, then triggers a
-    user-supplied experiment-level analysis function.
-    """
-
-    def __init__(
-        self,
-        config: ExperimentConfig,
-        metadata: ExperimentMetadata,
-        tracker: ProgressTracker,
-    ) -> None:
-        self.config  = config
-        self.meta    = metadata
-        self.tracker = tracker
-
-    def all_rounds_complete(self) -> bool:
-        return all(
-            self.tracker.is_round_done(rid)
-            for rid in self.meta.valid_round_ids()
-        )
-
-    def wait_and_run(
-        self,
-        experiment_fn: Callable[["ExperimentConfig", "ExperimentMetadata"], None],
-        poll_interval: float = 120.0,
-        on_tick: Optional[Callable[[dict], None]] = None,
-    ) -> None:
-        """
-        Block until all rounds are done, then call
-        ``experiment_fn(config, metadata)``.
-
-        Parameters
-        ----------
-        experiment_fn : your experiment-level analysis function
-        poll_interval : seconds between progress checks
-        on_tick       : called with the current summary dict on every check
-        """
-        log.info("Experiment scheduler started; polling every %.0f s.", poll_interval)
-        while not self.all_rounds_complete():
-            summary = self.tracker.summary(self.meta)
-            log.info(
-                "Waiting: rounds %d/%d done, files %d/%d done.",
-                summary["rounds_done"], summary["rounds_total"],
-                summary["files_fov_done"], summary["files_total"],
-            )
-            if on_tick is not None:
-                on_tick(summary)
-            time.sleep(poll_interval)
-
-        log.info("All rounds complete → running experiment-level analysis.")
-        experiment_fn(self.config, self.meta)

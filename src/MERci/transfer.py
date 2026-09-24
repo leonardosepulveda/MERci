@@ -90,20 +90,6 @@ def _copy_fn() -> Callable[[Path, Path], bool]:
     return _copy_robocopy if platform.system() == "Windows" else _copy_shutil
 
 
-def mirror_dir_sync(src: Path, dst: Path) -> bool:
-    """
-    Mirror directory *src* into *dst* synchronously (blocks the calling
-    thread until done) — for one-off, run-once-and-watch-it-finish syncs
-    (e.g. ``data/mosaic10x``, or the static ``MERci``/``merlin``/``fishtank``
-    folders) where a notebook cell wants the result before moving on, unlike
-    :func:`mirror_tree`/:func:`transfer_round`'s background-threaded copies
-    meant to not block a polling tick loop. Safe to re-run — additive/
-    incremental via the same ``robocopy /E /Z`` (or ``shutil.copytree``)
-    used everywhere else in this module.
-    """
-    return _copy_fn()(Path(src), Path(dst))
-
-
 def mirror_tree(
     src:         Path,
     dst:         Path,

@@ -128,8 +128,8 @@ src/MERci/
   state.py                 ExperimentStateMonitor — imaging vs. fluidics phase detection
   progress.py              ProgressTracker — sentinel-file completion tracking
   progress_display.py      ProgressReporter — live console/notebook progress+ETA
-  scheduler.py             FOVScheduler, RoundScheduler, ExperimentScheduler
-  transfer.py              transfer_round, mirror_tree/mirror_dir_sync
+  scheduler.py             FOVScheduler, RoundScheduler
+  transfer.py              transfer_round, mirror_tree
   visualization.py         shutter sequence, FOV layout, stats-over-rounds plots
   disk_audit.py            scan shared-drive sample folders for cleanup candidates
 ```
@@ -202,7 +202,7 @@ shared across HAL config, shutter file, and frame table for one round.
 `ExperimentMetadata` cross-references round/FOV/series/paths.
 `ExperimentStateMonitor` detects imaging vs. fluidics phase from file mtimes.
 `ProgressTracker` tracks completion via sentinel files under
-`analysis/done/`. `FOVScheduler`/`RoundScheduler`/`ExperimentScheduler` run
+`analysis/done/`. `FOVScheduler`/`RoundScheduler` run
 the continuous analysis loops (see `scheduler.py`'s own docstring for the
 full contract). QC analysis can instead run on a SLURM cluster via
 `07_cluster_submit_analysis.ipynb` + `cli_analyze_fov.py`/

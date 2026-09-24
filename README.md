@@ -319,7 +319,7 @@ FOVScheduler(config, meta, tracker, monitor).run_loop()
 | `analysis.spot_localization` | `detect_beads_2d`, `fit_bead_3d`, `localize_beads_in_volume`, `localize_beads_in_file`, `match_beads_across_colors`, `compute_max_projection`, `plot_max_projections`, `simulate_multicolor_stack` (PSF/bead simulation + localization helpers) |
 | `state` | `ExperimentStateMonitor`, `ExperimentPhase` |
 | `progress` | `ProgressTracker` |
-| `scheduler` | `FOVScheduler`, `RoundScheduler`, `ExperimentScheduler` |
+| `scheduler` | `FOVScheduler`, `RoundScheduler` |
 | `transfer` | `transfer_round` |
 | `visualization` | `visualize_shutter_sequence`, `plot_fov_layout`, `plot_stats_over_rounds`, `plot_spatial_uniformity`, `display_mosaic` |
 

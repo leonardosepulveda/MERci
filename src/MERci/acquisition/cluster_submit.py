@@ -34,7 +34,6 @@ _CLI_BUILD_ROUND_MOSAIC     = _MERCI_SRC / "MERci" / "analysis" / "cli_build_rou
 _CLI_COMPUTE_TEXTURE_STATS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_texture_stats.py"
 _CLI_TPC_MARGIN_THUMBNAILS  = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_tpc_margin_thumbnails.py"
 _CLI_GIF_FRAME_THUMBNAILS   = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_gif_frame_thumbnails.py"
-_CLI_CHANNEL_COUNTERS       = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_channel_counters.py"
 _CLI_FOV_PROJECTIONS        = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_projections.py"
 _CLI_FOV_ELEVATION          = _MERCI_SRC / "MERci" / "analysis" / "cli_compute_fov_elevation.py"
 _CLI_FOV_COMPLETENESS       = _MERCI_SRC / "MERci" / "analysis" / "cli_check_fov_completeness.py"
@@ -306,31 +305,6 @@ def build_fov_elevation_array_script(
          f"--ffc-field-path {ffc_field_path}", f"--threshold {threshold}",
          f"--downsample-factor {downsample_factor}", f"--frame-indices {_csv(frame_indices)}",
          f"--z-um-values {_csv(z_um_values)}", _orientation_flags(orientation)],
-        sample_dir, output_path, _array(n_pending, array_concurrency),
-        mem, time, partition, conda_env, job_name,
-    )
-
-
-def build_channel_counters_array_script(
-    sample_dir:         Path,
-    manifest_path:      Path,
-    output_dir:         Path,
-    frame_indices,
-    z_um_values,
-    n_pending:          int,
-    output_path:        Path,
-    array_concurrency:  int = 50,
-    mem:                str = "4gb",
-    time:               str = "00:20:00",
-    partition:          str = _DEFAULT_PARTITION,
-    conda_env:          str = _DEFAULT_CONDA_ENV,
-    job_name:           str = "merci_channel_counters",
-) -> Path:
-    """``cli_compute_channel_counters.py`` per pending FOV (one channel z-sweep each)."""
-    return _job_script(
-        _CLI_CHANNEL_COUNTERS,
-        [f"--manifest {manifest_path}", f"--output-dir {output_dir}",
-         f"--frame-indices {_csv(frame_indices)}", f"--z-um-values {_csv(z_um_values)}"],
         sample_dir, output_path, _array(n_pending, array_concurrency),
         mem, time, partition, conda_env, job_name,
     )

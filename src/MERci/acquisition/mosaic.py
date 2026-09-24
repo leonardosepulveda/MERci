@@ -13,9 +13,8 @@ Typical workflow (see ``02_create_boundary_from_mosaic.ipynb``)
    deliberately overlap (e.g. a few high-mag alignment FOVs over a low-mag
    scan); each is resampled using its own native pixel size, and overlaps
    are resolved by Steve's own stacking order (topmost tile wins), not
-   averaged. Use ``filter_tiles_by_objective`` first only if some tiles
-   should be dropped entirely rather than composited (e.g. genuinely
-   unwanted debris/bubble frames).
+   averaged. Drop tiles from the list first (e.g. by ``objective_name``)
+   only if some should be excluded rather than composited.
 3. ``plot_tile_intensity_histograms`` – overlay every tile's log-space
    intensity histogram, to pick a fixed segmentation threshold by eye when
    Otsu doesn't separate tissue from background well on a given sample.
@@ -99,10 +98,7 @@ class SteveTile:
         can contain tiles shot with more than one objective -- e.g. a few
         alignment/reference FOVs taken at high magnification, deliberately
         overlapping the low-mag scan -- see :func:`assemble_mosaic_canvas`
-        (composites mixed-scale/overlapping tiles directly) and
-        :func:`filter_tiles_by_objective` (drops one objective entirely,
-        for when some tiles are genuinely unwanted rather than a different
-        magnification of real tissue).
+        (composites mixed-scale/overlapping tiles directly).
     zvalue : float
         Steve's own display stacking order for this tile (higher = drawn on
         top in Steve itself). Increases monotonically with acquisition
@@ -272,44 +268,6 @@ def load_steve_mosaic(msc_path: Path) -> List[SteveTile]:
     return tiles
 
 
-def filter_tiles_by_objective(
-    tiles:      List[SteveTile],
-    objective:  Optional[str] = None,
-) -> List[SteveTile]:
-    """
-    Keep only the tiles shot with one objective, dropping the rest.
-
-    A Steve mosaic can mix in a handful of tiles shot at a different
-    objective than the main low-mag scan -- e.g. alignment/reference FOVs
-    used to register a 60x objective against the 10x mosaic. Those tiles
-    have a different real pixel size and must not be pasted into the same
-    flattened canvas as the rest (see :func:`assemble_mosaic_canvas`, which
-    raises rather than silently mixing scales).
-
-    Parameters
-    ----------
-    tiles : from :func:`load_steve_mosaic`.
-    objective : which objective's tiles to keep; ``None`` = auto-pick
-        whichever objective the most tiles share (prints nothing itself --
-        the caller should log the counts/decision; see the notebook for the
-        printed breakdown this is paired with).
-
-    Returns
-    -------
-    The filtered tile list (all sharing one ``objective_name``).
-    """
-    if not tiles:
-        raise ValueError("No tiles to filter.")
-
-    if objective is None:
-        counts: dict = {}
-        for t in tiles:
-            counts[t.objective_name] = counts.get(t.objective_name, 0) + 1
-        objective = max(counts, key=counts.get)
-
-    return [t for t in tiles if t.objective_name == objective]
-
-
 def assemble_mosaic_canvas(
     tiles:            List[SteveTile],
     working_pixel_um: float = 5.0,
@@ -327,7 +285,7 @@ def assemble_mosaic_canvas(
     an average of the overlapping tiles. This matches how Steve itself
     displays the mosaic. If some tiles should be excluded entirely rather
     than composited (e.g. genuinely bad/debris frames), drop them from
-    *tiles* first -- see :func:`filter_tiles_by_objective`.
+    *tiles* first.
 
     Parameters
     ----------
@@ -905,9 +863,7 @@ def plot_objective_alignment_check(
 
     This is a DIAGNOSTIC composite only, never the canvas used for real
     tissue segmentation (:func:`segment_mosaic_tissue` needs
-    :func:`assemble_mosaic_canvas`'s real-intensity canvas, built from
-    :func:`filter_tiles_by_objective`'s single-objective tile list --
-    mixing objectives there is documented to hurt thresholding).
+    :func:`assemble_mosaic_canvas`'s real-intensity canvas).
 
     Parameters
     ----------
@@ -1049,7 +1005,7 @@ def load_or_build_mosaic_canvas_cached(
     result for next time.
 
     Returns ``(canvas, was_cached, n_tiles)`` -- *n_tiles* is the number of
-    tiles kept after :func:`filter_tiles_by_objective`, or None when the
+    tiles assembled, or None when the
     cache was reused (no fresh assembly, so nothing to count).
     """
     msc_path = Path(msc_path)
