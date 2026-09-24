@@ -654,45 +654,26 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
     Build the text content of the ``<z_offsets>`` XML element from
     ``frame_table["z"]``.
 
-    Values are laid out in rows matching the colour sequence length (the most
-    common consecutive-run length), with a comma after every value except the
-    last.  Bead and end frames with a different run length are handled gracefully.
+    One row per colour sequence (row width = the most common run length of
+    equal consecutive z values), a comma after every value but the last.
+    Values keep their full precision (``1.25`` stays ``1.25``; HAL moves the
+    stage to exactly what is written here).
     """
     from collections import Counter
+    from itertools import groupby
 
     z_vals = frame_table["z"].astype(float).tolist()
-    n      = len(z_vals)
+    run_lengths = [len(list(g)) for _, g in groupby(z_vals)]
+    counts = Counter(run_lengths)
+    group_size = max(counts, key=lambda k: (counts[k], k)) if counts else 1
 
-    # Determine row width from the most common consecutive run length
-    run_lengths: List[int] = []
-    count, last = 0, object()
-    for val in z_vals:
-        if val == last:
-            count += 1
-        else:
-            if last is not object():
-                run_lengths.append(count)
-            count, last = 1, val
-    if count:
-        run_lengths.append(count)
+    def _fmt(v: float) -> str:
+        t = f"{v:.4f}".rstrip("0")
+        return t + "0" if t.endswith(".") else t
 
-    group_size = Counter(run_lengths).most_common(1)[0][0] if run_lengths else 1
-
-    # Format all z values in rows of group_size
-    indent  = "         "
-    lines:  List[str] = []
-    row_buf: List[str] = []
-
-    for i, val in enumerate(z_vals):
-        suffix = "," if i < n - 1 else ""
-        row_buf.append(f"{val:.1f}{suffix}")
-        if len(row_buf) == group_size:
-            lines.append(indent + "  ".join(row_buf))
-            row_buf = []
-
-    if row_buf:
-        lines.append(indent + "  ".join(row_buf))
-
+    items = [_fmt(v) + ("," if i < len(z_vals) - 1 else "") for i, v in enumerate(z_vals)]
+    indent = "         "
+    lines = [indent + "  ".join(items[i:i + group_size]) for i in range(0, len(items), group_size)]
     return "\n" + "\n".join(lines) + "\n      "
 
 
