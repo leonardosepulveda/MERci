@@ -27,6 +27,7 @@ Typical workflow
 from __future__ import annotations
 
 import csv
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
+import shapely
 from shapely.geometry import Polygon, box as shapely_box
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -529,36 +531,34 @@ def filter_scanning_path(
     -------
     ``(M, 2)`` array of accepted coordinates in their original order.
     """
-    coords = np.asarray(coords, dtype=float)
-    half   = fov_size_um / 2.0
-    subset_union = unary_union(subset_polygons) if subset_polygons else None
-
-    def _in_subset(fov_poly) -> bool:
-        return subset_union is None or fov_poly.intersects(subset_union)
+    coords = np.asarray(coords, dtype=float).reshape(-1, 2)
+    boxes  = _fov_boxes(coords, fov_size_um)
 
     if min_coverage_fraction <= 0.0:
-        kept = []
-        for x, y in coords:
-            fov_poly = shapely_box(x - half, y - half, x + half, y + half)
-            if not fov_poly.intersects(boundary_polygon):
-                continue
-            if any(hole.contains(fov_poly) for hole in hole_polygons):
-                continue
-            if not _in_subset(fov_poly):
-                continue
-            kept.append((x, y))
-        return np.array(kept) if kept else np.empty((0, 2))
+        keep = shapely.intersects(boxes, boundary_polygon)
+        for hole in hole_polygons:
+            keep &= ~shapely.contains(hole, boxes)
+    else:
+        coverage = shapely.area(shapely.intersection(boxes, _effective_tissue(boundary_polygon, hole_polygons)))
+        keep = coverage / (fov_size_um * fov_size_um) >= min_coverage_fraction
+    if subset_polygons:
+        keep &= shapely.intersects(boxes, unary_union(subset_polygons))
+    return coords[keep]
 
-    effective_tissue = (boundary_polygon.difference(unary_union(hole_polygons))
-                        if hole_polygons else boundary_polygon)
-    fov_area = fov_size_um * fov_size_um
-    kept = []
-    for x, y in coords:
-        fov_poly = shapely_box(x - half, y - half, x + half, y + half)
-        coverage = fov_poly.intersection(effective_tissue).area / fov_area
-        if coverage >= min_coverage_fraction and _in_subset(fov_poly):
-            kept.append((x, y))
-    return np.array(kept) if kept else np.empty((0, 2))
+
+def _fov_boxes(coords: np.ndarray, fov_size_um: float) -> np.ndarray:
+    """Array of shapely squares (side *fov_size_um*) centred on each ``(x, y)`` in *coords*."""
+    half = fov_size_um / 2.0
+    x, y = coords[:, 0], coords[:, 1]
+    return shapely.box(x - half, y - half, x + half, y + half)
+
+
+def _effective_tissue(boundary_polygon, hole_polygons, subset_polygons=None):
+    """*boundary_polygon* minus every hole, intersected with the subset union if given."""
+    tissue = boundary_polygon.difference(unary_union(hole_polygons)) if hole_polygons else boundary_polygon
+    if subset_polygons:
+        tissue = tissue.intersection(unary_union(subset_polygons))
+    return tissue
 
 
 # ── Loop closure ───────────────────────────────────────────────────────────────
@@ -786,18 +786,14 @@ def find_exterior_fovs(
     -------
     Set of FOV ids that are exterior (their FFC-estimation candidates).
     """
-    from scipy.spatial import KDTree
-
     if connectivity not in ("4", "8"):
         raise ValueError(f"connectivity must be '4' or '8', got {connectivity!r}")
-
-    fov_ids = list(positions.keys())
-    coords  = np.array([positions[f] for f in fov_ids], dtype=float)
-    if len(fov_ids) == 0:
+    if not positions:
         return set()
 
-    tree = KDTree(coords)
-    tol  = tolerance_fraction * step_size
+    fov_ids, tree = _position_tree(positions)
+    coords = tree.data
+    tol    = tolerance_fraction * step_size
 
     offsets = [(step_size, 0.0), (-step_size, 0.0), (0.0, step_size), (0.0, -step_size)]
     if connectivity == "8":
@@ -806,15 +802,22 @@ def find_exterior_fovs(
             (-step_size, step_size), (-step_size, -step_size),
         ]
 
-    exterior: Set[int] = set()
-    for fov_id, (x, y) in zip(fov_ids, coords):
-        for dx, dy in offsets:
-            dist, _ = tree.query([x + dx, y + dy])
-            if dist > tol:
-                exterior.add(fov_id)
-                break
+    # (n_fovs, n_offsets) distance from each candidate neighbour position to its nearest FOV.
+    dist, _ = tree.query(coords[:, None, :] + np.asarray(offsets)[None, :, :])
+    return {fov_ids[i] for i in np.flatnonzero((dist > tol).any(axis=1))}
 
-    return exterior
+
+def _position_tree(positions: Dict[int, Tuple[float, float]]):
+    """``(fov_ids, cKDTree)`` over *positions*' coordinates, cached by content
+    (find_grid_neighbor is called thousands of times on the same positions)."""
+    return _position_tree_cached(tuple((f, float(x), float(y)) for f, (x, y) in positions.items()))
+
+
+@functools.lru_cache(maxsize=8)
+def _position_tree_cached(items: Tuple[Tuple[int, float, float], ...]):
+    from scipy.spatial import cKDTree
+    fov_ids = [f for f, _, _ in items]
+    return fov_ids, cKDTree(np.array([(x, y) for _, x, y in items], dtype=float))
 
 
 def find_grid_neighbor(
@@ -851,8 +854,6 @@ def find_grid_neighbor(
     -------
     The neighbour's FOV id, or ``None`` if no real FOV sits there.
     """
-    from scipy.spatial import KDTree
-
     offsets = {
         "right": (step_size, 0.0), "left": (-step_size, 0.0),
         "up":    (0.0, step_size), "down": (0.0, -step_size),
@@ -862,10 +863,7 @@ def find_grid_neighbor(
     if fov_id not in positions:
         raise KeyError(f"fov_id {fov_id} not in positions.")
 
-    fov_ids = list(positions.keys())
-    coords  = np.array([positions[f] for f in fov_ids], dtype=float)
-    tree    = KDTree(coords)
-
+    fov_ids, tree = _position_tree(positions)
     x, y   = positions[fov_id]
     dx, dy = offsets[direction]
     dist, idx = tree.query([x + dx, y + dy])
@@ -1341,6 +1339,7 @@ def build_boundary_path(
     return_side:      Optional[str]  = None,
     min_coverage_fraction: float     = 0.0,
     subset_polygons:  Optional[List[Polygon]] = None,
+    offset:           Tuple[float, float] = (0.0, 0.0),
 ) -> np.ndarray:
     """
     Build the ordered FOV path for a single boundary.
@@ -1374,12 +1373,13 @@ def build_boundary_path(
     subset_polygons  : forwarded to :func:`filter_scanning_path` -- optional
                        whitelist region(s); ``None``/empty (default) keeps
                        every boundary-overlapping FOV as before.
+    offset           : grid phase, forwarded to :func:`create_grid_positions`
 
     Returns
     -------
     ``(M, 2)`` ordered stage coordinates for this boundary.
     """
-    grid, _, _ = create_grid_positions(boundary_polygon, step_size, direction=direction)
+    grid, _, _ = create_grid_positions(boundary_polygon, step_size, direction=direction, offset=offset)
     path       = generate_scanning_path(grid, direction=direction)
     filtered   = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
                                        min_coverage_fraction=min_coverage_fraction,
@@ -1525,66 +1525,40 @@ def optimize_grid_offset(
     (e.g. to see whether the objectives move together or trade off against
     each other on this particular boundary).
     """
-    if hole_polygons:
-        effective_tissue = boundary_polygon.difference(unary_union(hole_polygons))
-    else:
-        effective_tissue = boundary_polygon
-    if subset_polygons:
-        effective_tissue = effective_tissue.intersection(unary_union(subset_polygons))
-
-    half   = fov_size_um / 2.0
+    effective_tissue = _effective_tissue(boundary_polygon, hole_polygons, subset_polygons)
     fov_area = fov_size_um * fov_size_um
     offsets = np.linspace(-step_size / 2.0, step_size / 2.0, n_samples, endpoint=False)
 
     candidates: List[GridOffsetCandidate] = []
+    paths: Dict[Tuple[float, float], np.ndarray] = {}
     for dx in offsets:
         for dy in offsets:
-            grid, _, _ = create_grid_positions(
-                boundary_polygon, step_size, direction=direction, offset=(dx, dy),
+            offset = (float(dx), float(dy))
+            filtered = build_boundary_path(
+                boundary_polygon, hole_polygons, step_size, fov_size_um,
+                direction=direction, return_side=return_side,
+                min_coverage_fraction=min_coverage_fraction,
+                subset_polygons=subset_polygons, offset=offset,
             )
-            path     = generate_scanning_path(grid, direction=direction)
-            filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
-                                             min_coverage_fraction=min_coverage_fraction,
-                                             subset_polygons=subset_polygons)
-            if return_side is not None and len(filtered) > 1:
-                filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
+            paths[offset] = filtered
 
-            waste_area_um2      = 0.0
-            n_low_coverage_fovs = 0
-            for x, y in filtered:
-                fov_poly        = shapely_box(x - half, y - half, x + half, y + half)
-                tissue_overlap  = fov_poly.intersection(effective_tissue).area
-                waste_area_um2 += fov_poly.area - tissue_overlap
-                if tissue_overlap / fov_area < low_coverage_fraction:
-                    n_low_coverage_fovs += 1
-
+            boxes    = _fov_boxes(filtered, fov_size_um)
+            overlaps = shapely.area(shapely.intersection(boxes, effective_tissue))
+            waste    = shapely.area(boxes) - overlaps
             total_length_um, max_step_um = get_path_stats(filtered)
             candidates.append(GridOffsetCandidate(
-                offset              = (float(dx), float(dy)),
+                offset              = offset,
                 n_fovs              = len(filtered),
-                waste_area_um2       = waste_area_um2,
+                # cumsum = sequential sum, so ties rank exactly as a plain loop would
+                waste_area_um2       = float(np.cumsum(waste)[-1]) if len(waste) else 0.0,
                 total_length_um      = total_length_um,
                 max_step_um          = max_step_um,
-                n_low_coverage_fovs  = n_low_coverage_fovs,
+                n_low_coverage_fovs  = int(np.count_nonzero(overlaps / fov_area < low_coverage_fraction)),
             ))
 
-    def _sort_key(c: GridOffsetCandidate) -> Tuple[float, ...]:
-        return tuple(getattr(c, field) for field in priority)
-
-    candidates.sort(key=_sort_key)
+    candidates.sort(key=lambda c: tuple(getattr(c, field) for field in priority))
     best = candidates[0]
-
-    grid, _, _ = create_grid_positions(
-        boundary_polygon, step_size, direction=direction, offset=best.offset,
-    )
-    path     = generate_scanning_path(grid, direction=direction)
-    filtered = filter_scanning_path(path, boundary_polygon, hole_polygons, fov_size_um,
-                                     min_coverage_fraction=min_coverage_fraction,
-                                     subset_polygons=subset_polygons)
-    if return_side is not None and len(filtered) > 1:
-        filtered, _ = close_scanning_path(filtered, step_size, return_side=return_side)
-
-    return GridOffsetResult(coords=filtered, best=best, candidates=candidates)
+    return GridOffsetResult(coords=paths[best.offset], best=best, candidates=candidates)
 
 
 def build_boundary_path_optimized(
