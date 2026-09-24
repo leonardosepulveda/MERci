@@ -192,14 +192,18 @@ def positions_file_tag(sample_name: str, imaging_dir: str) -> str:
     return f"{sample_name}_{imaging_dir}" if imaging_dir else sample_name
 
 
+def _flatten(info: ExperimentInfo) -> Dict[str, Any]:
+    """Core fields, then ``extra`` entries, as one flat dict."""
+    return {**{f: getattr(info, f) for f in _CORE_FIELDS}, **info.extra}
+
+
 def save_experiment_info(info: ExperimentInfo, path: Path) -> None:
     """
     Write *info* to *path* as a flat YAML mapping (core fields and ``extra``
     entries side by side — the file on disk reads like one flat record, not
     two visually separated blocks).
     """
-    flat = {f: getattr(info, f) for f in _CORE_FIELDS}
-    flat.update(info.extra)
+    flat = _flatten(info)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -227,8 +231,5 @@ def collect_experiment_info(paths: Sequence[Path]) -> pd.DataFrame:
     """
     rows: List[Dict[str, Any]] = []
     for p in paths:
-        info = load_experiment_info(Path(p))
-        row = {f: getattr(info, f) for f in _CORE_FIELDS}
-        row.update(info.extra)
-        rows.append(row)
+        rows.append(_flatten(load_experiment_info(Path(p))))
     return pd.DataFrame(rows)
