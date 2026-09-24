@@ -2,7 +2,7 @@
 # MERci/analysis/cli_compute_tpc_margin_thumbnails.py
 """
 Standalone SLURM-array-task entry point for the TPC-based z_last + margin
-sweep explored in ``notebooks/misc/measure_tissue_thickness.ipynb`` (section
+sweep explored in ``notebooks/misc/measure_tissue_thickness_test.ipynb`` (section
 23) -- for ONE FOV, reads a single bounded window of frames (covering every
 candidate margin at once, same as that section's own local/sequential loop)
 and writes one downsampled thumbnail per margin, using the exact

@@ -65,7 +65,7 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
 
     Parameters
     ----------
-    microscope : ``"MF3"`` or ``"MF5"``
+    microscope : any key of ``_COLOUR_TO_CHANNEL`` (e.g. ``"MF3"``, ``"ST2"``)
     """
     if microscope not in _COLOUR_TO_CHANNEL:
         raise ValueError(
@@ -485,7 +485,7 @@ def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
     Parameters
     ----------
     kind : ``"bits"``, ``"cells"``, ``"transit"``, ``"drift"`` (a stage-
-           drift-check round -- see ``notebooks/misc/calculate_stage_drift.ipynb``),
+           drift-check round -- see ``notebooks/misc/stage_drift_beads.ipynb``),
            or ``"focustest"`` (the auto-generated focus-lock-test movie config
            -- see ``04_create_dave_config.ipynb``'s "Focus-lock test recipe"
            section)

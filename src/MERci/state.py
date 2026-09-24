@@ -1,4 +1,4 @@
-# MERci/acquisition/state.py
+# MERci/state.py
 """
 Determine whether the microscope is currently imaging or idle, and compute
 the time elapsed since the last imaging round ended.

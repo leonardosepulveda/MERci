@@ -14,12 +14,6 @@ Per-channel laser power is NOT part of a pipeline's own YAML: it's locked to
 the microscope choice (hardware/alignment property, not a pipeline dial),
 so it's looked up from ``data/configs/power/power_by_microscope.yaml``
 instead -- see ``load_pipeline_config``.
-
-See ``prompt_history/2026_08_28_1655_list_pipeline_yaml_variables.md``,
-``prompt_history/2026_08_28_1712_pipeline_yaml_implementation_plan.md`` and
-the entry revising this schema (round_bit_color/analysis/metadata moved
-under a `merlin` section, power moved out entirely) for how this was
-derived.
 """
 from __future__ import annotations
 

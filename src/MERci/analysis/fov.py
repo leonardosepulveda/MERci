@@ -1,4 +1,4 @@
-# MERci/fov.py
+# MERci/analysis/fov.py
 """
 FOV-level analyses.  All public functions accept a pre-loaded numpy array
 (so the scheduler can read the file once and pass it to multiple functions).

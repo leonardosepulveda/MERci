@@ -17,7 +17,7 @@ what this pipeline's acquisition writer (HAL) produces; other formats
 :func:`check_dataset_completeness` since there's no equivalent cheap
 per-chunk trick for them.
 
-Built for ``notebooks/after_imaging/09_check_fov_completeness.ipynb``.
+Built for ``notebooks/after_imaging/10_check_fov_completeness.ipynb``.
 """
 from __future__ import annotations
 
@@ -157,7 +157,7 @@ def check_dataset_completeness(meta, round_ids=None, progress_reporter=None):
     :func:`check_one_file`. Serial -- fine for a handful of FOVs/rounds
     (e.g. re-checking one suspect FOV), but far too slow over a whole
     dataset (see :func:`check_one_file`'s docstring); use the
-    ``09_check_fov_completeness.ipynb`` SLURM-array path for that.
+    ``10_check_fov_completeness.ipynb`` SLURM-array path for that.
 
     *progress_reporter*, if given, should be a fresh
     ``MERci.progress_display.ProgressReporter`` (its ``total`` set to the

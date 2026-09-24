@@ -2,7 +2,7 @@
 # MERci/analysis/cli_compute_texture_stats.py
 """
 Standalone SLURM-array-task entry point for the texture-based BG/FG
-discriminator explored in ``notebooks/misc/measure_tissue_thickness.ipynb``
+discriminator explored in ``notebooks/misc/measure_tissue_thickness_test.ipynb``
 (section 14) -- computes one FOV's per-z Gaussian-smoothed-Laplacian-variance
 profile and writes it under ``--output-dir`` using the exact same
 ``<image-stem>_texture.npy`` filename convention that notebook's own

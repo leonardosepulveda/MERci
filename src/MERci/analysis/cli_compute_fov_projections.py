@@ -28,7 +28,7 @@ flags), and a results directory via ``--output-dir`` -- writes one
 ``<fov>_<statistic>.npy`` per requested statistic.
 
 Self-locates its own sibling ``src/`` root from ``__file__`` (same
-convention as ``cli_analyze_fov.py``/``cli_compute_fov_median.py``) so
+convention as ``cli_analyze_fov.py``) so
 MERci never needs to be ``pip install``ed on the cluster.
 """
 from __future__ import annotations

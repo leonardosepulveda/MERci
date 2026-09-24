@@ -13,8 +13,7 @@ scripts (cellpose segmentation, spot detection/decoding, mosaics) instead of
 merlin/slurm/snakemake configs.
 
 Every schema/script in this module was verified against a real reference
-experiment's files, read directly from
-``...251225_LT027_saving_time\\fishtank\\`` (``params/color_usage_*.csv``,
+experiment's own ``fishtank/`` folder (``params/color_usage_*.csv``,
 ``params/decoding_strategy_*.csv``, ``scripts/*.slurm``) — nothing here is a
 guess. One likely bug in the reference ``decode_spots_ft.slurm`` (a dangling
 ``\\`` line-continuation before a blank line, which would glue the following

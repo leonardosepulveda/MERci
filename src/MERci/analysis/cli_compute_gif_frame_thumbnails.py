@@ -2,7 +2,7 @@
 # MERci/analysis/cli_compute_gif_frame_thumbnails.py
 """
 Standalone SLURM-array-task entry point for the z-sweep GIF explored in
-``notebooks/misc/measure_tissue_thickness.ipynb`` (section 24) -- for ONE
+``notebooks/misc/measure_tissue_thickness_test.ipynb`` (section 24) -- for ONE
 FOV, reads every selected z-step's frame (the ``GIF_Z_STRIDE``-subsampled
 positions) in a single batched read and writes one downsampled thumbnail
 per z-step, using the exact ``z<pos>_fov<id>.npy`` filename convention that

@@ -422,8 +422,7 @@ def fit_camera_rotation(
 
     Uses ``affine6p`` (``pip install affine6p``) to fit a full 2-D affine
     (rotation + scale + shear + translation) from >= 3 point
-    correspondences by least squares -- the same package this correction's
-    own historical precedent (BC341, see this module's docstring) validated.
+    correspondences by least squares.
 
     Parameters
     ----------

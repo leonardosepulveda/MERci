@@ -99,9 +99,7 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     doesn't match a newer ``"LT058_sample_07"``-style pattern at all): a
     split layout's acquisition subfolder name is always one of a small, fixed
     vocabulary already hard-coded throughout the codebase for exactly this
-    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``) -- the notebook variant
-    itself is duplicated per acquisition type, so no other subfolder name is
-    ever a real possibility here. If ``SAMPLE_DIR.name`` is one of those
+    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``). If ``SAMPLE_DIR.name`` is one of those
     tokens, treat it as the split layout; otherwise, flat.
 
     This does NOT change most per-notebook local file naming (``dave-{mic}-

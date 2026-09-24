@@ -1,9 +1,6 @@
 # MERci/acquisition/display.py
 """
 Jupyter display helpers for acquisition setup notebooks.
-
-Note: this module was previously named ``print.py``, which shadows
-the Python built-in.
 """
 from __future__ import annotations
 

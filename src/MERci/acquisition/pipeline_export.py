@@ -131,8 +131,8 @@ def _subn_code_cells(notebook: dict, pattern: "re.Pattern", replacement: str) ->
 
 
 # ── PIPELINE_CONFIG rewrite ──────────────────────────────────────────────────
-# Only the MERlin-based pipelines' before_imaging notebooks load a
-# pipeline.yaml (see PIPELINES/pipeline_config.py) -- a miss here is not an
+# Only notebooks of pipelines with a pipeline.yaml (every one except
+# multi_z -- see pipeline_config.py) load one -- a miss here is not an
 # error, just a notebook (or whole pipeline) that doesn't use one.
 #
 # Also folds in the preceding `PIPELINE_ID = "..."` line: once exported, the
@@ -165,7 +165,7 @@ def _rewrite_pipeline_config_line(notebook: dict) -> bool:
 
 
 # ── README adaptation ─────────────────────────────────────────────────────────
-# Both phrasings used across the six variant READMEs for the stale
+# Both phrasings used across the variant READMEs for the stale
 # parent-counting explanation (see each variant's own README.md).
 _STALE_LEVELS_RES = [
     re.compile(
