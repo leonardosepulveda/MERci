@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -181,31 +181,42 @@ def compute_ffc_field_for_color(
     meta  : {"n_samples": int, "smooth_sigma_px": float,
              "normalize_percentile": float, "ffc_min_value": float}
     """
-    from scipy.ndimage import gaussian_filter
     from MERci.common.io import read_image_frames
 
     if not samples:
         raise ValueError("samples list is empty")
+    frames = (read_image_frames(path, [frame_idx], frame_width, frame_height)[0]
+              for path, frame_idx in samples)
+    return mean_field_to_ffc(frames, smooth_sigma_px, normalize_percentile, ffc_min_value)
 
-    total = None
-    for path, frame_idx in samples:
-        frame = read_image_frames(path, [frame_idx], frame_width, frame_height)[0]
-        frame = frame.astype(np.float64)
-        if total is None:
-            total = frame
-        else:
-            total += frame
 
-    field = (total / len(samples)).astype(np.float32)
-    field = gaussian_filter(field, sigma=smooth_sigma_px)
+def mean_field_to_ffc(
+    images: Iterable[np.ndarray],
+    smooth_sigma_px: float,
+    normalize_percentile: float,
+    ffc_min_value: float,
+) -> Tuple[np.ndarray, dict]:
+    """
+    Streamed mean of *images* -> Gaussian smoothing (skipped when
+    *smooth_sigma_px* is 0) -> divide by its *normalize_percentile*-th
+    percentile -> floor-clip to *ffc_min_value*. Returns ``(field, meta)``.
+    """
+    from scipy.ndimage import gaussian_filter
 
+    total, n = None, 0
+    for img in images:
+        img = img.astype(np.float64)
+        total = img if total is None else total + img
+        n += 1
+    field = (total / n).astype(np.float32)
+    if smooth_sigma_px and smooth_sigma_px > 0:
+        field = gaussian_filter(field, sigma=smooth_sigma_px)
     norm_value = np.percentile(field, normalize_percentile)
     if norm_value > 0:
         field = field / norm_value
     field = np.clip(field, ffc_min_value, None).astype(np.float32)
-
     meta = {
-        "n_samples": len(samples),
+        "n_samples": n,
         "smooth_sigma_px": smooth_sigma_px,
         "normalize_percentile": normalize_percentile,
         "ffc_min_value": ffc_min_value,

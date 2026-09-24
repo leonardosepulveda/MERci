@@ -168,24 +168,10 @@ def build_ffc_field_from_projections(
     contaminated one -- it does not automatically make the field "more
     correct". ``smooth_sigma_px=0`` skips smoothing entirely.
     """
-    from scipy.ndimage import gaussian_filter
+    from .ffc import mean_field_to_ffc
 
-    total = None
-    for p in paths:
-        img = np.load(p).astype(np.float64)
-        total = img if total is None else total + img
-    field = (total / len(paths)).astype(np.float32)
-    if smooth_sigma_px and smooth_sigma_px > 0:
-        field = gaussian_filter(field, sigma=smooth_sigma_px)
-    norm_value = np.percentile(field, normalize_percentile)
-    if norm_value > 0:
-        field = field / norm_value
-    field = np.clip(field, ffc_min_value, None).astype(np.float32)
-    meta = {
-        "n_samples": len(paths), "smooth_sigma_px": smooth_sigma_px,
-        "normalize_percentile": normalize_percentile, "ffc_min_value": ffc_min_value,
-    }
-    return field, meta
+    return mean_field_to_ffc((np.load(p) for p in paths),
+                             smooth_sigma_px, normalize_percentile, ffc_min_value)
 
 
 def calculate_ffc(
