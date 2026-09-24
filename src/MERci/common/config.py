@@ -63,7 +63,7 @@ class ExperimentConfig:
     image_dtype:            str            = "uint16"
     frame_width:            Optional[int]  = None
     frame_height:           Optional[int]  = None
-    pixel_size_um:          float          = 0.109
+    pixel_size_um:          float          = 0.108
     image_size_px:          int            = 2048
     non_overlap_fraction:   float          = 0.9
 

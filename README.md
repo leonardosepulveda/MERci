@@ -131,7 +131,7 @@ Key parameters to set:
 
 | Variable | Description | Default |
 |---|---|---|
-| `pixel_size_um` | Camera pixel size (µm) | `0.109` |
+| `pixel_size_um` | Camera pixel size (µm) | `0.108` |
 | `image_size_px` | Frame size (pixels, one side) | `2048` |
 | `non_overlap_fraction` | Fractional FOV covered per step | `0.9` |
 | `return_side` | Which grid edge to put last | `"top"` |
