@@ -85,6 +85,11 @@ def _copy_shutil(src: Path, dst: Path) -> bool:
         return False
 
 
+def _copy_fn() -> Callable[[Path, Path], bool]:
+    """robocopy on Windows, shutil elsewhere."""
+    return _copy_robocopy if platform.system() == "Windows" else _copy_shutil
+
+
 def mirror_dir_sync(src: Path, dst: Path) -> bool:
     """
     Mirror directory *src* into *dst* synchronously (blocks the calling
@@ -96,9 +101,7 @@ def mirror_dir_sync(src: Path, dst: Path) -> bool:
     incremental via the same ``robocopy /E /Z`` (or ``shutil.copytree``)
     used everywhere else in this module.
     """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
-    return copy_fn(Path(src), Path(dst))
+    return _copy_fn()(Path(src), Path(dst))
 
 
 def mirror_tree(
@@ -125,8 +128,7 @@ def mirror_tree(
     -------
     The started :class:`threading.Thread` (daemon=True).
     """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+    copy_fn = _copy_fn()
 
     def _run() -> None:
         ok = copy_fn(Path(src), Path(dst))
@@ -157,8 +159,7 @@ def transfer_round(
     -------
     The started :class:`threading.Thread` (daemon=True).
     """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+    copy_fn = _copy_fn()
 
     label = source_dirs[0].name if source_dirs else "empty"
 

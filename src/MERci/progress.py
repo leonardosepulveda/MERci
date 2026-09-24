@@ -214,45 +214,33 @@ class ProgressTracker:
 
     def mark_fov_done(self, dax_path: Path) -> None:
         """Create the FOV-level sentinel (idempotent)."""
-        p = self.fov_sentinel(dax_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.fov_sentinel(dax_path))
         log.debug("FOV marked done: %s", Path(dax_path).name)
 
     def mark_round_done(self, round_id: int) -> None:
         """Create the round-level sentinel (idempotent)."""
-        p = self.round_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.round_sentinel(round_id))
         log.info("Round %d marked done.", round_id)
 
     def mark_round_transferred(self, round_id: int) -> None:
         """Create the transfer sentinel (idempotent)."""
-        p = self.transfer_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.transfer_sentinel(round_id))
         log.info("Round %d marked transferred.", round_id)
 
     def mark_fov_analysis_submitted(self, round_id: int, job_id: int) -> None:
         """Record *job_id* as the SLURM array job submitted for this round's
         pending FOVs (overwrites any previous job id — idempotent resubmission)."""
-        p = self.fov_submitted_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(job_id))
+        _write_sentinel(self.fov_submitted_sentinel(round_id), str(job_id))
         log.info("Round %d: FOV analysis submitted as job %s.", round_id, job_id)
 
     def mark_round_mosaic_submitted(self, round_id: int, job_id: int) -> None:
         """Record *job_id* as the SLURM job submitted to build this round's mosaic(s)."""
-        p = self.round_mosaic_submitted_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(job_id))
+        _write_sentinel(self.round_mosaic_submitted_sentinel(round_id), str(job_id))
         log.info("Round %d: mosaic build submitted as job %s.", round_id, job_id)
 
     def mark_ffc_done(self, color: float) -> None:
         """Create the FFC-done sentinel for this color (idempotent)."""
-        p = self.ffc_done_sentinel(color)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.ffc_done_sentinel(color))
         log.info("FFC field for %snm marked done.", color)
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -275,3 +263,12 @@ class ProgressTracker:
             "rounds_done":    n_round_done,
             "rounds_pending": n_rounds - n_round_done,
         }
+
+
+def _write_sentinel(path: Path, text: Optional[str] = None) -> None:
+    """Create *path* (and its parent); write *text* into it if given, else just touch it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if text is None:
+        path.touch()
+    else:
+        path.write_text(text)

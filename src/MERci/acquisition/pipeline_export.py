@@ -111,6 +111,11 @@ def _rewrite_merci_dir_line(notebook: dict) -> bool:
     formula, in every code cell of `notebook` (in place). Returns whether a
     match was found -- every exported notebook is expected to have exactly
     one."""
+    return _subn_code_cells(notebook, _MERCI_DIR_RE, _MERCI_DIR_REPLACEMENT)
+
+
+def _subn_code_cells(notebook: dict, pattern: "re.Pattern", replacement: str) -> bool:
+    """``pattern.subn(replacement)`` over every code cell (in place); True if anything matched."""
     found = False
     for cell in notebook.get("cells", []):
         if cell.get("cell_type") != "code":
@@ -118,7 +123,7 @@ def _rewrite_merci_dir_line(notebook: dict) -> bool:
         src = cell["source"]
         is_str = isinstance(src, str)
         text = src if is_str else "".join(src)
-        new_text, n = _MERCI_DIR_RE.subn(_MERCI_DIR_REPLACEMENT, text)
+        new_text, n = pattern.subn(replacement, text)
         if n:
             found = True
             cell["source"] = new_text if is_str else new_text.splitlines(keepends=True)
@@ -156,18 +161,7 @@ def _rewrite_pipeline_config_line(notebook: dict) -> bool:
     notebooks/ folder instead (still passing MERCI_DIR/data as data_dir, for
     the shared power table) and derive PIPELINE_ID from it, in every code
     cell of `notebook` (in place). Returns whether a match was found."""
-    found = False
-    for cell in notebook.get("cells", []):
-        if cell.get("cell_type") != "code":
-            continue
-        src = cell["source"]
-        is_str = isinstance(src, str)
-        text = src if is_str else "".join(src)
-        new_text, n = _PIPELINE_CONFIG_RE.subn(_PIPELINE_CONFIG_REPLACEMENT, text)
-        if n:
-            found = True
-            cell["source"] = new_text if is_str else new_text.splitlines(keepends=True)
-    return found
+    return _subn_code_cells(notebook, _PIPELINE_CONFIG_RE, _PIPELINE_CONFIG_REPLACEMENT)
 
 
 # ── README adaptation ─────────────────────────────────────────────────────────
