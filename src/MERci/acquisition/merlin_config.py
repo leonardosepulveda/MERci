@@ -1254,6 +1254,42 @@ def _load_task_atom(name: str, tasks_dir: Path) -> dict:
         return yaml.safe_load(fh) or {}
 
 
+# Structural cross-references injected into each atom's parameters by
+# build_merlin_analysis_parameters. The placeholders resolve to the recipe's
+# own warp/align/segment task names and last optimize iteration.
+_WARP, _ALIGN, _SEGMENT, _OPTIMIZE = "<warp>", "<align>", "<segment>", "<optimize>"
+_CROSS_REFS: Dict[str, Dict[str, str]] = {
+    "deconvolution_preprocess":    {"warp_task": _WARP},
+    "decode":                      {"preprocess_task": "DeconvolutionPreprocess",
+                                    "optimize_task": _OPTIMIZE, "global_align_task": _ALIGN},
+    "generate_adaptive_threshold": {"decode_task": "Decode", "run_after_task": "Decode"},
+    "adaptive_filter_barcodes":    {"decode_task": "Decode",
+                                    "adaptive_task": "GenerateAdaptiveThreshold"},
+    "export_barcodes":             {"filter_task": "AdaptiveFilterBarcodes"},
+    "plot_performance":            {"preprocess_task": "DeconvolutionPreprocess",
+                                    "optimize_task": _OPTIMIZE, "decode_task": "Decode",
+                                    "filter_task": "AdaptiveFilterBarcodes"},
+    "slurm_report":                {"run_after_task": "ExportBarcodes"},
+    "generate_mosaic":             {"warp_task": _WARP,
+                                    "preprocess_task": "DeconvolutionPreprocess",
+                                    "global_align_task": _ALIGN, "ffc_task": "CreateFfc"},
+    "combine_mosaic_tiles":        {"tile_task": "GenerateMosaicTile"},
+    "clean_cell_boundaries":       {"segment_task": _SEGMENT, "global_align_task": _ALIGN},
+    "combine_cleaned_boundaries":  {"cleaning_task": "CleanCellBoundaries"},
+    "refine_cell_databases":       {"segment_task": _SEGMENT,
+                                    "combine_cleaning_task": "CombineCleanedBoundaries"},
+    "partition_barcodes":          {"filter_task": "AdaptiveFilterBarcodes",
+                                    "assignment_task": "RefineCellDatabases",
+                                    "alignment_task": _ALIGN},
+    "export_partitioned_barcodes": {"partition_task": "PartitionBarcodes"},
+    "export_cell_metadata":        {"segment_task": "RefineCellDatabases"},
+    "smfish_signal":               {"warp_task": _WARP, "global_align_task": _ALIGN},
+    "sum_signal":                  {"warp_task": _WARP, "global_align_task": _ALIGN,
+                                    "segment_task": "RefineCellDatabases"},
+    "export_sum_signals":          {"sequential_task": "SumSignal"},
+}
+
+
 def build_merlin_analysis_parameters(
     recipe_path:            Path,
     tasks_dir:               Path,
@@ -1367,64 +1403,14 @@ def build_merlin_analysis_parameters(
             continue
 
         params = dict(atom.get("parameters", {}))
-        if name == "deconvolution_preprocess":
-            params["warp_task"] = warp_task_name
-        elif name == "decode":
-            params["preprocess_task"] = "DeconvolutionPreprocess"
-            params["optimize_task"] = f"Optimize{n_opt:02d}"
-            params["global_align_task"] = align_task_name
-        elif name == "generate_adaptive_threshold":
-            params["decode_task"] = "Decode"
-            params["run_after_task"] = "Decode"
-        elif name == "adaptive_filter_barcodes":
-            params["decode_task"] = "Decode"
-            params["adaptive_task"] = "GenerateAdaptiveThreshold"
-        elif name == "export_barcodes":
-            params["filter_task"] = "AdaptiveFilterBarcodes"
-        elif name == "plot_performance":
-            params["preprocess_task"] = "DeconvolutionPreprocess"
-            params["optimize_task"] = f"Optimize{n_opt:02d}"
-            params["decode_task"] = "Decode"
-            params["filter_task"] = "AdaptiveFilterBarcodes"
-        elif name == "slurm_report":
-            params["run_after_task"] = "ExportBarcodes"
-        elif name == "generate_mosaic":
-            params["warp_task"] = warp_task_name
-            params["preprocess_task"] = "DeconvolutionPreprocess"
-            params["global_align_task"] = align_task_name
-            params["ffc_task"] = "CreateFfc"
-        elif name == "combine_mosaic_tiles":
-            params["tile_task"] = "GenerateMosaicTile"
-        elif name in _SEGMENT_ATOM_NAMES:
-            params["warp_task"] = warp_task_name
-            params["global_align_task"] = align_task_name
-        elif name == "clean_cell_boundaries":
-            params["segment_task"] = segment_task_name
-            params["global_align_task"] = align_task_name
-        elif name == "combine_cleaned_boundaries":
-            params["cleaning_task"] = "CleanCellBoundaries"
-        elif name == "refine_cell_databases":
-            params["segment_task"] = segment_task_name
-            params["combine_cleaning_task"] = "CombineCleanedBoundaries"
-        elif name == "partition_barcodes":
-            params["filter_task"] = "AdaptiveFilterBarcodes"
-            params["assignment_task"] = "RefineCellDatabases"
-            params["alignment_task"] = align_task_name
-        elif name == "export_partitioned_barcodes":
-            params["partition_task"] = "PartitionBarcodes"
-        elif name == "export_cell_metadata":
-            params["segment_task"] = "RefineCellDatabases"
-        elif name == "smfish_signal":
-            params["warp_task"] = warp_task_name
-            params["global_align_task"] = align_task_name
-            if segment_atom:
-                params["segment_task"] = "RefineCellDatabases"
-        elif name == "sum_signal":
-            params["warp_task"] = warp_task_name
-            params["global_align_task"] = align_task_name
-            params["segment_task"] = "RefineCellDatabases"
-        elif name == "export_sum_signals":
-            params["sequential_task"] = "SumSignal"
+        refs = dict(_CROSS_REFS.get(name, {}))
+        if name in _SEGMENT_ATOM_NAMES:
+            refs = {"warp_task": _WARP, "global_align_task": _ALIGN}
+        elif name == "smfish_signal" and segment_atom:
+            refs["segment_task"] = "RefineCellDatabases"
+        resolve = {_WARP: warp_task_name, _ALIGN: align_task_name,
+                   _SEGMENT: segment_task_name, _OPTIMIZE: f"Optimize{n_opt:02d}"}
+        params.update({k: resolve.get(v, v) for k, v in refs.items()})
 
         params.update(overrides.get(name, {}))
         tasks.append(_task(atom["task"], atom["module"], params if params else None, atom.get("analysis_name")))
