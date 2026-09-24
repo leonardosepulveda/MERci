@@ -15,6 +15,8 @@ from typing import Dict, List, Optional, Set, Tuple  # noqa: F401 (Optional/List
 
 import numpy as np
 
+from .ffc import apply_ffc
+
 log = logging.getLogger(__name__)
 
 
@@ -85,7 +87,6 @@ def create_mosaic(
                   *return_tile_bboxes* is True (then the return value is the
                   tuple ``(canvas, tile_bboxes)``)
     """
-    from PIL import Image, ImageDraw
     from skimage.transform import resize as sk_resize
 
     if not thumbnails:
@@ -99,13 +100,7 @@ def create_mosaic(
     )
     log.debug("Mosaic: %d FOVs, scale=%.4f px/unit", len(fov_ids), pixels_per_unit)
 
-    canvas   = np.full((canvas_h, canvas_w), background, dtype=np.uint8)
-
-    # ── Place thumbnails ──────────────────────────────────────────────────────
-    tile_bboxes = {}
-    for i, fov_id in enumerate(fov_ids):
-        thumb = thumbnails[fov_id]
-
+    def prepare(thumb):
         if thumb.dtype != np.uint8:
             thumb = thumb.clip(0, 255).astype(np.uint8)
         if thumb.shape[:2] != (th, tw):
@@ -114,29 +109,13 @@ def create_mosaic(
                 .clip(0, 255)
                 .astype(np.uint8)
             )
+        return thumb
 
-        x0, y0 = pixel_xs[i], pixel_ys[i]
-        x1 = min(x0 + tw, canvas_w)
-        y1 = min(y0 + th, canvas_h)
-        canvas[y0:y1, x0:x1] = thumb[: y1 - y0, : x1 - x0]
-        tile_bboxes[fov_id] = (int(x0), int(y0), int(x1), int(y1))
-
-    # ── Save ──────────────────────────────────────────────────────────────────
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas_image = Image.fromarray(canvas)
-    if labels or highlight_fov_ids:
-        draw = ImageDraw.Draw(canvas_image)
-        for i, fov_id in enumerate(fov_ids):
-            x0, y0 = pixel_xs[i], pixel_ys[i]
-            if highlight_fov_ids and fov_id in highlight_fov_ids:
-                x1 = min(x0 + tw, canvas_w) - 1
-                y1 = min(y0 + th, canvas_h) - 1
-                draw.rectangle([x0, y0, x1, y1], outline=highlight_color, width=highlight_width)
-            if labels and fov_id in labels:
-                draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
-        canvas = np.asarray(canvas_image)
-    canvas_image.save(str(output_path))
+    canvas = np.full((canvas_h, canvas_w), background, dtype=np.uint8)
+    tile_bboxes = _place_tiles(canvas, fov_ids, pixel_xs, pixel_ys, tw, th,
+                               lambda f: prepare(thumbnails[f]))
+    canvas = _save_with_overlay(canvas, output_path, tile_bboxes, labels, label_color,
+                                highlight_fov_ids, highlight_color, highlight_width)
     log.info(
         "Mosaic saved: %s  (%d × %d px, %d FOVs)",
         output_path, canvas_w, canvas_h, len(fov_ids),
@@ -206,7 +185,6 @@ def create_mosaic_ffc(
     tile_bboxes : {fov_id: (x0, y0, x1, y1)}, only when
                   *return_tile_bboxes* is True
     """
-    from PIL import Image, ImageDraw
     from skimage.transform import resize as sk_resize
 
     if not raw_frames:
@@ -220,29 +198,22 @@ def create_mosaic_ffc(
     )
     log.debug("FFC mosaic: %d FOVs, scale=%.4f px/unit", len(fov_ids), pixels_per_unit)
 
-    canvas    = np.full((canvas_h, canvas_w), float(background), dtype=np.float32)
-    is_filled = np.zeros((canvas_h, canvas_w), dtype=bool)
-
-    # ── Place FFC-corrected, cropped, downsampled tiles ───────────────────────
-    tile_bboxes = {}
-    for i, fov_id in enumerate(fov_ids):
-        frame = raw_frames[fov_id].astype(np.float32)
-
+    def prepare(frame):
+        frame = frame.astype(np.float32)
         if ffc_field is not None:
-            frame = np.clip(frame / ffc_field, 0, None)
-
+            frame = apply_ffc(frame, ffc_field)
         if crop_px > 0:
             frame = frame[crop_px:-crop_px, crop_px:-crop_px]
-
         if frame.shape[:2] != (th, tw):
             frame = sk_resize(frame, (th, tw), anti_aliasing=True, preserve_range=True)
+        return frame
 
-        x0, y0 = pixel_xs[i], pixel_ys[i]
-        x1 = min(x0 + tw, canvas_w)
-        y1 = min(y0 + th, canvas_h)
-        canvas[y0:y1, x0:x1] = frame[: y1 - y0, : x1 - x0]
+    canvas    = np.full((canvas_h, canvas_w), float(background), dtype=np.float32)
+    tile_bboxes = _place_tiles(canvas, fov_ids, pixel_xs, pixel_ys, tw, th,
+                               lambda f: prepare(raw_frames[f]))
+    is_filled = np.zeros((canvas_h, canvas_w), dtype=bool)
+    for x0, y0, x1, y1 in tile_bboxes.values():
         is_filled[y0:y1, x0:x1] = True
-        tile_bboxes[fov_id] = (int(x0), int(y0), int(x1), int(y1))
 
     # ── One shared contrast stretch over every filled pixel ───────────────────
     filled_pixels = canvas[is_filled]
@@ -254,22 +225,8 @@ def create_mosaic_ffc(
     canvas_u8 = (stretched * 255).astype(np.uint8)
     canvas_u8[~is_filled] = background
 
-    # ── Save ──────────────────────────────────────────────────────────────────
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas_image = Image.fromarray(canvas_u8)
-    if labels or highlight_fov_ids:
-        draw = ImageDraw.Draw(canvas_image)
-        for i, fov_id in enumerate(fov_ids):
-            x0, y0 = pixel_xs[i], pixel_ys[i]
-            if highlight_fov_ids and fov_id in highlight_fov_ids:
-                x1 = min(x0 + tw, canvas_w) - 1
-                y1 = min(y0 + th, canvas_h) - 1
-                draw.rectangle([x0, y0, x1, y1], outline=highlight_color, width=highlight_width)
-            if labels and fov_id in labels:
-                draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
-        canvas_u8 = np.asarray(canvas_image)
-    canvas_image.save(str(output_path))
+    canvas_u8 = _save_with_overlay(canvas_u8, output_path, tile_bboxes, labels, label_color,
+                                   highlight_fov_ids, highlight_color, highlight_width)
     log.info(
         "FFC mosaic saved: %s  (%d x %d px, %d FOVs)",
         output_path, canvas_w, canvas_h, len(fov_ids),
@@ -316,22 +273,11 @@ def load_raw_frames_for_round(
     """
     from MERci.common.io import read_image_frames
 
-    round_info = metadata.rounds.get(round_id)
-    if round_info is None:
-        raise KeyError(f"Round {round_id} not found in metadata")
-
-    fov_set = set(fov_subset) if fov_subset is not None else None
 
     raw_frames: Dict[int, np.ndarray] = {}
     positions:  Dict[int, Tuple[float, float]] = {}
 
-    for fov_id, file_list in round_info.fov_files.items():
-        if fov_set is not None and fov_id not in fov_set:
-            continue
-        if not file_list:
-            continue
-        idx   = min(series_idx, len(file_list) - 1)
-        fpath = file_list[idx]
+    for fov_id, fpath in _round_fov_files(round_id, metadata, series_idx, fov_subset):
         if not fpath.exists():
             log.warning("Image file missing: %s", fpath)
             continue
@@ -370,22 +316,11 @@ def load_thumbnails_for_round(
     """
     from PIL import Image
 
-    round_info = metadata.rounds.get(round_id)
-    if round_info is None:
-        raise KeyError(f"Round {round_id} not found in metadata")
-
-    fov_set = set(fov_subset) if fov_subset is not None else None
 
     thumbnails: Dict[int, np.ndarray] = {}
     positions:  Dict[int, Tuple[float, float]] = {}
 
-    for fov_id, file_list in round_info.fov_files.items():
-        if fov_set is not None and fov_id not in fov_set:
-            continue
-        if not file_list:
-            continue
-        idx   = min(series_idx, len(file_list) - 1)
-        fpath = file_list[idx]
+    for fov_id, fpath in _round_fov_files(round_id, metadata, series_idx, fov_subset):
         thumb_path = (
             Path(thumbnails_dir) / f"{fpath.stem}_frame{frame_idx:03d}.png"
         )
@@ -400,6 +335,51 @@ def load_thumbnails_for_round(
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+def _round_fov_files(round_id, metadata, series_idx, fov_subset):
+    """Yield ``(fov_id, path)`` of series *series_idx* (or the last) for each FOV of *round_id*."""
+    round_info = metadata.rounds.get(round_id)
+    if round_info is None:
+        raise KeyError(f"Round {round_id} not found in metadata")
+    fov_set = set(fov_subset) if fov_subset is not None else None
+    for fov_id, file_list in round_info.fov_files.items():
+        if (fov_set is not None and fov_id not in fov_set) or not file_list:
+            continue
+        yield fov_id, file_list[min(series_idx, len(file_list) - 1)]
+
+
+def _place_tiles(canvas, fov_ids, pixel_xs, pixel_ys, tw, th, tile_for):
+    """Paste ``tile_for(fov_id)`` at each tile position; return ``{fov_id: (x0, y0, x1, y1)}``."""
+    canvas_h, canvas_w = canvas.shape
+    tile_bboxes = {}
+    for i, fov_id in enumerate(fov_ids):
+        tile = tile_for(fov_id)
+        x0, y0 = pixel_xs[i], pixel_ys[i]
+        x1 = min(x0 + tw, canvas_w)
+        y1 = min(y0 + th, canvas_h)
+        canvas[y0:y1, x0:x1] = tile[: y1 - y0, : x1 - x0]
+        tile_bboxes[fov_id] = (int(x0), int(y0), int(x1), int(y1))
+    return tile_bboxes
+
+
+def _save_with_overlay(canvas, output_path, tile_bboxes, labels, label_color,
+                       highlight_fov_ids, highlight_color, highlight_width):
+    """Draw the optional labels/highlight borders on the uint8 *canvas*, save it, return it."""
+    from PIL import Image, ImageDraw
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas_image = Image.fromarray(canvas)
+    if labels or highlight_fov_ids:
+        draw = ImageDraw.Draw(canvas_image)
+        for fov_id, (x0, y0, x1, y1) in tile_bboxes.items():
+            if highlight_fov_ids and fov_id in highlight_fov_ids:
+                draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=highlight_color, width=highlight_width)
+            if labels and fov_id in labels:
+                draw.text((x0 + 2, y0 + 2), str(labels[fov_id]), fill=label_color)
+        canvas = np.asarray(canvas_image)
+    canvas_image.save(str(output_path))
+    return canvas
 
 def _layout_tiles(
     fov_ids: List[int],
