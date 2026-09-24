@@ -52,7 +52,7 @@ def read_off_file(off_path: Path) -> pd.DataFrame:
     but hasn't been fully written yet -- see :func:`read_off_file_if_ready`
     for a version tolerant of that race.
     """
-    return pd.read_csv(off_path, sep=r"\s+", engine="python")
+    return pd.read_csv(off_path, sep=r"\s+")
 
 
 _OFF_COLUMNS = {"frame", "offset", "power", "stage-z", "good-offset"}
@@ -80,6 +80,8 @@ def read_off_file_if_ready(off_path: Path) -> Optional[pd.DataFrame]:
     except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
         return None
     if off_df.empty or not _OFF_COLUMNS.issubset(off_df.columns):
+        return None
+    if off_df[list(_OFF_COLUMNS)].isna().any().any():   # truncated last row
         return None
     return off_df
 
