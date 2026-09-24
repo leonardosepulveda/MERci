@@ -320,10 +320,6 @@ class FOVScheduler:
 
     # ── Internal processing ───────────────────────────────────────────────────
 
-    def _build_task(self, fpath: Path) -> Tuple[Path, dict]:
-        """Build the (image_path, kwargs) pair passed to ``analyze_file``."""
-        return fpath, build_fov_task_kwargs(fpath, self.config, self.tracker)
-
     def _process_pending(self) -> int:
         """Discover and analyse all pending FOV files. Returns count processed.
 
@@ -351,7 +347,7 @@ class FOVScheduler:
         if not pending:
             return 0
 
-        tasks = [self._build_task(f) for f in pending]
+        tasks = [(f, build_fov_task_kwargs(f, self.config, self.tracker)) for f in pending]
         n_workers = self.config.resolved_n_workers
 
         # Serial path (single worker) — simpler, in-process, easier to debug.
@@ -442,7 +438,7 @@ class RoundScheduler:
         count = 0
         for rid in pending:
             try:
-                self._analyse_one_round(rid)
+                build_round_mosaics(rid, self.config, self.meta, self.tracker)
                 count += 1
             except Exception:
                 log.exception("Error building mosaic for round %d", rid)
@@ -453,10 +449,6 @@ class RoundScheduler:
         return count
 
     # ── Transfer helpers ──────────────────────────────────────────────────────
-
-    def _source_dirs_for_round(self, round_id: int) -> List[Path]:
-        """Return the unique data directories that hold files for *round_id*."""
-        return source_dirs_for_round(round_id, self.meta)
 
     def _process_pending_transfers(self, phase: ExperimentPhase) -> None:
         """
@@ -487,7 +479,7 @@ class RoundScheduler:
 
     def _start_transfer_for_round(self, round_id: int, time_remaining: Optional[float] = None) -> None:
         """Launch a background thread to copy round *round_id* to transfer_dest."""
-        src_dirs = self._source_dirs_for_round(round_id)
+        src_dirs = source_dirs_for_round(round_id, self.meta)
         if not src_dirs:
             log.warning("Round %d: no source dirs found — skipping transfer.", round_id)
             return
@@ -512,19 +504,6 @@ class RoundScheduler:
                 log.error("Round %d: transfer failed — will retry next tick.", round_id)
 
         transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
-
-    # ── Round analysis helpers ────────────────────────────────────────────────
-
-    def _resolve_flip_y(self, round_id: int) -> bool:
-        """Return the flip_y value for *round_id*."""
-        return resolve_round_flip_y(round_id, self.config, self.meta)
-
-    def _color_frame_indices(self, round_id: int) -> Dict[float, int]:
-        """Return {color_nm: frame_idx} for the middle-z slice of *round_id*."""
-        return resolve_round_color_frame_indices(round_id, self.config, self.meta)
-
-    def _analyse_one_round(self, round_id: int) -> None:
-        build_round_mosaics(round_id, self.config, self.meta, self.tracker)
 
 
 # ── Experiment Scheduler ──────────────────────────────────────────────────────
