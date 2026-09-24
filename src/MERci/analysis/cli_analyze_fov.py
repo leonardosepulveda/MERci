@@ -28,13 +28,13 @@ disagree about where thumbnails/stats/histograms/sentinels land.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 _MERCI_SRC = Path(__file__).resolve().parents[2]   # .../MERci/src/MERci/analysis/cli_analyze_fov.py -> .../MERci/src
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.config import ExperimentConfig    # noqa: E402
 from MERci.progress      import ProgressTracker     # noqa: E402
 from MERci.scheduler     import build_fov_task_kwargs  # noqa: E402
@@ -47,37 +47,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
                     help="Experiment root (contains data/, metadata/, analysis/, ...).")
     p.add_argument("--manifest", required=True, type=Path,
                     help="Text file, one pending image path per line.")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest line index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
+    cli.add_task_args(p)
     p.add_argument("--image-suffix", default=".zarr",
                     help="Image file suffix (must match how the manifest paths were built).")
     return p.parse_args(argv)
 
 
-def _read_manifest_line(manifest: Path, index: int) -> Path:
-    lines = [ln.strip() for ln in manifest.read_text().splitlines() if ln.strip()]
-    if not 0 <= index < len(lines):
-        raise IndexError(
-            f"Manifest {manifest} has {len(lines)} line(s); requested index {index}."
-        )
-    return Path(lines[index])
-
-
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    fpath = _read_manifest_line(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    fpath = Path(cli.manifest_line(args.manifest, task_id))
 
     # round_info_csv/positions_txt are required ExperimentConfig fields but
     # unused by build_fov_task_kwargs/analyze_file for a single-FOV task --

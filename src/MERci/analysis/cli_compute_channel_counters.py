@@ -26,7 +26,6 @@ needs to be ``pip install``ed on the cluster.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -34,6 +33,7 @@ from pathlib import Path
 _MERCI_SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.analysis.fov import compute_channel_counters, save_channel_counters  # noqa: E402
 
 
@@ -49,36 +49,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
                          "z_frame_indices for CHANNEL_NM).")
     p.add_argument("--z-um-values", required=True,
                     help="Comma-separated z (um) values, same order/length as --frame-indices.")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest line index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
-    p.add_argument("--frame-width", type=int, default=None,
-                    help="Only needed for .dax input; ignored for .zarr/.tiff.")
-    p.add_argument("--frame-height", type=int, default=None)
+    cli.add_task_args(p, frame_size=True)
     return p.parse_args(argv)
-
-
-def _read_manifest_line(manifest: Path, index: int) -> Path:
-    lines = [ln.strip() for ln in manifest.read_text().splitlines() if ln.strip()]
-    if not 0 <= index < len(lines):
-        raise IndexError(f"Manifest {manifest} has {len(lines)} line(s); requested index {index}.")
-    return Path(lines[index])
 
 
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    fpath           = _read_manifest_line(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    fpath           = Path(cli.manifest_line(args.manifest, task_id))
     frame_indices   = [int(x) for x in args.frame_indices.split(",")]
     z_um_values     = [float(x) for x in args.z_um_values.split(",")]
     z_frame_indices = list(zip(frame_indices, z_um_values))

@@ -23,14 +23,13 @@ never needs to be ``pip install``ed on the cluster.
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
 from pathlib import Path
 
 _MERCI_SRC = Path(__file__).resolve().parents[2]   # .../MERci/src/MERci/analysis/cli_measure_intensity_percentiles.py -> .../MERci/src
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from MERci.analysis.fov import measure_intensity_percentiles  # noqa: E402
@@ -40,36 +39,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--manifest", required=True, type=Path,
                     help="CSV, no header: image_path,frame_table_path,round_label,fov_id,output_path")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest line index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
+    cli.add_task_args(p)
     p.add_argument("--percentiles", default="25,50,75,95",
                     help="Comma-separated percentiles to compute (default: 25,50,75,95).")
     return p.parse_args(argv)
 
 
-def _read_manifest_row(manifest: Path, index: int) -> list:
-    with open(manifest, newline="") as fh:
-        rows = [row for row in csv.reader(fh) if row]
-    if not 0 <= index < len(rows):
-        raise IndexError(f"Manifest {manifest} has {len(rows)} line(s); requested index {index}.")
-    return rows[index]
-
-
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    image_path, frame_table_path, round_label, fov_id, output_path = _read_manifest_row(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    image_path, frame_table_path, round_label, fov_id, output_path = cli.manifest_row(args.manifest, task_id, header=False)
     percentiles = tuple(int(p) for p in args.percentiles.split(","))
 
     frame_table = pd.read_csv(frame_table_path, index_col=0)

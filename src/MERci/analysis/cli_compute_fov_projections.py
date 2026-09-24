@@ -34,8 +34,6 @@ MERci never needs to be ``pip install``ed on the cluster.
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
 from pathlib import Path
 
@@ -45,6 +43,7 @@ import numpy as np
 _MERCI_SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.io import read_image_frames                             # noqa: E402
 from MERci.acquisition.merlin_config import apply_microscope_orientation  # noqa: E402
 from MERci.analysis.elevation import project_stack                        # noqa: E402
@@ -63,51 +62,23 @@ def _parse_args(argv=None) -> argparse.Namespace:
                          "(this round's own z_frame_indices for CHANNEL_NM, shared across every FOV).")
     p.add_argument("--statistics", default="median,max,min",
                     help="Comma-separated subset of median,max,min,mean to compute (default: the first three).")
-    p.add_argument("--flip-horizontal", action="store_true")
-    p.add_argument("--flip-vertical", action="store_true")
-    p.add_argument("--transpose", action="store_true")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest row index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
-    p.add_argument("--frame-width", type=int, default=None,
-                    help="Only needed for .dax input; ignored for .zarr/.tiff.")
-    p.add_argument("--frame-height", type=int, default=None)
+    cli.add_orientation_args(p)
+    cli.add_task_args(p, frame_size=True)
     return p.parse_args(argv)
-
-
-def _read_manifest_row(manifest: Path, index: int):
-    with open(manifest, newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    if not 0 <= index < len(rows):
-        raise IndexError(f"Manifest {manifest} has {len(rows)} row(s); requested index {index}.")
-    row = rows[index]
-    return int(row["fov_id"]), Path(row["image_path"])
 
 
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    fov_id, fpath = _read_manifest_row(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    row = cli.manifest_row(args.manifest, task_id)
+    fov_id, fpath = int(row["fov_id"]), Path(row["image_path"])
     frame_indices = [int(x) for x in args.frame_indices.split(",")]
     statistics = [s.strip() for s in args.statistics.split(",") if s.strip()]
     unknown = set(statistics) - set(_VALID_STATISTICS)
     if unknown:
         raise SystemExit(f"Unknown statistic(s) {sorted(unknown)} -- must be a subset of {_VALID_STATISTICS}.")
-    orientation = {
-        "flip_horizontal": args.flip_horizontal,
-        "flip_vertical":   args.flip_vertical,
-        "transpose":       args.transpose,
-    }
+    orientation = cli.orientation(args)
 
     stack = read_image_frames(fpath, frame_indices, frame_width=args.frame_width,
                                frame_height=args.frame_height).astype(np.float32)
