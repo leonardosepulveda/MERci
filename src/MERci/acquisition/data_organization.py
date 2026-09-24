@@ -193,8 +193,9 @@ def _frames_for_color(ft: pd.DataFrame, color_nm: int) -> list:
 
 
 def _zpos_for_color(ft: pd.DataFrame, color_nm: int) -> list:
-    """Sorted z values for the rows belonging to *color_nm*."""
-    return sorted(ft.loc[ft["color"] == color_nm, "z"].tolist())
+    """z values for *color_nm*'s rows, in frame order: MERlin pairs
+    ``zPos[i]`` with ``frame[i]`` (and sorts z itself where it needs to)."""
+    return ft.loc[ft["color"] == color_nm, "z"].tolist()
 
 
 def _fiducial_frame(ft: pd.DataFrame) -> int:
