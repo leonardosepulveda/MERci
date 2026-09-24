@@ -345,12 +345,13 @@ def compute_fov_elevation(
     M        : float32 ``(h, w)`` elevation matrix, downsampled resolution
     ds_stack : float32 ``(n_z, h, w)`` FFC-corrected, downsampled z-stack
     """
-    from MERci.common.io import read_image_frames
+    from MERci.common.io import iter_image_frames
 
     M = None
     ds_stack = []
-    for idx, z_um in zip(frame_indices, z_um_values):
-        raw = read_image_frames(fpath, [int(idx)], frame_width, frame_height)[0]
+    frames = iter_image_frames(fpath, [int(i) for i in frame_indices],
+                               frame_width=frame_width, frame_height=frame_height)
+    for (_, raw), z_um in zip(frames, z_um_values):
         ds = ffc_correct_and_downsample(raw, ffc_field, downsample_factor, orientation).astype(np.float32)
         if M is None:
             M = np.zeros(ds.shape, dtype=np.float32)
