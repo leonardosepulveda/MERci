@@ -510,6 +510,42 @@ def _render_stitched_frame(
     return img
 
 
+def _render_setup(stack_paths, grid_indices, config, downsample_factor, r0, c0,
+                  n_rows, n_cols, scalebar_um, percentile_clip, scale_z_pos):
+    """
+    Grid window, crop size, display scale (percentiles over every FOV's
+    plane *scale_z_pos*) and scale bar shared by every stitched render.
+    Returns ``(fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label)``.
+    """
+    from MERci.analysis.ffc import compute_mosaic_crop_px
+
+    crop_px = compute_mosaic_crop_px(config) // downsample_factor
+    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
+    fov_ids = [f for f in stack_paths if f in grid_indices]
+    if not fov_ids:
+        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
+    pixels = np.concatenate([
+        np.asarray(np.load(stack_paths[f], mmap_mode="r")[scale_z_pos]).ravel() for f in fov_ids
+    ])
+    vmin, vmax = np.percentile(pixels, [percentile_clip[0], percentile_clip[1]])
+    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
+    return fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label
+
+
+def _cached_frame(cache_path: Optional[Path], render):
+    """Load *cache_path* if it exists, else ``render()`` and save it there."""
+    from PIL import Image
+
+    if cache_path is not None and cache_path.exists():
+        frame = Image.open(cache_path)
+        frame.load()
+        return frame
+    frame = render()
+    if cache_path is not None:
+        frame.save(cache_path)
+    return frame
+
+
 def _prepare_sweep_render(
     stack_paths: Dict[int, Path],
     z_um_values: List[float],
@@ -527,26 +563,11 @@ def _prepare_sweep_render(
     representative z-plane, see those functions' own docstrings), the scale
     bar, and the z-plane indices to render.
     """
-    from MERci.analysis.ffc import compute_mosaic_crop_px
-
-    crop_px = compute_mosaic_crop_px(config) // downsample_factor
-    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
-    fov_ids = [f for f in stack_paths if f in grid_indices]
-    if not fov_ids:
-        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
-
     n_z = len(z_um_values)
     z_positions = list(range(0, n_z, z_stride))
-
-    mid_z = n_z // 2
-    mid_pixels = np.concatenate([
-        np.asarray(np.load(stack_paths[f], mmap_mode="r")[mid_z]).ravel() for f in fov_ids
-    ])
-    vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
-    del mid_pixels
-
-    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
-    return fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label, z_positions
+    setup = _render_setup(stack_paths, grid_indices, config, downsample_factor, r0, c0,
+                          n_rows, n_cols, scalebar_um, percentile_clip, n_z // 2)
+    return (*setup, z_positions)
 
 
 def _stitched_frames(
@@ -565,7 +586,6 @@ def _stitched_frames(
     them, and so a crash during either one's final encode/save step (after
     this generator has already finished) doesn't force a redo.
     """
-    from PIL import Image
     from MERci.progress_display import ProgressReporter
 
     if frame_cache_dir is not None:
@@ -575,17 +595,10 @@ def _stitched_frames(
     reporter = ProgressReporter(total=len(z_positions), label=progress_label)
     for z_pos in reporter.wrap(z_positions):
         cache_path = frame_cache_dir / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
-        if cache_path is not None and cache_path.exists():
-            frame = Image.open(cache_path)
-            frame.load()
-        else:
-            frame = _render_stitched_frame(
-                stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
-                vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
-            )
-            if cache_path is not None:
-                frame.save(cache_path)
-        yield frame
+        yield _cached_frame(cache_path, lambda: _render_stitched_frame(
+            stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
+            vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
+        ))
 
 
 def create_gif(
@@ -862,27 +875,13 @@ def create_paired_movie(
     import imageio
     from PIL import Image
 
-    from MERci.analysis.ffc import compute_mosaic_crop_px
     from MERci.progress_display import ProgressReporter
 
     def _prepare_side(stack_paths, z_um_values, grid_indices, config):
-        crop_px = compute_mosaic_crop_px(config) // downsample_factor
-        n_rows, n_cols = _resolve_grid_window(grid_indices, 0, 0, None, None)
-        fov_ids = [f for f in stack_paths if f in grid_indices]
-        if not fov_ids:
-            raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
-
-        mid_z = len(z_um_values) // 2
-        mid_pixels = np.concatenate([
-            np.asarray(np.load(stack_paths[f], mmap_mode="r")[mid_z]).ravel() for f in fov_ids
-        ])
-        vmin, vmax = np.percentile(mid_pixels, [percentile_clip[0], percentile_clip[1]])
-        del mid_pixels
-
-        bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
-        return dict(crop_px=crop_px, n_rows=n_rows, n_cols=n_cols, fov_ids=fov_ids,
-                    vmin=vmin, vmax=vmax, bar_px=bar_px, bar_label=bar_label,
-                    z_arr=np.asarray(z_um_values, dtype=float))
+        keys = ("fov_ids", "n_rows", "n_cols", "crop_px", "vmin", "vmax", "bar_px", "bar_label")
+        setup = _render_setup(stack_paths, grid_indices, config, downsample_factor, 0, 0,
+                              None, None, scalebar_um, percentile_clip, len(z_um_values) // 2)
+        return dict(zip(keys, setup), z_arr=np.asarray(z_um_values, dtype=float))
 
     side_a = _prepare_side(stack_paths_a, z_um_values_a, grid_indices_a, config_a)
     side_b = _prepare_side(stack_paths_b, z_um_values_b, grid_indices_b, config_b)
@@ -890,18 +889,11 @@ def create_paired_movie(
     def _side_frame(stack_paths, grid_indices, side, target_z, frame_cache_dir):
         z_pos = int(np.argmin(np.abs(side["z_arr"] - target_z)))
         cache_path = Path(frame_cache_dir) / f"z{z_pos:04d}.png" if frame_cache_dir is not None else None
-        if cache_path is not None and cache_path.exists():
-            img = Image.open(cache_path)
-            img.load()
-            return img
-        img = _render_stitched_frame(
+        return _cached_frame(cache_path, lambda: _render_stitched_frame(
             stack_paths, side["fov_ids"], z_pos, grid_indices,
             0, 0, side["n_rows"], side["n_cols"], side["crop_px"],
             side["vmin"], side["vmax"], side["z_arr"][z_pos], side["bar_px"], side["bar_label"],
-        )
-        if cache_path is not None:
-            img.save(cache_path)
-        return img
+        ))
 
     if frame_cache_dir_a is not None:
         Path(frame_cache_dir_a).mkdir(parents=True, exist_ok=True)
@@ -967,23 +959,11 @@ def create_z_mosaic(
     -------
     output_path
     """
-    from MERci.analysis.ffc import compute_mosaic_crop_px
-
-    crop_px = compute_mosaic_crop_px(config) // downsample_factor
-    n_rows, n_cols = _resolve_grid_window(grid_indices, r0, c0, n_rows, n_cols)
-    fov_ids = [f for f in stack_paths if f in grid_indices]
-    if not fov_ids:
-        raise ValueError("No FOV in stack_paths has a matching entry in grid_indices")
-
     z_pos = int(np.argmin(np.abs(np.asarray(z_um_values, dtype=float) - z_um)))
-
-    pooled_pixels = np.concatenate([
-        np.asarray(np.load(stack_paths[f], mmap_mode="r")[z_pos]).ravel() for f in fov_ids
-    ])
-    vmin, vmax = np.percentile(pooled_pixels, [percentile_clip[0], percentile_clip[1]])
-    del pooled_pixels
-
-    bar_px, bar_label = _scalebar_px_and_label(config, downsample_factor, scalebar_um)
+    fov_ids, n_rows, n_cols, crop_px, vmin, vmax, bar_px, bar_label = _render_setup(
+        stack_paths, grid_indices, config, downsample_factor, r0, c0, n_rows, n_cols,
+        scalebar_um, percentile_clip, z_pos,
+    )
     img = _render_stitched_frame(
         stack_paths, fov_ids, z_pos, grid_indices, r0, c0, n_rows, n_cols, crop_px,
         vmin, vmax, z_um_values[z_pos], bar_px, bar_label,
