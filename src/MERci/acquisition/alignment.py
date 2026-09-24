@@ -591,14 +591,10 @@ def extract_bead_frames(
     frame table).
     """
     import tifffile
-    from MERci.common.io import read_image
+    from MERci.common.io import read_image_frames
 
-    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
-    try:
-        idx = [int(i) for i in frame_indices]
-        sel = np.stack([np.asarray(stack[i]) for i in idx]).astype(stack.dtype)
-    finally:
-        del stack
+    idx = [int(i) for i in frame_indices]
+    sel = read_image_frames(image_path, idx, frame_width=frame_width, frame_height=frame_height)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(str(out_path), sel)
@@ -746,23 +742,16 @@ def _drift_one_pair(args: tuple) -> dict:
     """
     (fov_id, ref_path, mov_path, ref_frame, mov_frame, mov_orient,
      upsample_factor, pixel_size_um, sign_x, sign_y, frame_width, frame_height) = args
-    from MERci.common.io import read_image
+    from MERci.common.io import read_image_frames
 
-    ref_stack = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
-    mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
-    try:
-        # remove_hot_pixels first: a fixed hot/dead detector pixel is identical
-        # in both frames and dominates phase_cross_correlation when the real
-        # bead signal is dim, pinning the estimate to [0, 0] (see its
-        # docstring) -- so both images get it before registration, not just
-        # the moving one, in case the reference frame carries its own.
-        shift, error = phase_drift(
-            remove_hot_pixels(ref_stack[ref_frame]),
-            remove_hot_pixels(apply_orientation(mov_stack[mov_frame], mov_orient)),
-            upsample_factor,
-        )
-    finally:
-        del ref_stack, mov_stack
+    ref = read_image_frames(ref_path, [ref_frame], frame_width=frame_width, frame_height=frame_height)[0]
+    mov = read_image_frames(mov_path, [mov_frame], frame_width=frame_width, frame_height=frame_height)[0]
+    # Hot pixels in both images: a fixed hot pixel pins phase correlation to [0, 0].
+    shift, error = phase_drift(
+        remove_hot_pixels(ref),
+        remove_hot_pixels(apply_orientation(mov, mov_orient)),
+        upsample_factor,
+    )
     dy, dx = float(shift[0]), float(shift[1])
     return {
         "fov":        int(fov_id),
