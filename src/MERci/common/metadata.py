@@ -219,8 +219,8 @@ class ExperimentMetadata:
         data_dir       : root directory where image files will be found
         image_suffix   : file extension (default ``.dax``)
         """
-        df        = _read_round_info(Path(round_info_csv))
-        positions = _read_positions(Path(positions_txt))
+        df        = load_round_info(round_info_csv)
+        positions = load_positions(positions_txt)
         n_fovs    = len(positions)
         return _build_metadata(df, positions, Path(data_dir), n_fovs, image_suffix)
 
@@ -422,60 +422,6 @@ def _pattern_to_regex(pattern: str) -> "re.Pattern":
             parts.append(re.escape(pattern[i:j]))
             i = j
     return re.compile("^" + "".join(parts) + "$")
-
-
-def _read_round_info(csv_path: Path) -> pd.DataFrame:
-    """
-    Load ``round_info.csv``.
-
-    Required columns: ``imaging_round`` (or legacy ``round_id``), ``series``
-    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, ``dir``, others
-    """
-    df = pd.read_csv(csv_path)
-    # Accept 'imaging_round' (new) or 'round_id' (legacy)
-    if "imaging_round" in df.columns and "round_id" not in df.columns:
-        df = df.rename(columns={"imaging_round": "round_id"})
-    for col in ("round_id", "series"):
-        if col not in df.columns:
-            raise ValueError(
-                f"round_info.csv must contain a '{col}' column "
-                f"(found columns: {list(df.columns)})"
-            )
-    df["series"]   = df["series"].astype(str).str.strip()
-    df["round_id"] = df["round_id"].astype(int)
-    return df
-
-
-def _read_positions(pos_path: Path) -> Dict[int, Tuple[float, float]]:
-    """
-    Parse per-FOV stage positions from a comma-separated text file.
-
-    One line per FOV: ``x,y``.  Lines beginning with ``#`` or blank
-    lines are ignored.
-
-    Returns
-    -------
-    {fov_id: (x, y)} — zero-indexed.
-    """
-    positions: Dict[int, Tuple[float, float]] = {}
-    fov_id = 0
-
-    with pos_path.open() as fh:
-        for raw in fh:
-            line = raw.split("#")[0].strip()
-            if not line:
-                continue
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) < 2:
-                log.warning("Short line at FOV %d: %r – skipping.", fov_id, raw)
-                continue
-            try:
-                positions[fov_id] = (float(parts[0]), float(parts[1]))
-                fov_id += 1
-            except ValueError as exc:
-                log.warning("Bad position at FOV %d: %s", fov_id, exc)
-
-    return positions
 
 
 def _parse_series_row(row: pd.Series) -> SeriesInfo:

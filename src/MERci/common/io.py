@@ -44,17 +44,19 @@ log = logging.getLogger(__name__)
 
 def load_round_info(csv_path: Path) -> pd.DataFrame:
     """
-    Load ``round_info.csv``.
+    Load ``round_info.csv``, with the round column named ``round_id``.
 
-    Required columns: ``round_id``, ``series``
-    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, others
+    Required columns: ``imaging_round`` (or legacy ``round_id``), ``series``
+    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, ``dir``, others
     """
     df = pd.read_csv(csv_path)
+    if "imaging_round" in df.columns and "round_id" not in df.columns:
+        df = df.rename(columns={"imaging_round": "round_id"})
     for col in ("round_id", "series"):
         if col not in df.columns:
             raise ValueError(
                 f"round_info.csv must contain a '{col}' column "
-                f"(found: {list(df.columns)})"
+                f"(found columns: {list(df.columns)})"
             )
     df["series"]   = df["series"].astype(str).str.strip()
     df["round_id"] = df["round_id"].astype(int)

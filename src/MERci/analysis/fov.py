@@ -644,13 +644,14 @@ def resolve_round_by_imaging_type(config, imaging_type: str) -> Tuple[int, pd.Da
     ValueError if no round has that ``imaging_type``.
     """
     from ..acquisition.configs import find_frame_table_for_hal_config
+    from ..common.io import load_round_info
 
-    round_info = pd.read_csv(config.round_info_csv)
+    round_info = load_round_info(config.round_info_csv)
     match = round_info.loc[round_info["imaging_type"] == imaging_type]
     if match.empty:
         raise ValueError(f"No round with imaging_type={imaging_type!r} in {config.round_info_csv}")
     row = match.iloc[0]
-    round_id = int(row["imaging_round"])
+    round_id = int(row["round_id"])
     hal_path = config.settings_dir / row["hal_config"]
     ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
     frame_table = pd.read_csv(ft_path, index_col=0)

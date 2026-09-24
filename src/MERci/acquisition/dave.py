@@ -170,7 +170,7 @@ def count_positions(positions_path: Path) -> int:
     Count the FOV positions in a ``positions_*.txt`` file.
 
     One FOV per non-blank line (``x,y``); ``#`` comments and blank lines are
-    ignored, matching :func:`MERci.common.metadata._read_positions`.  This equals
+    ignored, matching :func:`MERci.common.io.load_positions`.  This equals
     the number of iterations Dave runs for a ``<loop>`` bound to this file, which
     is what the per-segment ``start`` offsets (see
     :func:`create_round_info_multitissue`) are built from.
