@@ -438,10 +438,8 @@ def _estimate_pixels_per_unit(
     if len(xs) < 2:
         return 1.0
 
-    from scipy.spatial import cKDTree
-    coords = np.stack([xs, ys], axis=1)
-    dists, _ = cKDTree(coords).query(coords, k=2)
-    nn_dist = float(np.median(dists[:, 1]))
+    from MERci.acquisition.positions import median_nn_distance
+    nn_dist = median_nn_distance(np.stack([xs, ys], axis=1))
 
     if nn_dist == 0:
         return 1.0

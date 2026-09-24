@@ -72,7 +72,7 @@ from .common.metadata import (
 )
 from .acquisition.configs import iter_round_frame_tables
 from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
-from .acquisition.positions import find_exterior_fovs
+from .acquisition.positions import find_exterior_fovs, median_nn_distance
 from .analysis.ffc import apply_ffc, compute_ffc_field_for_color, load_ffc_field, save_ffc_field
 from .analysis.fov import create_thumbnail
 from .analysis.round import _layout_tiles
@@ -205,10 +205,7 @@ class LiveRoundMosaicBuilder:
         # (likely NOT to carry real tissue signal) -- computed once from the
         # full planned FOV grid, independent of what's imaged so far.
         positions = {f: metadata.fovs[f].position for f in metadata.fovs}
-        coords_arr = np.array([positions[f] for f in sorted(positions)])
-        from scipy.spatial import KDTree
-        nn_dist, _ = KDTree(coords_arr).query(coords_arr, k=2)
-        self.step_size_um = float(np.median(nn_dist[:, 1]))
+        self.step_size_um = median_nn_distance([positions[f] for f in sorted(positions)])
         self.exterior_fov_ids: Set[int] = find_exterior_fovs(positions, self.step_size_um)
 
         self._ffc_fields: Dict[float, np.ndarray] = {}

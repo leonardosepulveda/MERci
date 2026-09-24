@@ -807,6 +807,14 @@ def find_exterior_fovs(
     return {fov_ids[i] for i in np.flatnonzero((dist > tol).any(axis=1))}
 
 
+def median_nn_distance(coords) -> float:
+    """Median nearest-neighbour distance between *coords* (``(N, 2)``) -- the grid step."""
+    from scipy.spatial import cKDTree
+    coords = np.asarray(coords, dtype=float)
+    dists, _ = cKDTree(coords).query(coords, k=2)
+    return float(np.median(dists[:, 1]))
+
+
 def _position_tree(positions: Dict[int, Tuple[float, float]]):
     """``(fov_ids, cKDTree)`` over *positions*' coordinates, cached by content
     (find_grid_neighbor is called thousands of times on the same positions)."""
