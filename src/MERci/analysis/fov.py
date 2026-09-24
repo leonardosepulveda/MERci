@@ -186,17 +186,18 @@ def measure_stats(
     """
     records = []
     for fi, frame in enumerate(stack):
-        flat = frame.ravel().astype(np.float64)
+        flat = frame.ravel()
+        p01, median, p99 = np.percentile(flat, [1, 50, 99])
         records.append({
             "file":   source_filename,
             "frame":  fi,
             "min":    int(flat.min()),
             "max":    int(flat.max()),
-            "mean":   float(flat.mean()),
-            "median": float(np.median(flat)),
-            "std":    float(flat.std()),
-            "p01":    float(np.percentile(flat,  1)),
-            "p99":    float(np.percentile(flat, 99)),
+            "mean":   float(flat.mean(dtype=np.float64)),
+            "median": float(median),
+            "std":    float(flat.std(dtype=np.float64)),
+            "p01":    float(p01),
+            "p99":    float(p99),
         })
 
     df = pd.DataFrame(records)
@@ -240,11 +241,17 @@ def get_histogram(
 
     n_frames = len(stack)
     all_counts = np.zeros((n_frames, bins), dtype=np.int64)
-    edges: Optional[np.ndarray] = None
+    edges = np.histogram_bin_edges([], bins=bins, range=hist_range)
+    # uint16 over the full range with 2**k bins: bin = value >> (16 - k), same
+    # assignment as np.histogram (checked for every value) but O(n), no sort.
+    shift = 16 - (bins.bit_length() - 1)
+    fast = (tuple(hist_range) == (0, 65535) and bins & (bins - 1) == 0 and 0 <= shift <= 16)
 
     for fi, frame in enumerate(stack):
-        counts, edges = np.histogram(frame.ravel(), bins=bins, range=hist_range)
-        all_counts[fi] = counts
+        if fast and frame.dtype == np.uint16:
+            all_counts[fi] = np.bincount(frame.ravel() >> shift, minlength=bins)
+        else:
+            all_counts[fi] = np.histogram(frame.ravel(), bins=bins, range=hist_range)[0]
 
     bin_centers = 0.5 * (edges[:-1] + edges[1:])
 
@@ -533,12 +540,9 @@ def measure_intensity_percentiles(
 
     Reads every frame in *frame_table* via :func:`compute_channel_counters`
     (frame-selective, one frame decoded at a time) rather than a single
-    whole-stack :func:`~MERci.common.io.read_image` call -- a benchmark
-    against real lineage-tracing FOVs (215 frames, 2304x2304 uint16) showed
-    both approaches cost about the same wall time (~45-55s, dominated by
-    215 calls to ``numpy.unique``, not by I/O), but the frame-selective
-    read peaks at ~250MB instead of ~4.8GB, since it never holds the whole
-    stack in memory at once.
+    whole-stack :func:`~MERci.common.io.read_image` call: similar wall time,
+    but peak memory ~250MB instead of ~4.8GB for a 215-frame 2304x2304
+    uint16 stack.
 
     Parameters
     ----------
