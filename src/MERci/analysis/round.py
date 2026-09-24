@@ -458,11 +458,10 @@ def _estimate_pixels_per_unit(
     if len(xs) < 2:
         return 1.0
 
-    coords = np.stack([xs, ys], axis=1)        # (N, 2)
-    diff   = coords[:, None, :] - coords[None, :, :]  # (N, N, 2)
-    sq_d   = (diff ** 2).sum(axis=2)           # (N, N)
-    np.fill_diagonal(sq_d, np.inf)
-    nn_dist = np.sqrt(sq_d.min(axis=1)).mean()
+    from scipy.spatial import cKDTree
+    coords = np.stack([xs, ys], axis=1)
+    dists, _ = cKDTree(coords).query(coords, k=2)
+    nn_dist = float(np.median(dists[:, 1]))
 
     if nn_dist == 0:
         return 1.0

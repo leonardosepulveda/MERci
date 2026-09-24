@@ -1571,7 +1571,7 @@ def estimate_dave_experiment(
         if frame_time_s is not None:
             return frame_time_s
         if hal_stem not in exposure_cache:
-            exp = _read_hal_exposure(Path(settings_dir) / (hal_stem + ".xml")) \
+            exp = _read_hal_exposure(resolve_hal_config_path(settings_dir, hal_stem)) \
                   if settings_dir is not None else None
             exposure_cache[hal_stem] = exp
         exp = exposure_cache[hal_stem]
@@ -1618,13 +1618,8 @@ def estimate_dave_experiment(
                   "per_fov_imaging_s": 0.0})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
-            # The loop_variable a movie references is its OWN <variable_entry
-            # name="...">, not necessarily the parent <loop>'s own name: since
-            # positions loop_variables are shared across every round visiting
-            # the same segment (see create_dave_config), a loop named e.g.
-            # "Hyb 01 Imaging" can reference a loop_variable named "B1" or
-            # "Positions". Every movie within one loop references the same
-            # variable, so the first movie's is enough.
+            # Read the positions variable from the movie's own
+            # <variable_entry> (every movie in a loop uses the same one).
             ve_el    = movies[0].find("variable_entry")
             var_name = ve_el.get("name", "") if ve_el is not None else lname
             path = lv_value.get(var_name, "")

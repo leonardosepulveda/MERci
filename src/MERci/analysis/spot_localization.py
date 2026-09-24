@@ -175,8 +175,10 @@ def detect_beads_2d(
     """
     blurred = gaussian_filter(max_proj.astype(float), sigma=1.5)
     bg_mask = blurred < np.percentile(blurred, 80)
-    bg_med  = np.median(blurred[bg_mask])
-    bg_std  = blurred[bg_mask].std() if bg_mask.any() else 1.0
+    if bg_mask.any():
+        bg_med, bg_std = np.median(blurred[bg_mask]), blurred[bg_mask].std()
+    else:   # flat image: every pixel equals the 80th percentile
+        bg_med, bg_std = float(np.median(blurred)), 1.0
     thresh  = bg_med + thresh_sigma * bg_std
     local_mx = maximum_filter(blurred, size=int(min_dist_px)) == blurred
     return np.argwhere(local_mx & (blurred > thresh))

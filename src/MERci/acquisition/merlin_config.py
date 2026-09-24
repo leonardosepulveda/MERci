@@ -219,7 +219,7 @@ def create_microscope_parameters_json(
     flip_vertical:      Optional[bool]               = None,
     transpose:          Optional[bool]               = None,
     image_dimensions:   Optional[Tuple[int, int]]     = None,
-    microns_per_pixel:  float                         = 0.109,
+    microns_per_pixel:  float                         = 0.108,
 ) -> Path:
     """
     Write a MERlin microscope-parameters JSON.
@@ -679,10 +679,9 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: 
     str : POSIX absolute path to the acquisition root, for use as the
           generated script's ``$SAMPLE_DIR``
     """
+    sample_dir = Path(sample_dir)
     if sys.platform.startswith("linux"):
         return sample_dir.as_posix()
-
-    sample_dir = Path(sample_dir)
 
     def _cluster_root(experiment_id: str) -> Optional[str]:
         upper = experiment_id.upper()
