@@ -210,6 +210,19 @@ class ProgressTracker:
             and self.all_fovs_done_for_round(rid, metadata, fov_subset)
         ]
 
+    def completed_stats_paths(self, metadata):
+        """Yield ``(round_id, fov_id, stats_path)`` for every existing stats CSV,
+        over *metadata*'s valid rounds."""
+        for round_id in metadata.valid_round_ids():
+            round_obj = metadata.rounds.get(round_id)
+            if round_obj is None:
+                continue
+            for fov_id, file_list in round_obj.fov_files.items():
+                for fpath in file_list:
+                    sp = self.stats_path(fpath)
+                    if sp.exists():
+                        yield round_id, fov_id, sp
+
     # ── Status updates ────────────────────────────────────────────────────────
 
     def mark_fov_done(self, dax_path: Path) -> None:
