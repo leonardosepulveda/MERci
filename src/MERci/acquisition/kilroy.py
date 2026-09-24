@@ -47,15 +47,28 @@ below verifies that link and proposes fuzzy-matched fixes:
 """
 from __future__ import annotations
 
+import functools
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 
 # ── Kilroy config parsing ────────────────────────────────────────────────────
+
+def _parse(path: Path) -> ET.Element:
+    """Parsed Kilroy config root (ISO-8859-1), cached until the file changes.
+    Callers must not modify the returned tree."""
+    st = Path(path).stat()
+    return _parse_cached(str(Path(path).resolve()), st.st_mtime_ns, st.st_size)
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_cached(path: str, mtime_ns: int, size: int) -> ET.Element:
+    return ET.fromstring(Path(path).read_text(encoding="ISO-8859-1"))
+
 
 def load_kilroy_protocols(path: Path) -> List[str]:
     """
@@ -64,8 +77,7 @@ def load_kilroy_protocols(path: Path) -> List[str]:
     Reads the ``name`` attribute of every ``<protocol>`` element under
     ``<kilroy_protocols>``.  Kilroy files use ISO-8859-1 encoding.
     """
-    text = Path(path).read_text(encoding="ISO-8859-1")
-    root = ET.fromstring(text)
+    root = _parse(path)
     names = [el.get("name") for el in root.iter("protocol")]
     return [n.strip() for n in names if n and n.strip()]
 
@@ -89,8 +101,7 @@ def load_protocol_durations(path: Path) -> Dict[str, float]:
     -------
     dict : protocol name → total duration in seconds
     """
-    text = Path(path).read_text(encoding="ISO-8859-1")
-    root = ET.fromstring(text)
+    root = _parse(path)
     durations: Dict[str, float] = {}
     for proto in root.iter("protocol"):
         name = (proto.get("name") or "").strip()
@@ -387,7 +398,7 @@ def load_kilroy_commands(path: Path) -> Dict[str, List[str]]:
     dict
         ``{"valve": [names...], "pump": [names...]}`` in document order.
     """
-    root = ET.fromstring(Path(path).read_text(encoding="ISO-8859-1"))
+    root = _parse(path)
     valve = [el.get("name").strip() for el in root.iter("valve_cmd") if el.get("name")]
     pump = [el.get("name").strip() for el in root.iter("pump_cmd") if el.get("name")]
     return {"valve": valve, "pump": pump}
@@ -401,7 +412,7 @@ def iter_protocol_references(path: Path) -> List[ProtocolReference]:
     remain detectable. Non-command children of a protocol (e.g. XML comments) are
     skipped.
     """
-    root = ET.fromstring(Path(path).read_text(encoding="ISO-8859-1"))
+    root = _parse(path)
     refs: List[ProtocolReference] = []
     for proto in root.iter("protocol"):
         pname = (proto.get("name") or "").strip()
