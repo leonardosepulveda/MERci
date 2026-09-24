@@ -225,6 +225,20 @@ def _read_xy_file(path: Path) -> List[Tuple[float, float]]:
     return coords
 
 
+def _polygon_from_file(path: Path, islands=None) -> Optional[Polygon]:
+    """Polygon from an ``x,y`` file (with optional interior *islands*), or
+    None with a warning if it has < 3 points or is empty/invalid."""
+    coords = _read_xy_file(path)
+    if len(coords) < 3:
+        log.warning("%s has fewer than 3 valid points – skipping.", path.name)
+        return None
+    poly = Polygon(coords, islands) if islands else Polygon(coords)
+    if poly.is_empty or not poly.is_valid:
+        log.warning("%s produced an invalid Shapely polygon – skipping.", path.name)
+        return None
+    return poly
+
+
 def _split_by_distance_gap(
     coords: List[Tuple[float, float]],
 ) -> List[List[Tuple[float, float]]]:
@@ -345,13 +359,6 @@ def load_hole_polygons(
             continue   # e.g. a hole{n}_island{m}.txt companion file -- not its own hole
         hole_id = m.group(1)
 
-        coords = _read_xy_file(path)
-        if len(coords) < 3:
-            log.warning(
-                "%s has fewer than 3 valid points – skipping.", path.name
-            )
-            continue
-
         islands = []
         for island_path in sorted(hole_dir.glob(f"hole{hole_id}_island*.txt")):
             island_coords = _read_xy_file(island_path)
@@ -363,14 +370,9 @@ def load_hole_polygons(
                 continue
             islands.append(island_coords)
 
-        poly = Polygon(coords, islands) if islands else Polygon(coords)
-        if poly.is_empty or not poly.is_valid:
-            log.warning(
-                "%s produced an invalid Shapely polygon – skipping.", path.name
-            )
-            continue
-
-        polygons.append(poly)
+        poly = _polygon_from_file(path, islands)
+        if poly is not None:
+            polygons.append(poly)
 
     return polygons
 
@@ -450,21 +452,9 @@ def load_subset_polygons(
         if not subset_re.match(path.name):
             continue
 
-        coords = _read_xy_file(path)
-        if len(coords) < 3:
-            log.warning(
-                "%s has fewer than 3 valid points – skipping.", path.name
-            )
-            continue
-
-        poly = Polygon(coords)
-        if poly.is_empty or not poly.is_valid:
-            log.warning(
-                "%s produced an invalid Shapely polygon – skipping.", path.name
-            )
-            continue
-
-        polygons.append(poly)
+        poly = _polygon_from_file(path)
+        if poly is not None:
+            polygons.append(poly)
 
     return polygons
 
@@ -943,6 +933,10 @@ class BoundarySpec:
     label:    str
 
 
+_MULTI_BOUNDARY_RE  = re.compile(r"^tissue_(\d+)_boundary_positions_(\d+)\.txt$", re.IGNORECASE)
+_SINGLE_BOUNDARY_RE = re.compile(r"^boundary_positions_(\d+)\.txt$", re.IGNORECASE)
+
+
 def discover_boundary_files(positions_dir: Path) -> Tuple[List[BoundarySpec], str]:
     """
     Auto-detect the tissue/boundary layout from the filenames in *positions_dir*.
@@ -977,18 +971,15 @@ def discover_boundary_files(positions_dir: Path) -> Tuple[List[BoundarySpec], st
     """
     positions_dir = Path(positions_dir)
 
-    multi_re  = re.compile(r"^tissue_(\d+)_boundary_positions_(\d+)\.txt$", re.IGNORECASE)
-    single_re = re.compile(r"^boundary_positions_(\d+)\.txt$", re.IGNORECASE)
-
     multi:  List[BoundarySpec] = []
     single: List[BoundarySpec] = []
     for p in sorted(positions_dir.glob("*.txt")):
-        m = multi_re.match(p.name)
+        m = _MULTI_BOUNDARY_RE.match(p.name)
         if m:
             t, b = int(m.group(1)), int(m.group(2))
             multi.append(BoundarySpec(t, b, p, f"T{t}B{b}"))
             continue
-        s = single_re.match(p.name)
+        s = _SINGLE_BOUNDARY_RE.match(p.name)
         if s:
             b = int(s.group(1))
             single.append(BoundarySpec(1, b, p, f"B{b}"))
@@ -1086,26 +1077,27 @@ def group_boundaries_by_path_mode(
     -------
     List of :class:`BoundaryGroup`, in acquisition order.
     """
-    n = len(boundaries)
     groups: List[BoundaryGroup] = []
-    i = 0
-    while i < n:
-        spec, t = boundaries[i], boundaries[i].tissue
-        j = i
-        while j < n and boundaries[j].tissue == t:
-            j += 1
-        run_len = j - i
-
-        if tissue_path_mode(t) in ("legacy", "union") and run_len > 1:
+    for t, i, j in _tissue_runs(boundaries):
+        if tissue_path_mode(t) in ("legacy", "union") and j - i > 1:
             label = f"T{t}" if mode == "multi" else ""
             groups.append(BoundaryGroup(t, label, tuple(range(i, j))))
-        elif run_len > 1:   # tissue_path_mode(t) == "transit"
+        else:   # "transit", or a single boundary: one segment each
             for k in range(i, j):
                 groups.append(BoundaryGroup(t, boundaries[k].label, (k,)))
-        else:                # run_len == 1: nothing of this tissue's own to merge
-            groups.append(BoundaryGroup(t, spec.label, (i,)))
-        i = j
     return groups
+
+
+def _tissue_runs(boundaries: Sequence[BoundarySpec]):
+    """Yield ``(tissue, i, j)`` for each run ``boundaries[i:j]`` of one tissue."""
+    i = 0
+    while i < len(boundaries):
+        t = boundaries[i].tissue
+        j = i
+        while j < len(boundaries) and boundaries[j].tissue == t:
+            j += 1
+        yield t, i, j
+        i = j
 
 
 def merge_union_tissue_boundaries(
@@ -1161,15 +1153,9 @@ def merge_union_tissue_boundaries(
         (or a "union" tissue with only one boundary piece to begin with)
         passes through unchanged.
     """
-    n = len(boundaries)
     merged_boundaries: List[BoundarySpec] = []
     merged_polygons:   List[Polygon]      = []
-    i = 0
-    while i < n:
-        t = boundaries[i].tissue
-        j = i
-        while j < n and boundaries[j].tissue == t:
-            j += 1
+    for t, i, j in _tissue_runs(boundaries):
         if tissue_path_mode(t) == "union" and j - i > 1:
             label = f"T{t}" if mode == "multi" else ""
             merged_boundaries.append(BoundarySpec(t, 1, boundaries[i].path, label))
@@ -1177,7 +1163,6 @@ def merge_union_tissue_boundaries(
         else:
             merged_boundaries.extend(boundaries[i:j])
             merged_polygons.extend(boundary_polygons[i:j])
-        i = j
     return merged_boundaries, merged_polygons
 
 
@@ -1191,10 +1176,8 @@ def has_boundary_files(positions_dir: Path) -> bool:
     positions_dir = Path(positions_dir)
     if not positions_dir.is_dir():
         return False
-    multi_re  = re.compile(r"^tissue_\d+_boundary_positions_\d+\.txt$", re.IGNORECASE)
-    single_re = re.compile(r"^boundary_positions_\d+\.txt$", re.IGNORECASE)
     for p in positions_dir.glob("*.txt"):
-        if multi_re.match(p.name) or single_re.match(p.name):
+        if _MULTI_BOUNDARY_RE.match(p.name) or _SINGLE_BOUNDARY_RE.match(p.name):
             return True
     return (positions_dir / "boundary_positions.txt").exists()
 
