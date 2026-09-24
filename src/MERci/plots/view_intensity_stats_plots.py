@@ -8,19 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from ..analysis.stage_z import positions_to_grid_indices
-
-# Wavelength -> plot color mapping (matches the per-function dict in
-# visualization.py's shutter-sequence plot -- not shared as a module-level
-# constant there, so duplicated here rather than reaching into that
-# function's internals).
-_WL_COLOR = {
-    405: "#9467bd",
-    488: "#1f77b4",
-    560: "#ff7f0e",
-    650: "#2ca02c",
-    750: "#d62728",
-}
-_DEFAULT_LINE_COLOR = "#7f7f7f"
+from ..visualization import DEFAULT_COLOUR, WAVELENGTH_COLOUR
 
 
 def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead_z: float = 0.0, bead_color: float = 488.0) -> None:
@@ -42,7 +30,7 @@ def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead
         print(f"No data for round {round_id}, color {color_nm:.0f} nm.")
         return
 
-    line_color = _WL_COLOR.get(int(round(color_nm)), _DEFAULT_LINE_COLOR)
+    line_color = WAVELENGTH_COLOUR.get(int(round(color_nm)), DEFAULT_COLOUR)
 
     fig, ax = plt.subplots(figsize=(7, 4))
     for _, fov_data in data.groupby("fov_id"):
