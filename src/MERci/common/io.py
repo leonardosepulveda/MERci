@@ -11,6 +11,7 @@ parse_inf               – parse HAL .inf sidecar
 read_dax                – load a raw .dax file into a numpy array  (uint16)
 read_zarr               – load a HAL .zarr store into a numpy array (uint16)
 read_tiff               – load a multi-page .tiff into a numpy array (uint16)
+open_zarr_array         – the Array inside a .zarr store (group or not)
 read_image              – format-agnostic dispatcher for the three formats above
 get_dax_shape           – read .dax shape without loading pixel data
 find_image_paths        – list image files / .zarr stores under a directory
@@ -140,6 +141,26 @@ def parse_inf(inf_path: Path) -> Dict[str, Any]:
     return info
 
 
+def _dax_dims(dax_path: Path, frame_width: Optional[int], frame_height: Optional[int]
+              ) -> Tuple[int, int, Dict[str, Any]]:
+    """``(width, height, inf)``: explicit kwargs first, then the ``.inf`` sidecar."""
+    inf_path = Path(dax_path).with_suffix(".inf")
+    inf: Dict[str, Any] = {}
+    if inf_path.exists():
+        try:
+            inf = parse_inf(inf_path)
+        except Exception as exc:
+            log.warning("Could not parse %s: %s", inf_path, exc)
+    fw = frame_width  or inf.get("frame_width")
+    fh = frame_height or inf.get("frame_height")
+    if fw is None or fh is None:
+        raise ValueError(
+            f"Frame dimensions unknown for '{dax_path}'. "
+            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
+        )
+    return int(fw), int(fh), inf
+
+
 def read_dax(
     dax_path:     Path,
     frame_width:  Optional[int] = None,
@@ -162,24 +183,8 @@ def read_dax(
     IOError     if the file is smaller than expected
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-
-    inf: Dict[str, Any] = {}
-    if inf_path.exists():
-        try:
-            inf = parse_inf(inf_path)
-        except Exception as exc:
-            log.warning("Could not parse %s: %s", inf_path, exc)
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
-    nf = n_frames     or inf.get("n_frames")
-
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Frame dimensions unknown for '{dax_path}'. "
-            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
-        )
+    fw, fh, inf = _dax_dims(dax_path, frame_width, frame_height)
+    nf = n_frames or inf.get("n_frames")
 
     raw             = np.fromfile(str(dax_path), dtype=dtype)
     pixels_per_frame = int(fw) * int(fh)
@@ -208,18 +213,8 @@ def get_dax_shape(
     Uses the ``.inf`` sidecar when available; falls back to file-size inference.
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-    inf      = parse_inf(inf_path) if inf_path.exists() else {}
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
+    fw, fh, inf = _dax_dims(dax_path, frame_width, frame_height)
     nf = inf.get("n_frames")
-
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Cannot determine frame dimensions for '{dax_path}'. "
-            "Ensure a .inf sidecar exists or supply frame_width/frame_height."
-        )
 
     if nf is None:
         item_bytes = np.dtype(np.uint16).itemsize
@@ -229,6 +224,35 @@ def get_dax_shape(
 
 
 # ── Multi-format readers ──────────────────────────────────────────────────────
+
+def open_zarr_array(zarr_path: Path):
+    """The zarr Array in *zarr_path* (a group's first array child if it is a group)."""
+    try:
+        import zarr
+    except ImportError as exc:
+        raise ImportError(
+            "The 'zarr' package is required for .zarr support. "
+            "Install it with: pip install zarr"
+        ) from exc
+    store = zarr.open(str(zarr_path), mode="r")
+    if isinstance(store, zarr.Array):
+        return store
+    keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
+    if not keys:
+        raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
+    return store[keys[0]]
+
+
+def _import_tifffile():
+    try:
+        import tifffile
+    except ImportError as exc:
+        raise ImportError(
+            "The 'tifffile' package is required for .tiff support. "
+            "Install it with: pip install tifffile"
+        ) from exc
+    return tifffile
+
 
 def read_zarr(
     zarr_path: Path,
@@ -250,27 +274,7 @@ def read_zarr(
     -------
     numpy array of shape ``(n_frames, height, width)``
     """
-    try:
-        import zarr
-    except ImportError as exc:
-        raise ImportError(
-            "The 'zarr' package is required for .zarr support. "
-            "Install it with: pip install zarr"
-        ) from exc
-
-    store = zarr.open(str(zarr_path), mode="r")
-    if isinstance(store, zarr.Array):
-        arr = store[:]
-    else:
-        # Group: use the first (and typically only) array child
-        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
-        if not keys:
-            raise ValueError(
-                f"No zarr Array found inside group store: {zarr_path}"
-            )
-        arr = store[keys[0]][:]
-
-    return arr.astype(dtype)
+    return open_zarr_array(zarr_path)[:].astype(dtype)
 
 
 def read_tiff(
@@ -289,14 +293,7 @@ def read_tiff(
     -------
     numpy array of shape ``(n_frames, height, width)``
     """
-    try:
-        import tifffile
-    except ImportError as exc:
-        raise ImportError(
-            "The 'tifffile' package is required for .tiff support. "
-            "Install it with: pip install tifffile"
-        ) from exc
-
+    tifffile = _import_tifffile()
     arr = tifffile.imread(str(tiff_path))
     if arr.ndim == 2:
         arr = arr[np.newaxis, ...]   # single frame → (1, H, W)
@@ -368,21 +365,7 @@ def iter_dax_frames(
     ``.inf`` sidecar.
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-    inf: Dict[str, Any] = {}
-    if inf_path.exists():
-        try:
-            inf = parse_inf(inf_path)
-        except Exception as exc:
-            log.warning("Could not parse %s: %s", inf_path, exc)
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Frame dimensions unknown for '{dax_path}'. "
-            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
-        )
+    fw, fh, _ = _dax_dims(dax_path, frame_width, frame_height)
 
     pixels_per_frame = int(fw) * int(fh)
     frame_bytes      = pixels_per_frame * np.dtype(dtype).itemsize
@@ -430,23 +413,7 @@ def iter_zarr_frames(
     time -- each single-index read only fetches the chunk(s) covering that
     frame, so a caller stopping early never pays for the remaining frames.
     """
-    try:
-        import zarr
-    except ImportError as exc:
-        raise ImportError(
-            "The 'zarr' package is required for .zarr support. "
-            "Install it with: pip install zarr"
-        ) from exc
-
-    store = zarr.open(str(zarr_path), mode="r")
-    if isinstance(store, zarr.Array):
-        arr = store
-    else:
-        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
-        if not keys:
-            raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
-        arr = store[keys[0]]
-
+    arr = open_zarr_array(zarr_path)
     for idx in frame_indices:
         yield idx, np.asarray(arr[idx]).astype(dtype)
 
@@ -490,14 +457,7 @@ def iter_tiff_frames(
     package itself writes. ``series=None`` matters too: leaving it at its
     default resolved a *different* (incorrect) code path in testing.
     """
-    try:
-        import tifffile
-    except ImportError as exc:
-        raise ImportError(
-            "The 'tifffile' package is required for .tiff support. "
-            "Install it with: pip install tifffile"
-        ) from exc
-
+    tifffile = _import_tifffile()
     with tifffile.TiffFile(str(tiff_path)) as tf:
         for idx in frame_indices:
             yield idx, np.asarray(tf.asarray(key=idx, series=None)).astype(dtype)

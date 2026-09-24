@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from ..common.io import open_zarr_array
+
 _BLOSC_HEADER_SIZE = 16  # version, versionlz, flags, typesize (1B each) + nbytes, blocksize, cbytes (4B each)
 
 
@@ -71,20 +73,11 @@ def check_zarr_chunk_integrity(zarr_path: Path) -> ChunkIntegrityResult:
     compressor -- call sites that need to handle other formats gracefully
     should catch that (see :func:`check_dataset_completeness`).
     """
-    import zarr
-
     zarr_path = Path(zarr_path)
     if not zarr_path.exists():
         return ChunkIntegrityResult(exists=False, n_frames_found=None)
 
-    store = zarr.open(str(zarr_path), mode="r")
-    if isinstance(store, zarr.Array):
-        arr = store
-    else:
-        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
-        if not keys:
-            raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
-        arr = store[keys[0]]
+    arr = open_zarr_array(zarr_path)
 
     meta = arr.metadata
     if getattr(meta, "zarr_format", None) != 2:
