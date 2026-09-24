@@ -284,6 +284,7 @@ def load_microscope_orientation(microscope: str, microscope_dir: Path) -> Dict[s
 
 def apply_microscope_orientation(
     image:           np.ndarray,
+    *,
     flip_horizontal: bool = True,
     flip_vertical:   bool = False,
     transpose:       bool = True,
