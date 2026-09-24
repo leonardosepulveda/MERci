@@ -1033,44 +1033,23 @@ def group_boundaries_by_path_mode(
     tissue_path_mode: Callable[[int], str],
 ) -> List[BoundaryGroup]:
     """
-    Group consecutive same-tissue boundaries into acquisition-order
-    "boundary" segments, honouring each tissue's own path mode.
+    Group each tissue's boundaries into acquisition-order segments.
 
-    A tissue's own boundaries (a contiguous run in *boundaries*, since it is
-    sorted by tissue then boundary -- see :func:`discover_boundary_files`)
-    are merged into ONE segment when ``tissue_path_mode(tissue)`` is
-    ``"legacy"`` OR ``"union"`` and it has more than one boundary; otherwise
-    (``"transit"``, or a tissue with only one boundary) each boundary keeps
-    its own segment. "legacy" and "union" group identically here -- they only
-    differ in HOW the merged segment's own FOV coordinates get built
-    (``02_create_positions_from_boundaries.ipynb`` concatenates each piece's
-    own independently-built path for "legacy", vs. building one shared grid
-    over :func:`merge_union_tissue_boundaries`'s unioned polygon for "union"
-    -- see that function's docstring), which this function never touches.
+    A tissue with more than one boundary becomes ONE segment (label ``"T{t}"``
+    in multi mode, else ``""``) when its path mode is ``"legacy"`` or
+    ``"union"``; otherwise each boundary is its own segment. The two merged
+    modes differ only in how notebook 02 builds the segment's FOVs, which
+    this function never touches.
 
-    This is the single source of truth for that grouping decision, shared by
-    ``02_create_positions_from_boundaries.ipynb`` (which attaches the actual
-    FOV coordinates per segment) and
-    :func:`MERci.acquisition.dave.create_round_info_multitissue` (which only
-    needs the resulting segment/label structure to build ``round_info.csv``
-    rows matching whatever notebook 02 actually wrote to ``positions/``) --
-    so the two can never disagree about which positions files exist, whether
-    or not the caller has actually applied :func:`merge_union_tissue_boundaries`
-    to its *boundaries* first (dave.py's caller does not -- it only needs the
-    label/count agreement, not the coordinates).
-
-    This function does NOT add transit segments between the groups it
-    returns -- callers insert those uniformly (bridging every consecutive
-    pair of the returned groups, wrapping the last back to the first,
-    whenever more than one group is returned), since that part doesn't
-    depend on the per-tissue path mode.
+    The single source of truth for this grouping: notebook 02 (positions
+    files) and :func:`MERci.acquisition.dave.create_round_info_multitissue`
+    (round_info rows) both call it, so they always agree. Transit segments
+    between groups are added by the callers.
 
     Parameters
     ----------
-    boundaries       : from :func:`discover_boundary_files`
-    mode             : ``"multi"``, ``"single"`` or ``"legacy"`` (from the
-                       same discovery call) -- selects the merged-segment
-                       label (``"T{t}"`` for multi, ``""`` otherwise)
+    boundaries       : from :func:`discover_boundary_files`, sorted by tissue
+    mode             : ``"multi"``, ``"single"`` or ``"legacy"`` (same call)
     tissue_path_mode : tissue index -> ``"legacy"``, ``"transit"`` or ``"union"``
 
     Returns

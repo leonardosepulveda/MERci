@@ -351,43 +351,17 @@ def _is_cells_series(s: SeriesInfo) -> bool:
 
 def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
     """
-    Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a real path
-    on THIS machine.
+    Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a path on
+    this machine.
 
-    ``dir`` is written by whichever machine generated ``round_info.csv``
-    (normally the microscope's own Windows PC, via ``before_imaging``'s
-    generators) and is an absolute path there -- but a Windows-style
-    absolute path (``V:\\Leonardo\\...\\data\\focus_test`` or
-    ``D:/Leonardo/.../data/hybs/H01``, either slash direction) is NEVER
-    absolute once read back with ``pathlib.Path`` on POSIX (Linux/mac):
-    ``Path.is_absolute()`` requires a leading ``/``, which a drive letter
-    never has. This silently fell into the "relative -- resolve under this
-    machine's own SAMPLE_DIR" branch, but a backslash-separated string
-    parses as ONE opaque path component under POSIX `Path` (backslash isn't
-    a separator there), so joining it onto SAMPLE_DIR just produces one
-    bogus, nonexistent nested directory -- every round can resolve 0 imaged
-    FOVs even though every real file is present. A forward-slash Windows
-    path decomposes into real path parts under POSIX `Path` but is still
-    wrong (the drive + every
-    directory above ``data/`` gets appended onto SAMPLE_DIR verbatim,
-    still never a real path) -- so this isn't just a backslash bug.
+    - POSIX-absolute: returned unchanged.
 
-    Fixed by parsing *dir_str* with :class:`PureWindowsPath` (recognizes
-    both slash directions and drive letters regardless of the OS actually
-    running this code), and -- whenever that reveals a genuine Windows
-    drive letter, meaning the original ``is_absolute()``/join logic could
-    never have been right on this machine -- keeping only the path's tail
-    from its last literal ``"data"`` segment onward and re-rooting that
-    under THIS machine's own *data_dir* (``SAMPLE_DIR/data``). Every real
-    ``dir`` value in this repo's own convention points somewhere under
-    ``.../data/...`` (``data/cells``, ``data/hybs/H01``, ``data/
-    focus_test``, ``data/tissue_1/hybs/H01``, ...), so that tail is exactly
-    the sub-path this machine's own ``data_dir`` needs.
+    - Windows-absolute (drive letter, either slash direction; parsed with
+      ``PureWindowsPath`` so it works on any OS): the tail after its last
+      ``data`` segment, re-rooted under *data_dir*. ``Path`` on POSIX treats
+      such a string as relative, and a backslash one as a single component.
 
-    A genuinely POSIX-absolute *dir_str* (this machine's own convention, or
-    an experiment that has always lived on Linux) is returned unchanged, as
-    before. A real relative path (no drive letter) still resolves against
-    ``data_dir.parent`` (SAMPLE_DIR), also as before.
+    - Relative: resolved against ``data_dir.parent`` (SAMPLE_DIR).
     """
     p = Path(dir_str)
     if p.is_absolute():

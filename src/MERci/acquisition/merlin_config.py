@@ -864,53 +864,28 @@ date +'Finished at %R.'
 
 
 # ── MERlin analysis-parameters JSON (atomic tasks + recipe) ─────────────────
-# Each MERlin task's own tunable defaults live in
-# its own small YAML file under data/configs/merlin/analysis/tasks/ (one file
-# per literal MERlin task, including pure cross-reference "wiring" tasks that
-# carry no independent tunables), and a "recipe" YAML under
-# data/configs/merlin/analysis/recipes/ names the explicit, ordered list of
-# task-file names to assemble -- replacing the old include_reporting/
-# include_segmentation/include_smfish/include_sum_signal boolean toggles with
-# a literal, editable list. Structural cross-references between tasks
-# (warp_task, preprocess_task, optimize_task, previous_iteration,
-# global_align_task, segment_task, ...) are NEVER stored in an atom file --
-# build_merlin_analysis_parameters() injects them, resolved from whichever
-# atoms are actually present in the recipe (e.g. global_align_task points at
-# whichever of global_align_simple/global_align_least_squares was included).
+# Each MERlin task's tunable defaults live in one YAML "atom" under
+# data/configs/merlin/analysis/tasks/; a "recipe" under .../recipes/ lists
+# the atoms to assemble, in order. Cross-references between tasks
+# (warp_task, preprocess_task, optimize_task, global_align_task, ...) are
+# never stored in an atom: build_merlin_analysis_parameters injects them
+# from whichever atoms the recipe includes (see _CROSS_REFS).
 #
-# Default recipe values (data/configs/merlin/analysis/recipes/default_*.yaml)
-# match analysis_decode_v2_aaron_260816.json field-for-field for every task
-# it defines (warp, preprocess, optimize, decode, filter, export, plot) --
-# a deliberate departure from the older Python-dataclass defaults this
-# replaced: n_optimize_iterations 10 (not 15), decon_iterations 0 (not 5),
-# highpass_sigma 3 (not 20), crop_width 100 (not 106); several fields that
-# reference file doesn't set at all (median_filter, percentile_pixel_to_keep,
-# edge_width_to_remove, min_barcodes_for_refactoring, use_gpu,
-# remove_z_duplicated_barcodes) are likewise left unset here, so MERlin's own
-# internal defaults apply -- matching that reference file's real runtime
-# behavior, not a regression from the old explicit values. Two further
-# deliberate departures from that reference file: the global-alignment atom
-# is global_align_least_squares (LeastSquaresGlobalAlignment) instead of its
-# SimpleGlobalAlignment, and slurm_report (absent from that file) is
-# included; generate_mosaic (also absent from that file) was added later as
-# a default too, so every experiment's post-decode assembled mosaic (all
-# channels, backed by the real per-FOV LeastSquaresGlobalAlignment
-# transform rather than nominal stage positions) is available for QC and
-# cross-microscope-alignment checks. generate_mosaic/combine_mosaic_tiles now
-# wire MERlin's GenerateMosaicTile/CombineMosaicTiles pair (replacing the old
-# single-job GenerateMosaic, which recomputed every (fov, channel, z) tile
-# serially on one core and didn't finish within any practical wall-clock
-# limit at real experiment scale). Unlike the old task, z_index/data_channels
-# have no MERlin-side "export everything" default, so callers must supply
-# them via overrides={'generate_mosaic': {'z_index': ..., 'data_channels':
-# [...]}} (mirroring smfish_signal's channel_names below). generate_mosaic
-# also always wires create_ffc as its ffc_task (use_ffc: true is the atom's
-# own default). chromatic_correction_file (an absolute path in that file, tied
-# to a specific machine) is deliberately left unset in
-# optimize_iteration.yaml -- opt-in per experiment via `overrides`, never a
-# shared repo default. Segmentation/smfish/sum_signal atoms (absent from that
-# reference file entirely) keep those older defaults' values, since there's
-# nothing in the reference file to match them against.
+# Default atom values match the reference analysis_decode_v2_aaron_260816.json
+# for every task it defines; fields it leaves unset are left unset here too,
+# so MERlin's own defaults apply. Deliberate departures from it:
+#
+# - global_align_least_squares instead of SimpleGlobalAlignment.
+#
+# - slurm_report and generate_mosaic/combine_mosaic_tiles are added.
+#   The mosaic pair needs z_index/data_channels via overrides (no MERlin
+#   default) and always uses create_ffc as its ffc_task.
+#
+# - chromatic_correction_file (a machine-specific path) is unset; supply
+#   it per experiment via overrides.
+#
+# Segmentation/smfish/sum_signal atoms (absent from that file) keep the
+# values of the older Python-dataclass builder this replaced.
 
 # Atom names that name ONE of several mutually-exclusive alternatives for the
 # same structural role -- build_merlin_analysis_parameters uses whichever one
