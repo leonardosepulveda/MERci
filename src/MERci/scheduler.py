@@ -17,7 +17,7 @@ import logging
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 
 from .common.config   import ExperimentConfig
