@@ -76,6 +76,7 @@ from .acquisition.positions import find_exterior_fovs, median_nn_distance
 from .analysis.ffc import apply_ffc, compute_ffc_field_for_color, load_ffc_field, save_ffc_field
 from .analysis.fov import create_thumbnail
 from .analysis.round import _layout_tiles
+from .progress import thumbnail_filename
 from .scheduler import resolve_round_flip_y
 from .plots.round_mosaic_plots import show_round_mosaic
 
@@ -264,7 +265,7 @@ class LiveRoundMosaicBuilder:
         ]
 
     def thumbnail_path_for(self, image_path: Path, frame_idx: int) -> Path:
-        return self.thumbnails_dir / f"{image_path.stem}_frame{frame_idx:03d}.png"
+        return self.thumbnails_dir / thumbnail_filename(image_path.stem, frame_idx)
 
     def fov_is_processed(
         self, round_id: int, fov_id: int, color_frames: Dict[float, int], series: List[SeriesInfo],

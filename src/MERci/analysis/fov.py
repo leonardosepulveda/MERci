@@ -41,6 +41,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..progress import thumbnail_filename
+
 log = logging.getLogger(__name__)
 
 
@@ -151,7 +153,7 @@ def create_thumbnails_for_stack(
 
     paths = []
     for fi in frame_indices:
-        out = Path(output_dir) / f"{stem}_frame{fi:03d}.png"
+        out = Path(output_dir) / thumbnail_filename(stem, fi)
         if not out.exists():
             create_thumbnail(stack[fi], out, target_size, percentile_clip)
         paths.append(out)

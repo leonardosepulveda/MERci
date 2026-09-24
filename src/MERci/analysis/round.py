@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple  # noqa: F401 (Optional/List
 
 import numpy as np
 
+from ..progress import thumbnail_filename
 from .ffc import apply_ffc
 
 log = logging.getLogger(__name__)
@@ -321,9 +322,7 @@ def load_thumbnails_for_round(
     positions:  Dict[int, Tuple[float, float]] = {}
 
     for fov_id, fpath in _round_fov_files(round_id, metadata, series_idx, fov_subset):
-        thumb_path = (
-            Path(thumbnails_dir) / f"{fpath.stem}_frame{frame_idx:03d}.png"
-        )
+        thumb_path = Path(thumbnails_dir) / thumbnail_filename(fpath.stem, frame_idx)
         if not thumb_path.exists():
             log.warning("Thumbnail missing: %s", thumb_path)
             continue

@@ -219,9 +219,8 @@ def _series_to_image_type(series: str) -> str:
     ``"hal-mf3_01_{fov:03d}"``   → ``"hal-mf3"``
     ``"hal-mf3_cells_{fov:03d}"`` → ``"hal-mf3_cells"``
     """
-    s = re.sub(r"_\{[^}]+\}$", "", series)   # strip _{fov:03d}
-    s = re.sub(r"_\d{2}$", "", s)             # strip _01, _02, … if present
-    return s
+    from .dave import series_to_movie_name
+    return re.sub(r"_\d{2}$", "", series_to_movie_name(series))   # strip _01, _02, … if present
 
 
 def _series_to_regexp(series: str) -> str:

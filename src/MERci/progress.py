@@ -40,6 +40,11 @@ from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
+
+def thumbnail_filename(stem: str, frame_idx: int) -> str:
+    """``{stem}_frame{frame_idx:03d}.png`` -- the one thumbnail naming convention."""
+    return f"{stem}_frame{frame_idx:03d}.png"
+
 _FOV_DONE_SUFFIX               = ".fov_done"
 _ROUND_DONE_SUFFIX             = ".round_done"
 _ROUND_TRANSFERRED_SUFFIX      = ".round_transferred"
@@ -80,7 +85,7 @@ class ProgressTracker:
     # ── Deterministic path helpers ────────────────────────────────────────────
 
     def thumbnail_path(self, dax_path: Path, frame_idx: int) -> Path:
-        return self.thumbnails_dir / f"{Path(dax_path).stem}_frame{frame_idx:03d}.png"
+        return self.thumbnails_dir / thumbnail_filename(Path(dax_path).stem, frame_idx)
 
     def stats_path(self, dax_path: Path) -> Path:
         return self.stats_dir / f"{Path(dax_path).stem}_stats.csv"
