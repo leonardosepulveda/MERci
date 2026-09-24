@@ -214,7 +214,7 @@ def generate_scanning_path(
 def _read_xy_file(path: Path) -> List[Tuple[float, float]]:
     """Read a comma-separated ``x,y`` file (one vertex per line) into a list."""
     coords = []
-    with path.open() as fh:
+    with Path(path).open() as fh:
         reader = csv.reader(fh)
         for row in reader:
             if len(row) >= 2:
@@ -1306,14 +1306,7 @@ def load_boundary_polygon(path: Path) -> Polygon:
     shapely.geometry.Polygon
     """
     path = Path(path)
-    coords: List[Tuple[float, float]] = []
-    with path.open() as fh:
-        for row in csv.reader(fh):
-            if len(row) >= 2:
-                try:
-                    coords.append((float(row[0]), float(row[1])))
-                except ValueError:
-                    pass  # skip header/comment lines
+    coords = _read_xy_file(path)
     if len(coords) < 3:
         raise ValueError(f"{path} has fewer than 3 valid (x, y) vertices.")
     return Polygon(coords)

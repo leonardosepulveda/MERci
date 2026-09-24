@@ -54,6 +54,7 @@ from xml.dom import minidom
 
 import pandas as pd
 
+from ..common.io import load_positions
 from .configs import get_camera_frame_size, read_hal_exposure_time, read_hal_frame_count
 from .kilroy import (
     KilroyProtocolResolver,
@@ -180,15 +181,7 @@ def count_positions(positions_path: Path) -> int:
     -------
     int : number of valid ``x,y`` FOV lines
     """
-    n = 0
-    with Path(positions_path).open() as fh:
-        for raw in fh:
-            line = raw.split("#")[0].strip()
-            if not line:
-                continue
-            if len(line.split(",")) >= 2:
-                n += 1
-    return n
+    return len(load_positions(positions_path))
 
 
 def fov_pad_width(total_fovs: int) -> int:

@@ -34,7 +34,6 @@ axis flips.
 """
 from __future__ import annotations
 
-import csv
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,27 +46,12 @@ from scipy.optimize import minimize
 from shapely.affinity import rotate as _shp_rotate, scale as _shp_scale, translate as _shp_translate
 from shapely.geometry import Polygon
 
+from . import positions
+
 log = logging.getLogger(__name__)
 
 
 # ── Boundary I/O ────────────────────────────────────────────────────────────
-
-def _read_xy(path: Path) -> List[Tuple[float, float]]:
-    """Read a comma-separated ``x,y`` vertex file (one vertex per line).
-
-    Lines that do not parse as two floats (headers, blanks, ``#`` comments)
-    are skipped — matching :func:`MERci.acquisition.positions.load_hole_polygons`.
-    """
-    coords: List[Tuple[float, float]] = []
-    with Path(path).open() as fh:
-        for row in csv.reader(fh):
-            if len(row) >= 2:
-                try:
-                    coords.append((float(row[0]), float(row[1])))
-                except ValueError:
-                    pass
-    return coords
-
 
 def load_boundary_polygon(path: Path) -> Polygon:
     """
@@ -88,13 +72,7 @@ def load_boundary_polygon(path: Path) -> Polygon:
     ValueError if the file has fewer than three vertices or cannot be repaired
     into a non-empty polygon.
     """
-    coords = _read_xy(path)
-    if len(coords) < 3:
-        raise ValueError(
-            f"{Path(path).name} has only {len(coords)} valid vertices; "
-            "a boundary polygon needs at least 3."
-        )
-    poly = Polygon(coords)
+    poly = positions.load_boundary_polygon(path)
     if not poly.is_valid:
         poly = poly.buffer(0)
     if poly.is_empty or poly.area == 0.0:
