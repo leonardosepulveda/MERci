@@ -305,28 +305,20 @@ def update_focustest_stage_z_cache(
 
 
 def round_label(meta, round_id: int) -> str:
-    """``"cells"`` if *round_id*'s series are the cells round, else
-    ``"hyb{N:02d}"`` where ``N`` is this round's 1-based rank among all
-    non-cells rounds -- NOT the raw ``round_id``. ``imaging_round`` numbering
-    reserves round 1 for cells (rounds 2..N_HYBS+1 are the hyb rounds), so
-    ``round_id=2`` is the FIRST real hyb round and must map to ``"hyb01"``,
-    matching the real ``H01``/``H02``/... data folders -- using ``round_id``
-    directly mislabels every hyb round one too high (e.g. ``"hyb02"`` for the
-    round that actually wrote to ``H01``).
+    """``"focustest"`` for a focus-lock-test round, ``"cells"`` for the cells
+    round, else ``"hyb{N:02d}"``: N is the round's 1-based rank among the hyb
+    rounds (not its round_id), so the first hyb round is ``"hyb01"``,
+    matching its ``H01`` data folder."""
+    def is_focustest(rid: int) -> bool:
+        return rid == FOCUSTEST_ROUND_ID or any(
+            (s.imaging_type or "").strip().lower() == "focustest" for s in meta.series_for_round(rid))
 
-    ``round_id == FOCUSTEST_ROUND_ID`` is not a real round at all (see
-    :func:`update_focustest_stage_z_cache`) -- returned as its own label
-    before touching *meta*, which has no entry for it."""
-    if round_id == FOCUSTEST_ROUND_ID:
+    if is_focustest(round_id):
         return "focustest"
-
-    def _is_cells(rid: int) -> bool:
-        return any((s.imaging_type or "").strip().lower() == "cells"
-                   for s in meta.series_for_round(rid))
-
-    if _is_cells(round_id):
+    if meta.is_cells_round(round_id):
         return "cells"
-    hyb_round_ids = [rid for rid in meta.valid_round_ids() if not _is_cells(rid)]
+    hyb_round_ids = [rid for rid in meta.valid_round_ids()
+                     if not meta.is_cells_round(rid) and not is_focustest(rid)]
     return f"hyb{hyb_round_ids.index(round_id) + 1:02d}"
 
 
