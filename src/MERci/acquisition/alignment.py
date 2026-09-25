@@ -34,7 +34,6 @@ axis flips.
 """
 from __future__ import annotations
 
-import csv
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,27 +46,12 @@ from scipy.optimize import minimize
 from shapely.affinity import rotate as _shp_rotate, scale as _shp_scale, translate as _shp_translate
 from shapely.geometry import Polygon
 
+from . import positions
+
 log = logging.getLogger(__name__)
 
 
 # ── Boundary I/O ────────────────────────────────────────────────────────────
-
-def _read_xy(path: Path) -> List[Tuple[float, float]]:
-    """Read a comma-separated ``x,y`` vertex file (one vertex per line).
-
-    Lines that do not parse as two floats (headers, blanks, ``#`` comments)
-    are skipped — matching :func:`MERci.acquisition.positions.load_hole_polygons`.
-    """
-    coords: List[Tuple[float, float]] = []
-    with Path(path).open() as fh:
-        for row in csv.reader(fh):
-            if len(row) >= 2:
-                try:
-                    coords.append((float(row[0]), float(row[1])))
-                except ValueError:
-                    pass
-    return coords
-
 
 def load_boundary_polygon(path: Path) -> Polygon:
     """
@@ -88,13 +72,7 @@ def load_boundary_polygon(path: Path) -> Polygon:
     ValueError if the file has fewer than three vertices or cannot be repaired
     into a non-empty polygon.
     """
-    coords = _read_xy(path)
-    if len(coords) < 3:
-        raise ValueError(
-            f"{Path(path).name} has only {len(coords)} valid vertices; "
-            "a boundary polygon needs at least 3."
-        )
-    poly = Polygon(coords)
+    poly = positions.load_boundary_polygon(path)
     if not poly.is_valid:
         poly = poly.buffer(0)
     if poly.is_empty or poly.area == 0.0:
@@ -180,14 +158,6 @@ class AlignmentResult:
 
 # ── Polygon helpers ─────────────────────────────────────────────────────────
 
-def _apply_to_polygon(poly: Polygon, sx: float, sy: float, tx: float, ty: float) -> Polygon:
-    """Scale per-axis about the global origin (0, 0) — allowing negative
-    factors for flips — then translate, matching the point transform
-    ``q = (sx * p_x + tx, sy * p_y + ty)``."""
-    scaled = _shp_scale(poly, xfact=sx, yfact=sy, origin=(0.0, 0.0))
-    return _shp_translate(scaled, xoff=tx, yoff=ty)
-
-
 def _rotation_matrix(theta_deg: float) -> np.ndarray:
     """Counter-clockwise 2-D rotation matrix, degrees."""
     theta = np.radians(theta_deg)
@@ -222,75 +192,6 @@ def polygon_iou(a: Polygon, b: Polygon) -> float:
 
 
 # ── Fitting ─────────────────────────────────────────────────────────────────
-
-def _initial_guess(
-    src: Polygon,
-    tgt: Polygon,
-    fx:  float = 1.0,
-    fy:  float = 1.0,
-) -> Tuple[float, float, float]:
-    """
-    Closed-form moment match for a given pair of axis-flip signs ``(fx, fy)``.
-
-    A flip (reflection) leaves the area unchanged, so the scale magnitude is
-    still ``scale = sqrt(area_tgt / area_src)``.  The translation aligns the
-    (flipped) source centroid onto the target centroid:
-    ``t = centroid_tgt - scale * (fx, fy) * centroid_src``.
-    """
-    scale = float(np.sqrt(tgt.area / src.area))
-    cs = np.array(src.centroid.coords[0], dtype=float)
-    ct = np.array(tgt.centroid.coords[0], dtype=float)
-    tx, ty = ct - scale * np.array([fx, fy]) * cs
-    return scale, float(tx), float(ty)
-
-
-def _fit_one_flip(
-    src: Polygon,
-    tgt: Polygon,
-    fx:  float,
-    fy:  float,
-    refine:  bool,
-    maxiter: int,
-) -> AlignmentResult:
-    """Fit scale + translation for a fixed pair of axis-flip signs."""
-    s0, tx0, ty0 = _initial_guess(src, tgt, fx, fy)
-    iou_init = polygon_iou(_apply_to_polygon(src, s0 * fx, s0 * fy, tx0, ty0), tgt)
-    flip_x, flip_y = (fx < 0), (fy < 0)
-
-    if not refine:
-        return AlignmentResult(
-            scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
-            n_iter=0, refined=False, flip_x=flip_x, flip_y=flip_y,
-        )
-
-    def neg_iou(params: np.ndarray) -> float:
-        s, tx, ty = params
-        s = abs(s)                      # keep scale magnitude positive
-        if s == 0.0:
-            return 1.0
-        moved = _apply_to_polygon(src, s * fx, s * fy, tx, ty)
-        return 1.0 - polygon_iou(moved, tgt)
-
-    res = minimize(
-        neg_iou,
-        x0=np.array([s0, tx0, ty0], dtype=float),
-        method="Nelder-Mead",
-        options={"maxiter": maxiter, "xatol": 1e-6, "fatol": 1e-9},
-    )
-    s_r, tx_r, ty_r = float(abs(res.x[0])), float(res.x[1]), float(res.x[2])
-    iou_r = 1.0 - float(res.fun)
-
-    if iou_r >= iou_init:
-        return AlignmentResult(
-            scale=s_r, tx=tx_r, ty=ty_r, iou=iou_r, iou_init=iou_init,
-            n_iter=int(res.nit), refined=True, flip_x=flip_x, flip_y=flip_y,
-        )
-    # Refinement made things worse (rare) — keep the closed-form guess.
-    return AlignmentResult(
-        scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
-        n_iter=int(res.nit), refined=False, flip_x=flip_x, flip_y=flip_y,
-    )
-
 
 def fit_isotropic_alignment(
     src:        Polygon,
@@ -354,13 +255,12 @@ def fit_isotropic_alignment(
 # free rotation on top of the same scale + translation + optional-flip model.
 
 
-def _initial_guess_rotated(
-    src: Polygon, tgt: Polygon, fx: float, fy: float, theta_deg: float,
+def _initial_guess(
+    src: Polygon, tgt: Polygon, fx: float, fy: float, theta_deg: float = 0.0,
 ) -> Tuple[float, float, float]:
     """Closed-form moment match for a fixed flip + rotation angle: scale from
-    the area ratio (unchanged by rotation/flip, as in :func:`_initial_guess`),
-    translation aligns the flipped+rotated+scaled source centroid onto the
-    target centroid."""
+    the area ratio (unchanged by rotation/flip), translation aligns the
+    flipped+rotated+scaled source centroid onto the target centroid."""
     scale = float(np.sqrt(tgt.area / src.area))
     cs = np.array(src.centroid.coords[0], dtype=float)
     ct = np.array(tgt.centroid.coords[0], dtype=float)
@@ -371,55 +271,51 @@ def _initial_guess_rotated(
     return scale, float(tx), float(ty)
 
 
-def _fit_one_flip_rotation(
-    src: Polygon, tgt: Polygon, fx: float, fy: float, theta0: float,
-    refine: bool, maxiter: int,
+def _fit_one_flip(
+    src: Polygon, tgt: Polygon, fx: float, fy: float,
+    refine: bool, maxiter: int, theta0: float = 0.0, fit_rotation: bool = False,
 ) -> AlignmentResult:
-    """Fit scale + translation + rotation for a fixed flip, starting the
-    rotation from *theta0*. Mirrors :func:`_fit_one_flip`'s closed-form-then-
-    Nelder-Mead structure, with rotation added as a 4th free parameter."""
-    s0, tx0, ty0 = _initial_guess_rotated(src, tgt, fx, fy, theta0)
+    """Closed-form guess for a fixed flip (and rotation *theta0*), then a
+    Nelder-Mead refinement of scale + translation (+ rotation when
+    *fit_rotation*), kept only if it does not lower IoU."""
+    s0, tx0, ty0 = _initial_guess(src, tgt, fx, fy, theta0)
     iou_init = polygon_iou(
         _apply_similarity_to_polygon(src, fx, fy, theta0, s0, tx0, ty0), tgt
     )
-    flip_x, flip_y = (fx < 0), (fy < 0)
-
+    guess = AlignmentResult(
+        scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
+        n_iter=0, refined=False, flip_x=(fx < 0), flip_y=(fy < 0),
+        rotation_deg=theta0,
+    )
     if not refine:
-        return AlignmentResult(
-            scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
-            n_iter=0, refined=False, flip_x=flip_x, flip_y=flip_y,
-            rotation_deg=theta0,
-        )
+        return guess
 
     def neg_iou(params: np.ndarray) -> float:
-        s, tx, ty, theta = params
-        s = abs(s)
+        s, tx, ty = params[:3]
+        theta = params[3] if fit_rotation else theta0
+        s = abs(s)                      # keep scale magnitude positive
         if s == 0.0:
             return 1.0
         moved = _apply_similarity_to_polygon(src, fx, fy, theta, s, tx, ty)
         return 1.0 - polygon_iou(moved, tgt)
 
+    x0 = [s0, tx0, ty0, theta0] if fit_rotation else [s0, tx0, ty0]
     res = minimize(
         neg_iou,
-        x0=np.array([s0, tx0, ty0, theta0], dtype=float),
+        x0=np.array(x0, dtype=float),
         method="Nelder-Mead",
         options={"maxiter": maxiter, "xatol": 1e-6, "fatol": 1e-9},
     )
-    s_r, tx_r, ty_r = float(abs(res.x[0])), float(res.x[1]), float(res.x[2])
-    theta_r = float(res.x[3]) % 360.0
     iou_r = 1.0 - float(res.fun)
-
-    if iou_r >= iou_init:
-        return AlignmentResult(
-            scale=s_r, tx=tx_r, ty=ty_r, iou=iou_r, iou_init=iou_init,
-            n_iter=int(res.nit), refined=True, flip_x=flip_x, flip_y=flip_y,
-            rotation_deg=theta_r,
-        )
-    # Refinement made things worse (rare) — keep the closed-form guess.
+    if iou_r < iou_init:
+        # Refinement made things worse (rare) — keep the closed-form guess.
+        guess.n_iter = int(res.nit)
+        return guess
     return AlignmentResult(
-        scale=s0, tx=tx0, ty=ty0, iou=iou_init, iou_init=iou_init,
-        n_iter=int(res.nit), refined=False, flip_x=flip_x, flip_y=flip_y,
-        rotation_deg=theta0,
+        scale=float(abs(res.x[0])), tx=float(res.x[1]), ty=float(res.x[2]),
+        iou=iou_r, iou_init=iou_init, n_iter=int(res.nit), refined=True,
+        flip_x=guess.flip_x, flip_y=guess.flip_y,
+        rotation_deg=float(res.x[3]) % 360.0 if fit_rotation else theta0,
     )
 
 
@@ -443,7 +339,7 @@ def fit_similarity_alignment(
     without a good starting angle. This instead does a **coarse grid search**
     over *n_angles* evenly-spaced angles (× the flip combinations, if
     *allow_flip*) — for each, the closed-form scale/translation
-    (:func:`_initial_guess_rotated`) gives one cheap IoU evaluation — then runs
+    (:func:`_initial_guess`) gives one cheap IoU evaluation — then runs
     a single Nelder–Mead refinement (scale, translation, *and* rotation
     jointly) from whichever grid point scored highest.
 
@@ -470,14 +366,15 @@ def fit_similarity_alignment(
     best_fx, best_fy, best_theta, best_iou = 1.0, 1.0, 0.0, -1.0
     for fx, fy in flips:
         for theta in angles:
-            s0, tx0, ty0 = _initial_guess_rotated(src, tgt, fx, fy, theta)
+            s0, tx0, ty0 = _initial_guess(src, tgt, fx, fy, theta)
             iou = polygon_iou(
                 _apply_similarity_to_polygon(src, fx, fy, theta, s0, tx0, ty0), tgt
             )
             if iou > best_iou:
                 best_fx, best_fy, best_theta, best_iou = fx, fy, theta, iou
 
-    result = _fit_one_flip_rotation(src, tgt, best_fx, best_fy, best_theta, refine, maxiter)
+    result = _fit_one_flip(src, tgt, best_fx, best_fy, refine, maxiter,
+                           theta0=best_theta, fit_rotation=True)
 
     log.info(
         "Best similarity alignment: flip_x=%s flip_y=%s rotation=%.2f° IoU=%.4f.",
@@ -591,14 +488,10 @@ def extract_bead_frames(
     frame table).
     """
     import tifffile
-    from MERci.common.io import read_image
+    from MERci.common.io import read_image_frames
 
-    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
-    try:
-        idx = [int(i) for i in frame_indices]
-        sel = np.stack([np.asarray(stack[i]) for i in idx]).astype(stack.dtype)
-    finally:
-        del stack
+    idx = [int(i) for i in frame_indices]
+    sel = read_image_frames(image_path, idx, frame_width=frame_width, frame_height=frame_height)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(str(out_path), sel)
@@ -746,23 +639,16 @@ def _drift_one_pair(args: tuple) -> dict:
     """
     (fov_id, ref_path, mov_path, ref_frame, mov_frame, mov_orient,
      upsample_factor, pixel_size_um, sign_x, sign_y, frame_width, frame_height) = args
-    from MERci.common.io import read_image
+    from MERci.common.io import read_image_frames
 
-    ref_stack = read_image(ref_path, frame_width=frame_width, frame_height=frame_height)
-    mov_stack = read_image(mov_path, frame_width=frame_width, frame_height=frame_height)
-    try:
-        # remove_hot_pixels first: a fixed hot/dead detector pixel is identical
-        # in both frames and dominates phase_cross_correlation when the real
-        # bead signal is dim, pinning the estimate to [0, 0] (see its
-        # docstring) -- so both images get it before registration, not just
-        # the moving one, in case the reference frame carries its own.
-        shift, error = phase_drift(
-            remove_hot_pixels(ref_stack[ref_frame]),
-            remove_hot_pixels(apply_orientation(mov_stack[mov_frame], mov_orient)),
-            upsample_factor,
-        )
-    finally:
-        del ref_stack, mov_stack
+    ref = read_image_frames(ref_path, [ref_frame], frame_width=frame_width, frame_height=frame_height)[0]
+    mov = read_image_frames(mov_path, [mov_frame], frame_width=frame_width, frame_height=frame_height)[0]
+    # Hot pixels in both images: a fixed hot pixel pins phase correlation to [0, 0].
+    shift, error = phase_drift(
+        remove_hot_pixels(ref),
+        remove_hot_pixels(apply_orientation(mov, mov_orient)),
+        upsample_factor,
+    )
     dy, dx = float(shift[0]), float(shift[1])
     return {
         "fov":        int(fov_id),

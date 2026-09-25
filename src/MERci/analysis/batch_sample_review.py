@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 
 from ..progress_display import ProgressReporter
+from ..scheduler import build_fov_task_kwargs
 from .fov import analyze_file, load_stats
 
 
@@ -33,27 +34,10 @@ def backfill_pending(sample: dict) -> int:
     if not pending:
         return 0
 
-    kwargs_common = dict(
-        thumbnails_dir=config.analysis_dir / "thumbnails",
-        frame_width=config.frame_width,
-        frame_height=config.frame_height,
-        thumbnail_frames=config.thumbnail_frames,
-        thumbnail_size=config.thumbnail_size,
-        thumbnail_percentile_clip=config.thumbnail_percentile_clip,
-        histogram_bins=config.histogram_bins,
-        histogram_range=config.histogram_range,
-    )
-
     reporter = ProgressReporter(total=len(pending), label=f"{sample['info'].sample_name}: backfilling")
     with ProcessPoolExecutor(max_workers=config.resolved_n_workers) as pool:
         futures = {
-            pool.submit(
-                analyze_file, fpath,
-                stats_path=tracker.stats_path(fpath),
-                histogram_path=tracker.histogram_path(fpath),
-                sentinel_path=tracker.fov_sentinel(fpath),
-                **kwargs_common,
-            ): fpath
+            pool.submit(analyze_file, fpath, **build_fov_task_kwargs(fpath, config, tracker)): fpath
             for fpath in pending
         }
         for future in as_completed(futures):
@@ -66,21 +50,12 @@ def backfill_pending(sample: dict) -> int:
 def load_all_stats(sample: dict) -> pd.DataFrame:
     """Every completed stats CSV for *sample*, concatenated with a
     ``sample_name`` column added (for combining across samples)."""
-    meta, tracker = sample["meta"], sample["tracker"]
     records = []
-    for round_id in meta.valid_round_ids():
-        round_obj = meta.rounds.get(round_id)
-        if round_obj is None:
-            continue
-        for fov_id, file_list in round_obj.fov_files.items():
-            for fpath in file_list:
-                sp = tracker.stats_path(fpath)
-                if not sp.exists():
-                    continue
-                df = load_stats(sp)
-                df["round_id"] = round_id
-                df["fov_id"] = fov_id
-                records.append(df)
+    for round_id, fov_id, sp in sample["tracker"].completed_stats_paths(sample["meta"]):
+        df = load_stats(sp)
+        df["round_id"] = round_id
+        df["fov_id"] = fov_id
+        records.append(df)
     if not records:
         return pd.DataFrame()
     out = pd.concat(records, ignore_index=True)

@@ -22,7 +22,13 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from .io import is_path_stable, load_positions, load_round_info
+
 log = logging.getLogger(__name__)
+
+# Round id for the focus-lock test, a calibration run that isn't in
+# round_info.csv. Real imaging_round values start at 1, so 0 is free.
+FOCUSTEST_ROUND_ID = 0
 
 
 def _path_exists_safe(p: Path) -> bool:
@@ -213,8 +219,8 @@ class ExperimentMetadata:
         data_dir       : root directory where image files will be found
         image_suffix   : file extension (default ``.dax``)
         """
-        df        = _read_round_info(Path(round_info_csv))
-        positions = _read_positions(Path(positions_txt))
+        df        = load_round_info(round_info_csv)
+        positions = load_positions(positions_txt)
         n_fovs    = len(positions)
         return _build_metadata(df, positions, Path(data_dir), n_fovs, image_suffix)
 
@@ -296,6 +302,19 @@ class ExperimentMetadata:
         """All round ids, sorted."""
         return sorted(self.rounds)
 
+    def round_for_imaging_type(self, imaging_type: str) -> int:
+        """First round id with a series of this ``imaging_type`` (case-insensitive).
+        Raises ValueError if there is none."""
+        target = imaging_type.strip().lower()
+        for rid in self.valid_round_ids():
+            if any((s.imaging_type or "").strip().lower() == target for s in self.series_for_round(rid)):
+                return rid
+        raise ValueError(f"No round found with imaging_type={imaging_type!r}")
+
+    def is_cells_round(self, round_id: int) -> bool:
+        """True if any of *round_id*'s series is the cells series."""
+        return any(_is_cells_series(s) for s in self.series_for_round(round_id))
+
     def round_fully_written(self, round_id: int) -> bool:
         """
         True iff every expected raw image file for *round_id* already exists
@@ -306,6 +325,18 @@ class ExperimentMetadata:
         """
         files = self.files_for_round(round_id)
         return bool(files) and all(_path_exists_safe(f) for f in files)
+
+
+def first_existing_path(
+    series: List[SeriesInfo], fov_id: int, image_suffix: str, stable: bool = False,
+) -> Optional[Path]:
+    """First of *series*' paths for *fov_id* that exists (and, with
+    ``stable=True``, is not still being written); None if none does."""
+    for s in series:
+        p = s.resolve_path(fov_id, image_suffix)
+        if p.exists() and (not stable or is_path_stable(p)):
+            return p
+    return None
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────
@@ -320,56 +351,30 @@ def _is_cells_series(s: SeriesInfo) -> bool:
 
 def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
     """
-    Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a real path
-    on THIS machine.
+    Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a path on
+    this machine.
 
-    ``dir`` is written by whichever machine generated ``round_info.csv``
-    (normally the microscope's own Windows PC, via ``before_imaging``'s
-    generators) and is an absolute path there -- but a Windows-style
-    absolute path (``V:\\Leonardo\\...\\data\\focus_test`` or
-    ``D:/Leonardo/.../data/hybs/H01``, either slash direction) is NEVER
-    absolute once read back with ``pathlib.Path`` on POSIX (Linux/mac):
-    ``Path.is_absolute()`` requires a leading ``/``, which a drive letter
-    never has. This silently fell into the "relative -- resolve under this
-    machine's own SAMPLE_DIR" branch, but a backslash-separated string
-    parses as ONE opaque path component under POSIX `Path` (backslash isn't
-    a separator there), so joining it onto SAMPLE_DIR just produces one
-    bogus, nonexistent nested directory -- every round can resolve 0 imaged
-    FOVs even though every real file is present. A forward-slash Windows
-    path decomposes into real path parts under POSIX `Path` but is still
-    wrong (the drive + every
-    directory above ``data/`` gets appended onto SAMPLE_DIR verbatim,
-    still never a real path) -- so this isn't just a backslash bug.
+    - Absolute on this OS: returned unchanged.
 
-    Fixed by parsing *dir_str* with :class:`PureWindowsPath` (recognizes
-    both slash directions and drive letters regardless of the OS actually
-    running this code), and -- whenever that reveals a genuine Windows
-    drive letter, meaning the original ``is_absolute()``/join logic could
-    never have been right on this machine -- keeping only the path's tail
-    from its last literal ``"data"`` segment onward and re-rooting that
-    under THIS machine's own *data_dir* (``SAMPLE_DIR/data``). Every real
-    ``dir`` value in this repo's own convention points somewhere under
-    ``.../data/...`` (``data/cells``, ``data/hybs/H01``, ``data/
-    focus_test``, ``data/tissue_1/hybs/H01``, ...), so that tail is exactly
-    the sub-path this machine's own ``data_dir`` needs.
+    - Absolute on the other OS (a drive letter on Linux, or a ``/...`` path
+      on Windows; parsed with ``PureWindowsPath`` so either works on any
+      OS): the tail after its first ``data`` segment, re-rooted under
+      *data_dir*. Joined as-is it would give a wrong path and 0 FOVs.
 
-    A genuinely POSIX-absolute *dir_str* (this machine's own convention, or
-    an experiment that has always lived on Linux) is returned unchanged, as
-    before. A real relative path (no drive letter) still resolves against
-    ``data_dir.parent`` (SAMPLE_DIR), also as before.
+    - Relative: resolved against ``data_dir.parent`` (SAMPLE_DIR).
     """
     p = Path(dir_str)
     if p.is_absolute():
         return p
 
     wp = PureWindowsPath(dir_str)
-    if wp.drive:
+    if wp.drive or wp.root:
         parts = wp.parts
         if "data" in parts:
             tail = parts[parts.index("data") + 1:]
             return data_dir.joinpath(*tail)
         log.warning(
-            "round_info.csv dir %r looks like a Windows absolute path but "
+            "round_info.csv dir %r is an absolute path from another OS but "
             "has no 'data' segment to re-root under this machine's own "
             "data_dir (%s) -- falling back to the (likely still wrong) "
             "raw join.", dir_str, data_dir,
@@ -416,60 +421,6 @@ def _pattern_to_regex(pattern: str) -> "re.Pattern":
             parts.append(re.escape(pattern[i:j]))
             i = j
     return re.compile("^" + "".join(parts) + "$")
-
-
-def _read_round_info(csv_path: Path) -> pd.DataFrame:
-    """
-    Load ``round_info.csv``.
-
-    Required columns: ``imaging_round`` (or legacy ``round_id``), ``series``
-    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, ``dir``, others
-    """
-    df = pd.read_csv(csv_path)
-    # Accept 'imaging_round' (new) or 'round_id' (legacy)
-    if "imaging_round" in df.columns and "round_id" not in df.columns:
-        df = df.rename(columns={"imaging_round": "round_id"})
-    for col in ("round_id", "series"):
-        if col not in df.columns:
-            raise ValueError(
-                f"round_info.csv must contain a '{col}' column "
-                f"(found columns: {list(df.columns)})"
-            )
-    df["series"]   = df["series"].astype(str).str.strip()
-    df["round_id"] = df["round_id"].astype(int)
-    return df
-
-
-def _read_positions(pos_path: Path) -> Dict[int, Tuple[float, float]]:
-    """
-    Parse per-FOV stage positions from a comma-separated text file.
-
-    One line per FOV: ``x,y``.  Lines beginning with ``#`` or blank
-    lines are ignored.
-
-    Returns
-    -------
-    {fov_id: (x, y)} — zero-indexed.
-    """
-    positions: Dict[int, Tuple[float, float]] = {}
-    fov_id = 0
-
-    with pos_path.open() as fh:
-        for raw in fh:
-            line = raw.split("#")[0].strip()
-            if not line:
-                continue
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) < 2:
-                log.warning("Short line at FOV %d: %r – skipping.", fov_id, raw)
-                continue
-            try:
-                positions[fov_id] = (float(parts[0]), float(parts[1]))
-                fov_id += 1
-            except ValueError as exc:
-                log.warning("Bad position at FOV %d: %s", fov_id, exc)
-
-    return positions
 
 
 def _parse_series_row(row: pd.Series) -> SeriesInfo:
@@ -541,7 +492,7 @@ def _build_metadata(
 
         for fov_id in fov_ids:
             try:
-                fname = s.build_filename(fov_id, image_suffix)
+                s.build_filename(fov_id, image_suffix)   # only checks it can be built
             except (KeyError, TypeError) as exc:
                 log.warning(
                     "Cannot build filename for series '%s' fov %d: %s",

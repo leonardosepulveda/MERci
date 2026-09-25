@@ -36,9 +36,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
+
+
+def thumbnail_filename(stem: str, frame_idx: int) -> str:
+    """``{stem}_frame{frame_idx:03d}.png`` -- the one thumbnail naming convention."""
+    return f"{stem}_frame{frame_idx:03d}.png"
 
 _FOV_DONE_SUFFIX               = ".fov_done"
 _ROUND_DONE_SUFFIX             = ".round_done"
@@ -80,7 +85,7 @@ class ProgressTracker:
     # ── Deterministic path helpers ────────────────────────────────────────────
 
     def thumbnail_path(self, dax_path: Path, frame_idx: int) -> Path:
-        return self.thumbnails_dir / f"{Path(dax_path).stem}_frame{frame_idx:03d}.png"
+        return self.thumbnails_dir / thumbnail_filename(Path(dax_path).stem, frame_idx)
 
     def stats_path(self, dax_path: Path) -> Path:
         return self.stats_dir / f"{Path(dax_path).stem}_stats.csv"
@@ -185,9 +190,9 @@ class ProgressTracker:
 
     def pending_fov_files(self, candidate_files: List[Path]) -> List[Path]:
         """
-        Filter *candidate_files* to those that are stable on disk but lack a
-        FOV-level sentinel.  Files still being written are not excluded here;
-        that check belongs in ``discover_image_files()``.
+        Filter *candidate_files* to those that exist but lack a FOV-level
+        sentinel. Files still being written are not excluded here (see
+        ``common.io.filter_stable_paths``).
         """
         return [
             f for f in candidate_files
@@ -210,49 +215,50 @@ class ProgressTracker:
             and self.all_fovs_done_for_round(rid, metadata, fov_subset)
         ]
 
+    def completed_stats_paths(self, metadata):
+        """Yield ``(round_id, fov_id, stats_path)`` for every existing stats CSV,
+        over *metadata*'s valid rounds."""
+        for round_id in metadata.valid_round_ids():
+            round_obj = metadata.rounds.get(round_id)
+            if round_obj is None:
+                continue
+            for fov_id, file_list in round_obj.fov_files.items():
+                for fpath in file_list:
+                    sp = self.stats_path(fpath)
+                    if sp.exists():
+                        yield round_id, fov_id, sp
+
     # ── Status updates ────────────────────────────────────────────────────────
 
     def mark_fov_done(self, dax_path: Path) -> None:
         """Create the FOV-level sentinel (idempotent)."""
-        p = self.fov_sentinel(dax_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.fov_sentinel(dax_path))
         log.debug("FOV marked done: %s", Path(dax_path).name)
 
     def mark_round_done(self, round_id: int) -> None:
         """Create the round-level sentinel (idempotent)."""
-        p = self.round_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.round_sentinel(round_id))
         log.info("Round %d marked done.", round_id)
 
     def mark_round_transferred(self, round_id: int) -> None:
         """Create the transfer sentinel (idempotent)."""
-        p = self.transfer_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.transfer_sentinel(round_id))
         log.info("Round %d marked transferred.", round_id)
 
     def mark_fov_analysis_submitted(self, round_id: int, job_id: int) -> None:
         """Record *job_id* as the SLURM array job submitted for this round's
         pending FOVs (overwrites any previous job id — idempotent resubmission)."""
-        p = self.fov_submitted_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(job_id))
+        _write_sentinel(self.fov_submitted_sentinel(round_id), str(job_id))
         log.info("Round %d: FOV analysis submitted as job %s.", round_id, job_id)
 
     def mark_round_mosaic_submitted(self, round_id: int, job_id: int) -> None:
         """Record *job_id* as the SLURM job submitted to build this round's mosaic(s)."""
-        p = self.round_mosaic_submitted_sentinel(round_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(job_id))
+        _write_sentinel(self.round_mosaic_submitted_sentinel(round_id), str(job_id))
         log.info("Round %d: mosaic build submitted as job %s.", round_id, job_id)
 
     def mark_ffc_done(self, color: float) -> None:
         """Create the FFC-done sentinel for this color (idempotent)."""
-        p = self.ffc_done_sentinel(color)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch()
+        _write_sentinel(self.ffc_done_sentinel(color))
         log.info("FFC field for %snm marked done.", color)
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -275,3 +281,12 @@ class ProgressTracker:
             "rounds_done":    n_round_done,
             "rounds_pending": n_rounds - n_round_done,
         }
+
+
+def _write_sentinel(path: Path, text: Optional[str] = None) -> None:
+    """Create *path* (and its parent); write *text* into it if given, else just touch it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if text is None:
+        path.touch()
+    else:
+        path.write_text(text)

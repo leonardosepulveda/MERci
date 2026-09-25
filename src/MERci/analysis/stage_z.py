@@ -24,18 +24,18 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..common.metadata import FOCUSTEST_ROUND_ID
+
 CACHE_COLUMNS = [
     "round_id", "fov_id", "series", "off_path",
     "first_stage_z", "min_stage_z", "max_stage_z", "all_same",
 ]
 
-# Sentinel (round_id, series) tag for focus-lock-test rows in the same cache --
-# the focus-lock test (MERci.acquisition.dave.create_focus_test_dave_config) is
-# a standalone calibration procedure, not a real imaging round in
-# round_info.csv, so it has no real round_id of its own to reuse. -1 is never
-# a real imaging_round value (those start at 1).
-FOCUSTEST_ROUND_ID    = -1
+# Series tag for focus-lock-test rows in the cache (round_id is
+# FOCUSTEST_ROUND_ID).
 FOCUSTEST_SERIES_NAME = "focustest"
+# Caches written before FOCUSTEST_ROUND_ID was shared used -1.
+_LEGACY_FOCUSTEST_ROUND_ID = -1
 
 
 def off_path_for(image_path: Path) -> Path:
@@ -52,7 +52,7 @@ def read_off_file(off_path: Path) -> pd.DataFrame:
     but hasn't been fully written yet -- see :func:`read_off_file_if_ready`
     for a version tolerant of that race.
     """
-    return pd.read_csv(off_path, sep=r"\s+", engine="python")
+    return pd.read_csv(off_path, sep=r"\s+")
 
 
 _OFF_COLUMNS = {"frame", "offset", "power", "stage-z", "good-offset"}
@@ -80,6 +80,8 @@ def read_off_file_if_ready(off_path: Path) -> Optional[pd.DataFrame]:
     except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
         return None
     if off_df.empty or not _OFF_COLUMNS.issubset(off_df.columns):
+        return None
+    if off_df[list(_OFF_COLUMNS)].isna().any().any():   # truncated last row
         return None
     return off_df
 
@@ -171,13 +173,18 @@ def _coerce_bool_column(series: pd.Series) -> pd.Series:
     ``cache[~cache["all_same"]]`` raise ``KeyError`` (pandas reads the
     resulting ``-2``s as column labels to select, not a boolean mask).
     """
-    return series.map(_BOOL_LIKE_MAP).astype(bool)
+    mapped = series.map(_BOOL_LIKE_MAP)
+    unknown = series[mapped.isna()]
+    if len(unknown):
+        raise ValueError(f"Not boolean-like: {sorted(set(map(repr, unknown)))[:5]}")
+    return mapped.astype(bool)
 
 
 def load_stage_z_cache(cache_path: Path) -> pd.DataFrame:
     """Load the on-disk stage-z summary cache, or an empty frame if none exists yet."""
     if Path(cache_path).exists():
         cache = pd.read_csv(cache_path)
+        cache["round_id"] = cache["round_id"].replace(_LEGACY_FOCUSTEST_ROUND_ID, FOCUSTEST_ROUND_ID)
         if "all_same" in cache.columns:
             cache["all_same"] = _coerce_bool_column(cache["all_same"])
         return cache
@@ -298,28 +305,20 @@ def update_focustest_stage_z_cache(
 
 
 def round_label(meta, round_id: int) -> str:
-    """``"cells"`` if *round_id*'s series are the cells round, else
-    ``"hyb{N:02d}"`` where ``N`` is this round's 1-based rank among all
-    non-cells rounds -- NOT the raw ``round_id``. ``imaging_round`` numbering
-    reserves round 1 for cells (rounds 2..N_HYBS+1 are the hyb rounds), so
-    ``round_id=2`` is the FIRST real hyb round and must map to ``"hyb01"``,
-    matching the real ``H01``/``H02``/... data folders -- using ``round_id``
-    directly mislabels every hyb round one too high (e.g. ``"hyb02"`` for the
-    round that actually wrote to ``H01``).
+    """``"focustest"`` for a focus-lock-test round, ``"cells"`` for the cells
+    round, else ``"hyb{N:02d}"``: N is the round's 1-based rank among the hyb
+    rounds (not its round_id), so the first hyb round is ``"hyb01"``,
+    matching its ``H01`` data folder."""
+    def is_focustest(rid: int) -> bool:
+        return rid == FOCUSTEST_ROUND_ID or any(
+            (s.imaging_type or "").strip().lower() == "focustest" for s in meta.series_for_round(rid))
 
-    ``round_id == FOCUSTEST_ROUND_ID`` is not a real round at all (see
-    :func:`update_focustest_stage_z_cache`) -- returned as its own label
-    before touching *meta*, which has no entry for it."""
-    if round_id == FOCUSTEST_ROUND_ID:
+    if is_focustest(round_id):
         return "focustest"
-
-    def _is_cells(rid: int) -> bool:
-        return any((s.imaging_type or "").strip().lower() == "cells"
-                   for s in meta.series_for_round(rid))
-
-    if _is_cells(round_id):
+    if meta.is_cells_round(round_id):
         return "cells"
-    hyb_round_ids = [rid for rid in meta.valid_round_ids() if not _is_cells(rid)]
+    hyb_round_ids = [rid for rid in meta.valid_round_ids()
+                     if not meta.is_cells_round(rid) and not is_focustest(rid)]
     return f"hyb{hyb_round_ids.index(round_id) + 1:02d}"
 
 

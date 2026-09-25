@@ -13,8 +13,7 @@ scripts (cellpose segmentation, spot detection/decoding, mosaics) instead of
 merlin/slurm/snakemake configs.
 
 Every schema/script in this module was verified against a real reference
-experiment's files, read directly from
-``...251225_LT027_saving_time\\fishtank\\`` (``params/color_usage_*.csv``,
+experiment's own ``fishtank/`` folder (``params/color_usage_*.csv``,
 ``params/decoding_strategy_*.csv``, ``scripts/*.slurm``) — nothing here is a
 guess. One likely bug in the reference ``decode_spots_ft.slurm`` (a dangling
 ``\\`` line-continuation before a blank line, which would glue the following
@@ -44,6 +43,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
+
+from . import cluster_submit
+from .cluster_submit import _write_script
 
 _COLORS_DEFAULT = ("650", "560", "488", "405")
 
@@ -229,7 +231,7 @@ class FishtankScriptsSpec:
     """
     Compact description of every fishtank run script's parameters — every
     field overridable, defaulting to the reference experiment's verified
-    values (mirrors ``merlin_config.MerlinAnalysisSpec``).
+    values.
 
     ``n_fovs_lineage``/``n_fovs_merfish`` set each per-FOV array job's
     ``--array=0-{n_fovs-1}%{array_concurrency}`` range (the two acquisitions
@@ -264,36 +266,12 @@ class FishtankScriptsSpec:
 
 
 def _sbatch_header(job_name: str, mem: str, time: str, output_log: str,
-                    partition: str, cpus_per_task: int = 1,
-                    gres: Optional[str] = None, array: Optional[str] = None) -> str:
-    lines = [
-        "#!/bin/bash",
-        "# Configuration values for SLURM job submission.",
-        f"#SBATCH --job-name={job_name}",
-        "#SBATCH --nodes=1",
-        "#SBATCH --ntasks=1",
-        f"#SBATCH --cpus-per-task={cpus_per_task}",
-        f"#SBATCH --mem={mem}",
-        f"#SBATCH --time={time}",
-    ]
-    if gres is not None:
-        lines.append(f"#SBATCH --gres={gres}")
-    lines.append(f"#SBATCH --partition={partition}")
-    lines.append(f"#SBATCH --output {output_log}")
-    if array is not None:
-        lines.append(f"#SBATCH --array={array}")
-    lines.append("")
-    lines.append("module load python")
-    lines.append("source activate fishtank_env")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _write_script(output_path: Path, text: str) -> None:
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text.rstrip("\n") + "\n")
+                   partition: str, cpus_per_task: int = 1,
+                   gres: Optional[str] = None, array: Optional[str] = None) -> str:
+    return cluster_submit._sbatch_header(
+        job_name, mem, time, output_log, partition=partition, cpus_per_task=cpus_per_task,
+        array=array, conda_env="fishtank_env", gres=gres,
+    )
 
 
 def _create_cellpose_script(output_path: Path, params: dict, input_dir: str,

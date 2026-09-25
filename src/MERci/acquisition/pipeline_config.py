@@ -14,12 +14,6 @@ Per-channel laser power is NOT part of a pipeline's own YAML: it's locked to
 the microscope choice (hardware/alignment property, not a pipeline dial),
 so it's looked up from ``data/configs/power/power_by_microscope.yaml``
 instead -- see ``load_pipeline_config``.
-
-See ``prompt_history/2026_08_28_1655_list_pipeline_yaml_variables.md``,
-``prompt_history/2026_08_28_1712_pipeline_yaml_implementation_plan.md`` and
-the entry revising this schema (round_bit_color/analysis/metadata moved
-under a `merlin` section, power moved out entirely) for how this was
-derived.
 """
 from __future__ import annotations
 
@@ -162,7 +156,7 @@ def _load_power(data_dir: Path, microscope: str) -> tuple[Dict[int, float], floa
     power_path = data_dir / "configs" / "power" / "power_by_microscope.yaml"
     if not power_path.exists():
         raise FileNotFoundError(f"{power_path} not found.")
-    table = yaml.safe_load(power_path.read_text())
+    table = yaml.safe_load(power_path.read_text(encoding="utf-8"))
     if microscope not in table:
         raise KeyError(f"No power defaults for microscope {microscope!r} in {power_path}.")
     entry = table[microscope]
@@ -192,7 +186,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
     yaml_path = Path(yaml_path)
     if data_dir is None:
         data_dir = yaml_path.parents[1]   # .../data/pipelines/<id>_pipeline.yaml -> .../data
-    raw = yaml.safe_load(yaml_path.read_text())
+    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
     imaging          = raw["imaging"]
     fluidics         = raw["fluidics"]

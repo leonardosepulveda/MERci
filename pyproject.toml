@@ -17,6 +17,14 @@ dependencies = [
     "shapely",
     "matplotlib",
     "PyYAML",
+    "scipy",
+    "zarr",
+    "tifffile",
+    "pyarrow",
+    "affine6p",
+    "imageio",
+    "imageio-ffmpeg",
+    "ipython",
 ]
 
 [tool.setuptools.packages.find]

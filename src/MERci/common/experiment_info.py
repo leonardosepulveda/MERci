@@ -99,9 +99,7 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     doesn't match a newer ``"LT058_sample_07"``-style pattern at all): a
     split layout's acquisition subfolder name is always one of a small, fixed
     vocabulary already hard-coded throughout the codebase for exactly this
-    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``) -- the notebook variant
-    itself is duplicated per acquisition type, so no other subfolder name is
-    ever a real possibility here. If ``SAMPLE_DIR.name`` is one of those
+    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``). If ``SAMPLE_DIR.name`` is one of those
     tokens, treat it as the split layout; otherwise, flat.
 
     This does NOT change most per-notebook local file naming (``dave-{mic}-
@@ -192,14 +190,18 @@ def positions_file_tag(sample_name: str, imaging_dir: str) -> str:
     return f"{sample_name}_{imaging_dir}" if imaging_dir else sample_name
 
 
+def _flatten(info: ExperimentInfo) -> Dict[str, Any]:
+    """Core fields, then ``extra`` entries, as one flat dict."""
+    return {**{f: getattr(info, f) for f in _CORE_FIELDS}, **info.extra}
+
+
 def save_experiment_info(info: ExperimentInfo, path: Path) -> None:
     """
     Write *info* to *path* as a flat YAML mapping (core fields and ``extra``
     entries side by side — the file on disk reads like one flat record, not
     two visually separated blocks).
     """
-    flat = {f: getattr(info, f) for f in _CORE_FIELDS}
-    flat.update(info.extra)
+    flat = _flatten(info)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -227,8 +229,5 @@ def collect_experiment_info(paths: Sequence[Path]) -> pd.DataFrame:
     """
     rows: List[Dict[str, Any]] = []
     for p in paths:
-        info = load_experiment_info(Path(p))
-        row = {f: getattr(info, f) for f in _CORE_FIELDS}
-        row.update(info.extra)
-        rows.append(row)
+        rows.append(_flatten(load_experiment_info(Path(p))))
     return pd.DataFrame(rows)

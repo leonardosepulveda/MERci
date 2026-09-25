@@ -30,6 +30,16 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+# Laser wavelength (nm) -> plot colour, shared by every per-colour plot.
+WAVELENGTH_COLOUR = {
+    405.0: "#9467bd",   # purple
+    488.0: "#1f77b4",   # blue
+    560.0: "#ff7f0e",   # orange
+    650.0: "#2ca02c",   # green
+    750.0: "#d62728",   # red
+}
+DEFAULT_COLOUR = "#7f7f7f"
+
 
 # ── Notebook figure output directory ───────────────────────────────────────────
 
@@ -96,16 +106,8 @@ def visualize_shutter_sequence(
     if style not in ("dot", "line"):
         raise ValueError(f"Unknown style {style!r}. Use 'dot' or 'line'.")
 
-    _WAVELENGTH_COLOUR = {
-        405.0: "#9467bd",   # purple
-        488.0: "#1f77b4",   # blue
-        560.0: "#ff7f0e",   # orange
-        650.0: "#2ca02c",   # green
-        750.0: "#d62728",   # red
-    }
     _BLANK_FACE     = "white"
     _BLANK_EDGE     = "0.6"
-    _DEFAULT_COLOUR = "#7f7f7f"
 
     df = frame_table.copy().reset_index().rename(columns={"index": "frame"})
     if df.empty:
@@ -119,7 +121,7 @@ def visualize_shutter_sequence(
 
     # Per-frame laser colour (None for blank frames).
     colours = [
-        None if pd.isna(ch) else _WAVELENGTH_COLOUR.get(float(wav), _DEFAULT_COLOUR)
+        None if pd.isna(ch) else WAVELENGTH_COLOUR.get(float(wav), DEFAULT_COLOUR)
         for wav, ch in zip(df["color"], df["channel"])
     ]
 
@@ -153,8 +155,8 @@ def visualize_shutter_sequence(
                       if not pd.isna(c)})
     handles = [
         Line2D([0], [0], marker="o", linestyle="",
-               markerfacecolor=_WAVELENGTH_COLOUR.get(w, _DEFAULT_COLOUR),
-               markeredgecolor=_WAVELENGTH_COLOUR.get(w, _DEFAULT_COLOUR),
+               markerfacecolor=WAVELENGTH_COLOUR.get(w, DEFAULT_COLOUR),
+               markeredgecolor=WAVELENGTH_COLOUR.get(w, DEFAULT_COLOUR),
                markersize=7, label=f"{int(w)} nm")
         for w in present
     ]

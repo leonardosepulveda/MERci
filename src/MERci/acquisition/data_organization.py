@@ -193,8 +193,9 @@ def _frames_for_color(ft: pd.DataFrame, color_nm: int) -> list:
 
 
 def _zpos_for_color(ft: pd.DataFrame, color_nm: int) -> list:
-    """Sorted z values for the rows belonging to *color_nm*."""
-    return sorted(ft.loc[ft["color"] == color_nm, "z"].tolist())
+    """z values for *color_nm*'s rows, in frame order: MERlin pairs
+    ``zPos[i]`` with ``frame[i]`` (and sorts z itself where it needs to)."""
+    return ft.loc[ft["color"] == color_nm, "z"].tolist()
 
 
 def _fiducial_frame(ft: pd.DataFrame) -> int:
@@ -218,9 +219,8 @@ def _series_to_image_type(series: str) -> str:
     ``"hal-mf3_01_{fov:03d}"``   → ``"hal-mf3"``
     ``"hal-mf3_cells_{fov:03d}"`` → ``"hal-mf3_cells"``
     """
-    s = re.sub(r"_\{[^}]+\}$", "", series)   # strip _{fov:03d}
-    s = re.sub(r"_\d{2}$", "", s)             # strip _01, _02, … if present
-    return s
+    from .dave import series_to_movie_name
+    return re.sub(r"_\d{2}$", "", series_to_movie_name(series))   # strip _01, _02, … if present
 
 
 def _series_to_regexp(series: str) -> str:

@@ -11,13 +11,13 @@ parse_inf               – parse HAL .inf sidecar
 read_dax                – load a raw .dax file into a numpy array  (uint16)
 read_zarr               – load a HAL .zarr store into a numpy array (uint16)
 read_tiff               – load a multi-page .tiff into a numpy array (uint16)
+open_zarr_array         – the Array inside a .zarr store (group or not)
 read_image              – format-agnostic dispatcher for the three formats above
 get_dax_shape           – read .dax shape without loading pixel data
-discover_image_files    – scan a directory for stable image files
-                          (handles flat files and .zarr directory stores)
-is_path_stable          – single-path stability check (used by
-                          discover_image_files and by callers that already
-                          have one specific path, not a directory to scan)
+find_image_paths        – list image files / .zarr stores under a directory
+filter_stable_paths     – keep paths not still being written (one wait for all)
+discover_image_files    – the two above combined
+is_path_stable          – single-path stability check
 path_mtime              – effective last-write mtime of a file OR a directory
                           store (max mtime of its contents, zarr-aware)
 read_dax_frames/read_zarr_frames/read_tiff_frames/read_image_frames
@@ -30,6 +30,7 @@ iter_dax_frames/iter_zarr_frames/iter_tiff_frames/iter_image_frames
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -44,17 +45,19 @@ log = logging.getLogger(__name__)
 
 def load_round_info(csv_path: Path) -> pd.DataFrame:
     """
-    Load ``round_info.csv``.
+    Load ``round_info.csv``, with the round column named ``round_id``.
 
-    Required columns: ``round_id``, ``series``
-    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, others
+    Required columns: ``imaging_round`` (or legacy ``round_id``), ``series``
+    Optional columns: ``imaging_type``, ``hal_config``, ``shutter_file``, ``dir``, others
     """
     df = pd.read_csv(csv_path)
+    if "imaging_round" in df.columns and "round_id" not in df.columns:
+        df = df.rename(columns={"imaging_round": "round_id"})
     for col in ("round_id", "series"):
         if col not in df.columns:
             raise ValueError(
                 f"round_info.csv must contain a '{col}' column "
-                f"(found: {list(df.columns)})"
+                f"(found columns: {list(df.columns)})"
             )
     df["series"]   = df["series"].astype(str).str.strip()
     df["round_id"] = df["round_id"].astype(int)
@@ -138,6 +141,26 @@ def parse_inf(inf_path: Path) -> Dict[str, Any]:
     return info
 
 
+def _dax_dims(dax_path: Path, frame_width: Optional[int], frame_height: Optional[int]
+              ) -> Tuple[int, int, Dict[str, Any]]:
+    """``(width, height, inf)``: explicit kwargs first, then the ``.inf`` sidecar."""
+    inf_path = Path(dax_path).with_suffix(".inf")
+    inf: Dict[str, Any] = {}
+    if inf_path.exists():
+        try:
+            inf = parse_inf(inf_path)
+        except Exception as exc:
+            log.warning("Could not parse %s: %s", inf_path, exc)
+    fw = frame_width  or inf.get("frame_width")
+    fh = frame_height or inf.get("frame_height")
+    if fw is None or fh is None:
+        raise ValueError(
+            f"Frame dimensions unknown for '{dax_path}'. "
+            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
+        )
+    return int(fw), int(fh), inf
+
+
 def read_dax(
     dax_path:     Path,
     frame_width:  Optional[int] = None,
@@ -160,24 +183,8 @@ def read_dax(
     IOError     if the file is smaller than expected
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-
-    inf: Dict[str, Any] = {}
-    if inf_path.exists():
-        try:
-            inf = parse_inf(inf_path)
-        except Exception as exc:
-            log.warning("Could not parse %s: %s", inf_path, exc)
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
-    nf = n_frames     or inf.get("n_frames")
-
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Frame dimensions unknown for '{dax_path}'. "
-            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
-        )
+    fw, fh, inf = _dax_dims(dax_path, frame_width, frame_height)
+    nf = n_frames or inf.get("n_frames")
 
     raw             = np.fromfile(str(dax_path), dtype=dtype)
     pixels_per_frame = int(fw) * int(fh)
@@ -206,18 +213,8 @@ def get_dax_shape(
     Uses the ``.inf`` sidecar when available; falls back to file-size inference.
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-    inf      = parse_inf(inf_path) if inf_path.exists() else {}
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
+    fw, fh, inf = _dax_dims(dax_path, frame_width, frame_height)
     nf = inf.get("n_frames")
-
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Cannot determine frame dimensions for '{dax_path}'. "
-            "Ensure a .inf sidecar exists or supply frame_width/frame_height."
-        )
 
     if nf is None:
         item_bytes = np.dtype(np.uint16).itemsize
@@ -227,6 +224,35 @@ def get_dax_shape(
 
 
 # ── Multi-format readers ──────────────────────────────────────────────────────
+
+def open_zarr_array(zarr_path: Path):
+    """The zarr Array in *zarr_path* (a group's first array child if it is a group)."""
+    try:
+        import zarr
+    except ImportError as exc:
+        raise ImportError(
+            "The 'zarr' package is required for .zarr support. "
+            "Install it with: pip install zarr"
+        ) from exc
+    store = zarr.open(str(zarr_path), mode="r")
+    if isinstance(store, zarr.Array):
+        return store
+    keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
+    if not keys:
+        raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
+    return store[keys[0]]
+
+
+def _import_tifffile():
+    try:
+        import tifffile
+    except ImportError as exc:
+        raise ImportError(
+            "The 'tifffile' package is required for .tiff support. "
+            "Install it with: pip install tifffile"
+        ) from exc
+    return tifffile
+
 
 def read_zarr(
     zarr_path: Path,
@@ -248,27 +274,7 @@ def read_zarr(
     -------
     numpy array of shape ``(n_frames, height, width)``
     """
-    try:
-        import zarr
-    except ImportError as exc:
-        raise ImportError(
-            "The 'zarr' package is required for .zarr support. "
-            "Install it with: pip install zarr"
-        ) from exc
-
-    store = zarr.open(str(zarr_path), mode="r")
-    if isinstance(store, zarr.Array):
-        arr = store[:]
-    else:
-        # Group: use the first (and typically only) array child
-        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
-        if not keys:
-            raise ValueError(
-                f"No zarr Array found inside group store: {zarr_path}"
-            )
-        arr = store[keys[0]][:]
-
-    return arr.astype(dtype)
+    return open_zarr_array(zarr_path)[:].astype(dtype)
 
 
 def read_tiff(
@@ -287,14 +293,7 @@ def read_tiff(
     -------
     numpy array of shape ``(n_frames, height, width)``
     """
-    try:
-        import tifffile
-    except ImportError as exc:
-        raise ImportError(
-            "The 'tifffile' package is required for .tiff support. "
-            "Install it with: pip install tifffile"
-        ) from exc
-
+    tifffile = _import_tifffile()
     arr = tifffile.imread(str(tiff_path))
     if arr.ndim == 2:
         arr = arr[np.newaxis, ...]   # single frame → (1, H, W)
@@ -366,21 +365,7 @@ def iter_dax_frames(
     ``.inf`` sidecar.
     """
     dax_path = Path(dax_path)
-    inf_path = dax_path.with_suffix(".inf")
-    inf: Dict[str, Any] = {}
-    if inf_path.exists():
-        try:
-            inf = parse_inf(inf_path)
-        except Exception as exc:
-            log.warning("Could not parse %s: %s", inf_path, exc)
-
-    fw = frame_width  or inf.get("frame_width")
-    fh = frame_height or inf.get("frame_height")
-    if fw is None or fh is None:
-        raise ValueError(
-            f"Frame dimensions unknown for '{dax_path}'. "
-            "Provide frame_width/frame_height or ensure a .inf sidecar exists."
-        )
+    fw, fh, _ = _dax_dims(dax_path, frame_width, frame_height)
 
     pixels_per_frame = int(fw) * int(fh)
     frame_bytes      = pixels_per_frame * np.dtype(dtype).itemsize
@@ -428,23 +413,7 @@ def iter_zarr_frames(
     time -- each single-index read only fetches the chunk(s) covering that
     frame, so a caller stopping early never pays for the remaining frames.
     """
-    try:
-        import zarr
-    except ImportError as exc:
-        raise ImportError(
-            "The 'zarr' package is required for .zarr support. "
-            "Install it with: pip install zarr"
-        ) from exc
-
-    store = zarr.open(str(zarr_path), mode="r")
-    if isinstance(store, zarr.Array):
-        arr = store
-    else:
-        keys = [k for k in store.keys() if isinstance(store[k], zarr.Array)]
-        if not keys:
-            raise ValueError(f"No zarr Array found inside group store: {zarr_path}")
-        arr = store[keys[0]]
-
+    arr = open_zarr_array(zarr_path)
     for idx in frame_indices:
         yield idx, np.asarray(arr[idx]).astype(dtype)
 
@@ -488,14 +457,7 @@ def iter_tiff_frames(
     package itself writes. ``series=None`` matters too: leaving it at its
     default resolved a *different* (incorrect) code path in testing.
     """
-    try:
-        import tifffile
-    except ImportError as exc:
-        raise ImportError(
-            "The 'tifffile' package is required for .tiff support. "
-            "Install it with: pip install tifffile"
-        ) from exc
-
+    tifffile = _import_tifffile()
     with tifffile.TiffFile(str(tiff_path)) as tf:
         for idx in frame_indices:
             yield idx, np.asarray(tf.asarray(key=idx, series=None)).astype(dtype)
@@ -572,6 +534,42 @@ def read_image_frames(
     return np.stack(frames, axis=0)
 
 
+def find_image_paths(
+    data_dir:  Path,
+    suffix:    str  = ".zarr",
+    recursive: bool = True,
+) -> List[Path]:
+    """
+    Sorted image paths under *data_dir*: files or directory stores (``.zarr``)
+    whose name ends with *suffix*. No stability check. Does not walk into a
+    matched directory store's own chunk files.
+    """
+    data_dir = Path(data_dir)
+    if not recursive:
+        return sorted(data_dir.glob(f"*{suffix}"))
+    found: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(data_dir):
+        d = Path(dirpath)
+        found += [d / f for f in filenames if f.endswith(suffix)]
+        found += [d / n for n in dirnames if n.endswith(suffix)]
+        dirnames[:] = [n for n in dirnames if not n.endswith(suffix)]
+    return sorted(found)
+
+
+def filter_stable_paths(paths: List[Path], stability_delay: float = 0.1) -> List[Path]:
+    """
+    The *paths* that are non-empty and whose size (total content size for a
+    directory store) is unchanged over one *stability_delay* wait, i.e. not
+    still being written by HAL. Sizes are measured for all paths, then one
+    sleep, then measured again.
+    """
+    before = {p: s for p in paths if (s := _path_size(Path(p)))}
+    if not before:
+        return []
+    time.sleep(stability_delay)
+    return [p for p, s in before.items() if _path_size(Path(p)) == s]
+
+
 def discover_image_files(
     data_dir:        Path,
     suffix:          str   = ".zarr",
@@ -580,78 +578,51 @@ def discover_image_files(
     stability_delay: float = 0.1,
 ) -> List[Path]:
     """
-    Return a sorted list of image paths under *data_dir* that are not still
-    being written.
-
-    Handles both flat-file formats (``.dax``, ``.tiff``) and directory-based
-    stores (``.zarr``).
-
-    Parameters
-    ----------
-    suffix          : file extension / directory suffix to search for
-    stability_check : skip entries whose size changes within *stability_delay*
-                      seconds (catches partially-written files).
-                      For ``.zarr`` directories the total content size is used.
-    stability_delay : seconds between the two size measurements
+    Sorted image paths under *data_dir* that are not still being written
+    (:func:`find_image_paths` + :func:`filter_stable_paths`). With
+    ``stability_check=False``, only empty files/stores are dropped.
     """
-    glob       = data_dir.rglob if recursive else data_dir.glob
-    candidates = sorted(glob(f"*{suffix}"))
-
+    candidates = find_image_paths(data_dir, suffix, recursive)
     if not stability_check:
-        stable = []
-        for p in candidates:
-            try:
-                if p.is_dir():
-                    # zarr store: accept if non-empty
-                    if any(p.iterdir()):
-                        stable.append(p)
-                elif p.stat().st_size > 0:
-                    stable.append(p)
-            except (FileNotFoundError, StopIteration):
-                pass
-        return stable
-
-    return [p for p in candidates if is_path_stable(p, stability_delay)]
+        return [p for p in candidates if _is_nonempty(p)]
+    return filter_stable_paths(candidates, stability_delay)
 
 
-def is_path_stable(path: Path, stability_delay: float = 0.1) -> bool:
-    """
-    True iff *path* -- a flat file or a directory store (e.g. ``.zarr``) --
-    has not changed size in the last *stability_delay* seconds, i.e. it looks
-    done being written rather than still being actively written to (HAL
-    writes are incremental, so an image file/store can already ``exist()``
-    -- and even already hold some real frames -- well before every frame of
-    its stack has landed on disk).
-
-    False (not True) for a path that doesn't exist, or a zero-size/empty one
-    -- "can't confirm it's stable" should never be treated as "stable."
-    """
-    path = Path(path)
+def _is_nonempty(path: Path) -> bool:
     try:
-        if path.is_dir():
-            s0 = _dir_content_size(path)
-            if s0 == 0:
-                return False
-            time.sleep(stability_delay)
-            s1 = _dir_content_size(path)
-        else:
-            s0 = path.stat().st_size
-            if s0 == 0:
-                return False
-            time.sleep(stability_delay)
-            s1 = path.stat().st_size
-        return s0 == s1
+        return any(path.iterdir()) if path.is_dir() else path.stat().st_size > 0
     except FileNotFoundError:
         return False
 
 
+def is_path_stable(path: Path, stability_delay: float = 0.1) -> bool:
+    """
+    True iff *path* (flat file or directory store) is non-empty and has not
+    changed size in the last *stability_delay* seconds. HAL writes
+    incrementally, so a file can exist, and hold some frames, before its
+    stack is complete. False for a missing or empty path.
+    """
+    return bool(filter_stable_paths([Path(path)], stability_delay))
+
+
+def _path_size(path: Path) -> int:
+    """Size of a file, or total size of all files under a directory; 0 if missing."""
+    try:
+        return _dir_content_size(path) if path.is_dir() else path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
 def _dir_content_size(path: Path) -> int:
-    """Sum of file sizes for all files under *path* (non-recursive files only)."""
-    return sum(
-        f.stat().st_size
-        for f in path.rglob("*")
-        if f.is_file()
-    )
+    """Total size of every file under *path* (recursive)."""
+    total = 0
+    for dirpath, _, filenames in os.walk(path):
+        for f in filenames:
+            try:
+                total += os.stat(os.path.join(dirpath, f)).st_size
+            except FileNotFoundError:
+                pass
+    return total
 
 
 def path_mtime(path: Path) -> float:

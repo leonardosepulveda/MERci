@@ -48,13 +48,14 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 from xml.dom import minidom
 
 import pandas as pd
 
-from .configs import get_camera_frame_size
+from ..common.io import load_positions
+from .configs import get_camera_frame_size, read_hal_exposure_time, read_hal_frame_count
 from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
@@ -133,13 +134,10 @@ def _infer_microscope(round_info: pd.DataFrame) -> Optional[str]:
 
 def get_hal_frame_count(hal_config_path: Path) -> int:
     """Return the ``<frames>`` value from a HAL config XML file."""
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
-    root = ET.fromstring(text)
-    el = root.find(".//frames")
-    if el is None:
+    n = read_hal_frame_count(hal_config_path)
+    if n is None:
         raise ValueError(f"No <frames> element found in {hal_config_path}")
-    return int(el.text.strip())
+    return n
 
 
 def resolve_hal_config_path(settings_dir: Path, hal_stem: str) -> Path:
@@ -170,7 +168,7 @@ def count_positions(positions_path: Path) -> int:
     Count the FOV positions in a ``positions_*.txt`` file.
 
     One FOV per non-blank line (``x,y``); ``#`` comments and blank lines are
-    ignored, matching :func:`MERci.common.metadata._read_positions`.  This equals
+    ignored, matching :func:`MERci.common.io.load_positions`.  This equals
     the number of iterations Dave runs for a ``<loop>`` bound to this file, which
     is what the per-segment ``start`` offsets (see
     :func:`create_round_info_multitissue`) are built from.
@@ -183,15 +181,7 @@ def count_positions(positions_path: Path) -> int:
     -------
     int : number of valid ``x,y`` FOV lines
     """
-    n = 0
-    with Path(positions_path).open() as fh:
-        for raw in fh:
-            line = raw.split("#")[0].strip()
-            if not line:
-                continue
-            if len(line.split(",")) >= 2:
-                n += 1
-    return n
+    return len(load_positions(positions_path))
 
 
 def fov_pad_width(total_fovs: int) -> int:
@@ -212,7 +202,7 @@ def fov_pad_width(total_fovs: int) -> int:
 
 # ── Multi-drive group assignment ────────────────────────────────────────────────
 
-def normalize_drive_root(drive: Union[str, Path]) -> Path:
+def normalize_drive_root(drive: Union[str, Path]) -> PurePath:
     """
     Normalize a drive-letter/root string into an absolute path anchor.
 
@@ -226,7 +216,9 @@ def normalize_drive_root(drive: Union[str, Path]) -> Path:
     s = str(drive)
     if not s.endswith(("\\", "/")):
         s += "\\"
-    root = Path(s)
+    # A drive letter is a Windows path on any OS (round_info.csv is read by
+    # the Windows acquisition PC, even when generated on Linux).
+    root = PureWindowsPath(s) if PureWindowsPath(s).drive else Path(s)
     if not root.is_absolute():
         raise ValueError(
             f"drive {drive!r} does not resolve to an absolute path "
@@ -235,7 +227,7 @@ def normalize_drive_root(drive: Union[str, Path]) -> Path:
     return root
 
 
-def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
+def rebase_on_drive(sample_dir: Union[str, Path], drive_root: PurePath) -> PurePath:
     """
     Re-root ``sample_dir`` onto a different drive, preserving its subpath.
 
@@ -247,7 +239,8 @@ def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
     just ``Y:\\``. ``drive_root`` is expected already normalized (see
     :func:`normalize_drive_root`).
     """
-    sample_dir = Path(sample_dir)
+    sample_dir = (PureWindowsPath(sample_dir) if PureWindowsPath(str(sample_dir)).drive
+                  else Path(sample_dir))
     return drive_root / sample_dir.relative_to(sample_dir.anchor)
 
 
@@ -345,7 +338,6 @@ def create_round_info(
     ``hal_config``, ``data_dir``
     """
     mic  = microscope.lower()
-    data = Path(sample_dir) / "data"
     rows: List[dict] = []
 
     if positions_txt is not None:
@@ -366,14 +358,14 @@ def create_round_info(
     # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
     cells_root = (
         rebase_on_drive(sample_dir, normalize_drive_root(cells_drive))
-        if cells_drive else sample_dir
+        if cells_drive else Path(sample_dir)
     )
     rows.append({
         "imaging_round": 1,
         "imaging_type":  "cells",
         "series":        f"hal-{mic}-cells_{{fov:0{pad}d}}",
         "hal_config":    cells_hal_config,
-        "data_dir":      str(Path(cells_root) / "data" / "cells"),
+        "data_dir":      str(cells_root / "data" / "cells"),
     })
 
     # Imaging Rounds 2 … N+1: bits #1 … #N.  The series number tracks the
@@ -387,14 +379,14 @@ def create_round_info(
         drive     = drive_for_bit.get(bit_idx)
         bits_root = (
             rebase_on_drive(sample_dir, normalize_drive_root(drive))
-            if drive else sample_dir
+            if drive else Path(sample_dir)
         )
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:0{pad}d}}",
             "hal_config":    bits_hal_config,
-            "data_dir":      str(Path(bits_root) / "data" / "hybs" / f"H{bit_idx:02d}"),
+            "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
 
     return pd.DataFrame(
@@ -565,36 +557,31 @@ def create_round_info_multitissue(
     def _emit(rnd: int, is_cells: bool, movie_prefix: str, hal_boundary: str,
               hyb_idx: Optional[int] = None) -> None:
         for seg in enriched:
-            tissue, label, posfile = seg["tissue"], seg["label"], seg["posfile"]
-            start, pad = seg["start"], seg["pad"]
+            tissue, pad = seg["tissue"], seg["pad"]
             if seg["kind"] == "boundary":
                 # Shared movie name (no per-segment label): the continuous index
                 # comes from start/pad, not from the name.
-                rows.append({
-                    "imaging_round":  rnd,
-                    "imaging_type":   "cells" if is_cells else "bits",
-                    "series":         f"{movie_prefix}_{{fov:0{pad}d}}",
-                    "hal_config":     hal_boundary,
-                    "data_dir":       _seg_dir(tissue, "boundary", is_cells, hyb_idx),
-                    "positions_file": posfile,
-                    "tissue":         tissue,
-                    "segment":        label,
-                    "fov_start":      start,
-                    "fov_pad":        pad,
-                })
+                imaging_type = "cells" if is_cells else "bits"
+                series = f"{movie_prefix}_{{fov:0{pad}d}}"
+                hal_config = hal_boundary
+                data_dir = _seg_dir(tissue, "boundary", is_cells, hyb_idx)
             else:
-                rows.append({
-                    "imaging_round":  rnd,
-                    "imaging_type":   "transit",
-                    "series":         f"hal-{mic}-transit_r{rnd:02d}_{{fov:0{pad}d}}",
-                    "hal_config":     transit_hal_config,
-                    "data_dir":       _seg_dir(tissue, "transit", is_cells),
-                    "positions_file": posfile,
-                    "tissue":         tissue,
-                    "segment":        label,
-                    "fov_start":      start,
-                    "fov_pad":        pad,
-                })
+                imaging_type = "transit"
+                series = f"hal-{mic}-transit_r{rnd:02d}_{{fov:0{pad}d}}"
+                hal_config = transit_hal_config
+                data_dir = _seg_dir(tissue, "transit", is_cells)
+            rows.append({
+                "imaging_round":  rnd,
+                "imaging_type":   imaging_type,
+                "series":         series,
+                "hal_config":     hal_config,
+                "data_dir":       data_dir,
+                "positions_file": seg["posfile"],
+                "tissue":         tissue,
+                "segment":        seg["label"],
+                "fov_start":      seg["start"],
+                "fov_pad":        pad,
+            })
 
     # Round 1: cells.
     _emit(1, is_cells=True, movie_prefix=f"hal-{mic}-cells", hal_boundary=cells_hal_config)
@@ -1134,23 +1121,30 @@ def create_dave_config(
     _write_dave_xml(root, Path(output_path), leading_comment=leading_comment)
 
     if print_estimate:
-        # Frame size: explicit override wins; otherwise from the microscope (given
-        # or inferred from the round_info series names).
-        if estimate_frame_shape is not None:
-            frame_w, frame_h = int(estimate_frame_shape[0]), int(estimate_frame_shape[1])
-        else:
-            frame_w, frame_h = get_camera_frame_size(microscope or _infer_microscope(round_info))
-        est = estimate_dave_experiment(
-            Path(output_path),
-            kilroy_config   = kilroy_config,
-            settings_dir    = settings_dir,
-            frame_width     = frame_w,
-            frame_height    = frame_h,
-            bytes_per_pixel = estimate_bytes_per_pixel,
-        )
-        print(format_experiment_estimate(est, per_round=per_round, start_time=start_time))
-        return est
+        return _print_estimate(output_path, kilroy_config, settings_dir,
+                               microscope or _infer_microscope(round_info), estimate_frame_shape,
+                               estimate_bytes_per_pixel, per_round, start_time)
     return None
+
+
+def _print_estimate(output_path, kilroy_config, settings_dir, microscope, frame_shape,
+                    bytes_per_pixel, per_round, start_time) -> "ExperimentEstimate":
+    """Estimate the recipe just written and print the report. An explicit
+    *frame_shape* wins over *microscope*'s camera size."""
+    if frame_shape is not None:
+        frame_w, frame_h = int(frame_shape[0]), int(frame_shape[1])
+    else:
+        frame_w, frame_h = get_camera_frame_size(microscope)
+    est = estimate_dave_experiment(
+        Path(output_path),
+        kilroy_config   = kilroy_config,
+        settings_dir    = settings_dir,
+        frame_width     = frame_w,
+        frame_height    = frame_h,
+        bytes_per_pixel = bytes_per_pixel,
+    )
+    print(format_experiment_estimate(est, per_round=per_round, start_time=start_time))
+    return est
 
 
 # ── Focus-lock test recipe ───────────────────────────────────────────────────
@@ -1332,20 +1326,8 @@ def create_focus_test_dave_config(
 
     est = None
     if print_estimate:
-        if estimate_frame_shape is not None:
-            frame_w, frame_h = int(estimate_frame_shape[0]), int(estimate_frame_shape[1])
-        else:
-            frame_w, frame_h = get_camera_frame_size(microscope)
-        est = estimate_dave_experiment(
-            Path(output_path),
-            kilroy_config   = kilroy_config,
-            settings_dir    = settings_dir,
-            frame_width     = frame_w,
-            frame_height    = frame_h,
-            bytes_per_pixel = estimate_bytes_per_pixel,
-        )
-        print(format_experiment_estimate(est, per_round=per_round, start_time=start_time))
-
+        est = _print_estimate(output_path, kilroy_config, settings_dir, microscope,
+                              estimate_frame_shape, estimate_bytes_per_pixel, per_round, start_time)
     return n_fovs, est
 
 
@@ -1476,20 +1458,6 @@ class ExperimentEstimate:
     warnings:        List[str]  = field(default_factory=list)
 
 
-def _read_hal_exposure(hal_config_path: Path) -> Optional[float]:
-    """Return the camera ``<exposure_time>`` (seconds) from a HAL config, or None."""
-    try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1").replace("\r\n", "\n")
-        root = ET.fromstring(text)
-        el = root.find(".//exposure_time")
-        if el is not None and el.text:
-            return float(el.text.strip())
-    except (OSError, ValueError, ET.ParseError):
-        pass
-    return None
-
-
 def estimate_dave_experiment(
     dave_recipe:          Path,
     kilroy_config:        Optional[Path] = None,
@@ -1571,7 +1539,7 @@ def estimate_dave_experiment(
         if frame_time_s is not None:
             return frame_time_s
         if hal_stem not in exposure_cache:
-            exp = _read_hal_exposure(Path(settings_dir) / (hal_stem + ".xml")) \
+            exp = read_hal_exposure_time(resolve_hal_config_path(settings_dir, hal_stem)) \
                   if settings_dir is not None else None
             exposure_cache[hal_stem] = exp
         exp = exposure_cache[hal_stem]
@@ -1618,13 +1586,8 @@ def estimate_dave_experiment(
                   "per_fov_imaging_s": 0.0})
         movies = loop.findall("movie")
         if movies:                                   # imaging loop
-            # The loop_variable a movie references is its OWN <variable_entry
-            # name="...">, not necessarily the parent <loop>'s own name: since
-            # positions loop_variables are shared across every round visiting
-            # the same segment (see create_dave_config), a loop named e.g.
-            # "Hyb 01 Imaging" can reference a loop_variable named "B1" or
-            # "Positions". Every movie within one loop references the same
-            # variable, so the first movie's is enough.
+            # Read the positions variable from the movie's own
+            # <variable_entry> (every movie in a loop uses the same one).
             ve_el    = movies[0].find("variable_entry")
             var_name = ve_el.get("name", "") if ve_el is not None else lname
             path = lv_value.get(var_name, "")
@@ -1756,31 +1719,20 @@ def format_experiment_estimate(
         f"  Time per FOV:  {_fmt_duration(est.per_fov_time_s)}",
         f"  Storage:       {_fmt_bytes(est.total_bytes)}",
     ]
-    cursor = start_time
     if start_time is not None:
         lines.append(f"  Start:         {_fmt_dt(start_time)}")
         lines.append(f"  End:           {_fmt_dt(start_time + timedelta(seconds=est.total_time_s))}")
     if per_round and est.per_round:
         lines.append("  Per round:")
-        for r in est.per_round:
+        for r, phases in _round_phases(est, start_time):
             series_str = ", ".join(r.get("series", [])) or "-"
             lines.append(f"    {r['label']} [{series_str}]:")
-            if r["fluidics_s"] > 0:
-                lines.append("      Fluidics")
-                lines.append(f"        total time: {_fmt_duration(r['fluidics_s'])}")
-                if cursor is not None:
-                    fluidics_end = cursor + timedelta(seconds=r["fluidics_s"])
-                    lines.append(f"        start date: {_fmt_dt(cursor)}")
-                    lines.append(f"        end date:   {_fmt_dt(fluidics_end)}")
-                    cursor = fluidics_end
-            if r["movies"] > 0:
-                lines.append("      Imaging")
-                lines.append(f"        total time: {_fmt_duration(r['imaging_s'])}")
-                if cursor is not None:
-                    imaging_end = cursor + timedelta(seconds=r["imaging_s"])
-                    lines.append(f"        start date: {_fmt_dt(cursor)}")
-                    lines.append(f"        end date:   {_fmt_dt(imaging_end)}")
-                    cursor = imaging_end
+            for kind, dur, start, end in phases:
+                lines.append(f"      {kind.capitalize()}")
+                lines.append(f"        total time: {_fmt_duration(dur)}")
+                if start is not None:
+                    lines.append(f"        start date: {_fmt_dt(start)}")
+                    lines.append(f"        end date:   {_fmt_dt(end)}")
             lines.append(f"      Total movies: {r['movies']}")
             lines.append(f"      Total size:   {_fmt_bytes(r['bytes'])}")
     if est.assumptions:
@@ -1805,8 +1757,7 @@ def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime) -> 
     ``_fmt_duration``, ready to ``display()`` as-is).
     """
     rows: List[dict] = []
-    cursor = start_time
-    for r in est.per_round:
+    for r, phases in _round_phases(est, start_time):
         # A "Hyb NN" label (r["hyb"] is not None) is a bare number needing a
         # " Fluidics"/" Imaging" suffix; a non-hyb label ("Cells Imaging",
         # "Fluidics Final", ...) is the raw loop name and already names its
@@ -1815,19 +1766,30 @@ def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime) -> 
             fluidics_label, imaging_label = f"{r['label']} Fluidics", f"{r['label']} Imaging"
         else:
             fluidics_label = imaging_label = r["label"]
-        if r["fluidics_s"] > 0:
-            end = cursor + timedelta(seconds=r["fluidics_s"])
-            rows.append({"block": fluidics_label, "kind": "fluidics",
-                         "start": _fmt_dt(cursor), "end": _fmt_dt(end),
-                         "duration": _fmt_duration(r["fluidics_s"])})
-            cursor = end
-        if r["movies"] > 0:
-            end = cursor + timedelta(seconds=r["imaging_s"])
-            rows.append({"block": imaging_label, "kind": "imaging",
-                         "start": _fmt_dt(cursor), "end": _fmt_dt(end),
-                         "duration": _fmt_duration(r["imaging_s"])})
-            cursor = end
+        for kind, dur, start, end in phases:
+            rows.append({"block": fluidics_label if kind == "fluidics" else imaging_label,
+                         "kind": kind, "start": _fmt_dt(start), "end": _fmt_dt(end),
+                         "duration": _fmt_duration(dur)})
     return pd.DataFrame(rows, columns=["block", "kind", "start", "end", "duration"])
+
+
+def _round_phases(est: ExperimentEstimate, start_time: Optional[datetime]):
+    """
+    Yield ``(round, [(kind, seconds, start, end), ...])`` per round in run
+    order: fluidics (if any) then imaging (if any movies), chained off
+    *start_time* (start/end are None without one).
+    """
+    cursor = start_time
+    for r in est.per_round:
+        phases = []
+        for kind, dur, present in (("fluidics", r["fluidics_s"], r["fluidics_s"] > 0),
+                                   ("imaging", r["imaging_s"], r["movies"] > 0)):
+            if not present:
+                continue
+            end = cursor + timedelta(seconds=dur) if cursor is not None else None
+            phases.append((kind, dur, cursor, end))
+            cursor = end
+        yield r, phases
 
 
 # ── XML writer ─────────────────────────────────────────────────────────────────

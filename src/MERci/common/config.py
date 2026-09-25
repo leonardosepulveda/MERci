@@ -5,13 +5,30 @@ acquisition-planning modules and the online-analysis modules.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 # ── Fluidics t_max defaults (seconds) ─────────────────────────────────────────
 T_MAX_ADAPTOR = 6000.0   # 100 min — adaptor-based fluidics
 T_MAX_DIRECT  = 3000.0   # 50 min  — direct-readout fluidics
+
+
+def default_n_workers() -> int:
+    """
+    Usable CPUs minus 2 (>= 1). Counts the CPUs this process may run on
+    (``os.sched_getaffinity``: a SLURM job's allocation, not the whole
+    node) where available, else ``os.cpu_count()``. Capped at 61 on
+    Windows, the most ``ProcessPoolExecutor`` accepts there.
+    """
+    import os
+    import sys
+    try:
+        n_cpus = len(os.sched_getaffinity(0))
+    except AttributeError:          # not available on Windows/macOS
+        n_cpus = os.cpu_count() or 2
+    n = max(1, n_cpus - 2)
+    return min(n, 61) if sys.platform == "win32" else n
 
 
 @dataclass
@@ -63,7 +80,7 @@ class ExperimentConfig:
     image_dtype:            str            = "uint16"
     frame_width:            Optional[int]  = None
     frame_height:           Optional[int]  = None
-    pixel_size_um:          float          = 0.109
+    pixel_size_um:          float          = 0.108
     image_size_px:          int            = 2048
     non_overlap_fraction:   float          = 0.9
 
@@ -120,7 +137,7 @@ class ExperimentConfig:
     #                  acquisition drive while the microscope is writing.
     analysis_mode:        str            = "same_drive"
     analysis_source_dir:  Optional[Path] = None   # mode A: second-drive mirror to analyse from
-    n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → cpu_count - 2
+    n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → default_n_workers()
 
     # ── Derived properties ─────────────────────────────────────────────────────
 
@@ -136,21 +153,33 @@ class ExperimentConfig:
         ``data_dir`` in same-drive mode; ``analysis_source_dir`` (the second-drive
         mirror) in mirror mode.
         """
-        if self.analysis_mode == "mirror_drive":
-            if self.analysis_source_dir is None:
-                raise ValueError(
-                    "analysis_mode='mirror_drive' requires analysis_source_dir to be set."
-                )
-            return self.analysis_source_dir
-        return self.data_dir
+        # __post_init__ guarantees analysis_source_dir is set in mirror mode.
+        return self.analysis_source_dir if self.analysis_mode == "mirror_drive" else self.data_dir
 
     @property
     def resolved_n_workers(self) -> int:
         """Number of FOV worker processes to use (>= 1)."""
         if self.n_analysis_workers is not None:
             return max(1, int(self.n_analysis_workers))
-        import os
-        return max(1, (os.cpu_count() or 2) - 2)
+        return default_n_workers()
+
+    @classmethod
+    def from_sample_dir(cls, sample_dir: Path, **kwargs) -> "ExperimentConfig":
+        """
+        Config for the standard experiment layout under *sample_dir*:
+        ``data/``, ``metadata/``, ``analysis/``, ``settings/`` and
+        ``metadata/round_info.csv``. *kwargs* give ``positions_txt`` (required)
+        and any other field, and can override these defaults.
+        """
+        sample_dir = Path(sample_dir)
+        defaults = dict(
+            data_dir       = sample_dir / "data",
+            metadata_dir   = sample_dir / "metadata",
+            analysis_dir   = sample_dir / "analysis",
+            settings_dir   = sample_dir / "settings",
+            round_info_csv = sample_dir / "metadata" / "round_info.csv",
+        )
+        return cls(**{**defaults, **kwargs})
 
     # ── Initialisation ─────────────────────────────────────────────────────────
 

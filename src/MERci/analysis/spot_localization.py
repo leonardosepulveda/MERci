@@ -173,30 +173,35 @@ def detect_beads_2d(
 
     Returns (N, 2) integer array of (row, col) positions.
     """
-    blurred = gaussian_filter(max_proj.astype(float), sigma=1.5)
-    bg_mask = blurred < np.percentile(blurred, 80)
-    bg_med  = np.median(blurred[bg_mask])
-    bg_std  = blurred[bg_mask].std() if bg_mask.any() else 1.0
-    thresh  = bg_med + thresh_sigma * bg_std
-    local_mx = maximum_filter(blurred, size=int(min_dist_px)) == blurred
-    return np.argwhere(local_mx & (blurred > thresh))
+    return detect_foci_with_background(max_proj, min_dist_px, thresh_sigma)[1]
 
 
 def compute_background_median(image: np.ndarray, bg_percentile: float = 80) -> float:
     """
     Gaussian-smoothed, bottom-*bg_percentile*-percentile background median --
-    the same convention :func:`detect_beads_2d` itself uses internally for its
-    detection threshold, kept consistent here so the *subtracted* background
-    matches the *detection* background.
-
-    Relocated here (from ``fast_spot_quantification.py``) because it's a
-    generic image-background-estimation helper, not tied to cropping --
-    :func:`detect_foci_per_z` below needs it too, and
-    ``fast_spot_quantification.py`` now imports it from here instead.
+    the background :func:`detect_beads_2d` thresholds against.
     """
+    return _blurred_background(image, bg_percentile)[1]
+
+
+def detect_foci_with_background(
+    image: np.ndarray, min_dist_px: float, thresh_sigma: float,
+) -> Tuple[float, np.ndarray]:
+    """``(compute_background_median(image), detect_beads_2d(image, ...))``
+    with one blur instead of two."""
+    blurred, bg_med, bg_std = _blurred_background(image)
+    local_mx = maximum_filter(blurred, size=int(min_dist_px)) == blurred
+    return bg_med, np.argwhere(local_mx & (blurred > bg_med + thresh_sigma * bg_std))
+
+
+def _blurred_background(image: np.ndarray, bg_percentile: float = 80) -> Tuple[np.ndarray, float, float]:
+    """``(blurred, bg_median, bg_std)``: Gaussian blur (sigma 1.5), then the
+    median/std of pixels below the *bg_percentile* percentile."""
     blurred = gaussian_filter(image.astype(float), sigma=1.5)
     bg_mask = blurred < np.percentile(blurred, bg_percentile)
-    return float(np.median(blurred[bg_mask])) if bg_mask.any() else float(np.median(blurred))
+    if bg_mask.any():
+        return blurred, float(np.median(blurred[bg_mask])), float(blurred[bg_mask].std())
+    return blurred, float(np.median(blurred)), 1.0   # flat image
 
 
 def detect_foci_per_z(
@@ -246,8 +251,7 @@ def detect_foci_per_z(
     rows = []
     for plane, z in zip(frames, z_labels):
         plane_f = plane.astype(np.float32)
-        bg_med = compute_background_median(plane_f)
-        candidates = detect_beads_2d(plane_f, min_dist_px, thresh_sigma)
+        bg_med, candidates = detect_foci_with_background(plane_f, min_dist_px, thresh_sigma)
         for (r, c) in candidates:
             rows.append({
                 "z": z, "row_px": int(r), "col_px": int(c),
@@ -477,7 +481,7 @@ def generate_emitter_positions(
     if density_per_um3 is not None:
         n_emitters = max(1, int(round(density_per_um3 * x_um * y_um * z_um)))
 
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
     return pd.DataFrame({
         "x_um": gen.uniform(0.0, x_um, n_emitters),
         "y_um": gen.uniform(0.0, y_um, n_emitters),
@@ -529,7 +533,7 @@ def simulate_psf_image(
     """
     import math
 
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
     n_z, n_y, n_x = volume_shape_px
     vx, vy, vz    = voxel_size_um
 
@@ -546,12 +550,11 @@ def simulate_psf_image(
 
     # Place emitters on the voxel grid
     volume = np.zeros((n_z, n_y, n_x), dtype=np.float64)
-    for _, em in positions_um.iterrows():
-        iz = int(round(em["z_um"] / vz))
-        iy = int(round(em["y_um"] / vy))
-        ix = int(round(em["x_um"] / vx))
-        if 0 <= iz < n_z and 0 <= iy < n_y and 0 <= ix < n_x:
-            volume[iz, iy, ix] += photon_budget * psf_volume_factor
+    iz = np.round(positions_um["z_um"].to_numpy(float) / vz).astype(int)
+    iy = np.round(positions_um["y_um"].to_numpy(float) / vy).astype(int)
+    ix = np.round(positions_um["x_um"].to_numpy(float) / vx).astype(int)
+    inside = (0 <= iz) & (iz < n_z) & (0 <= iy) & (iy < n_y) & (0 <= ix) & (ix < n_x)
+    np.add.at(volume, (iz[inside], iy[inside], ix[inside]), photon_budget * psf_volume_factor)
 
     # Convolve with separable anisotropic Gaussian (z, y, x order)
     volume = gaussian_filter(volume, sigma=[sig_z_pl, sig_y_px, sig_x_px])
@@ -635,7 +638,7 @@ def simulate_multicolor_stack(
     -------
     {color_nm: (n_z, H, W) uint16 array}
     """
-    gen = np.random.default_rng(rng) if not isinstance(rng, np.random.Generator) else rng
+    gen = np.random.default_rng(rng)   # returns a Generator unchanged
 
     # Build per-colour position tables
     if color_shifts_um is not None:
@@ -738,7 +741,7 @@ def plot_max_projections(
 
     if print_stats:
         header = f"{'Projection':<14}" + "".join(f"  p{p:>3}" for p in stat_pcts)
-        header += f"   vmin    vmax"
+        header += "   vmin    vmax"
         print(header)
         print("-" * len(header))
 

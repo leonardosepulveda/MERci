@@ -64,6 +64,7 @@ def _copy_robocopy(src: Path, dst: Path) -> bool:
         ],
         capture_output=True,
         text=True,
+        errors="replace",   # robocopy prints in the OEM code page; never fail on decoding
     )
     if result.returncode >= 8:
         log.error(
@@ -85,20 +86,9 @@ def _copy_shutil(src: Path, dst: Path) -> bool:
         return False
 
 
-def mirror_dir_sync(src: Path, dst: Path) -> bool:
-    """
-    Mirror directory *src* into *dst* synchronously (blocks the calling
-    thread until done) — for one-off, run-once-and-watch-it-finish syncs
-    (e.g. ``data/mosaic10x``, or the static ``MERci``/``merlin``/``fishtank``
-    folders) where a notebook cell wants the result before moving on, unlike
-    :func:`mirror_tree`/:func:`transfer_round`'s background-threaded copies
-    meant to not block a polling tick loop. Safe to re-run — additive/
-    incremental via the same ``robocopy /E /Z`` (or ``shutil.copytree``)
-    used everywhere else in this module.
-    """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
-    return copy_fn(Path(src), Path(dst))
+def _copy_fn() -> Callable[[Path, Path], bool]:
+    """robocopy on Windows, shutil elsewhere."""
+    return _copy_robocopy if platform.system() == "Windows" else _copy_shutil
 
 
 def mirror_tree(
@@ -125,8 +115,7 @@ def mirror_tree(
     -------
     The started :class:`threading.Thread` (daemon=True).
     """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+    copy_fn = _copy_fn()
 
     def _run() -> None:
         ok = copy_fn(Path(src), Path(dst))
@@ -157,8 +146,7 @@ def transfer_round(
     -------
     The started :class:`threading.Thread` (daemon=True).
     """
-    use_robocopy = platform.system() == "Windows"
-    copy_fn = _copy_robocopy if use_robocopy else _copy_shutil
+    copy_fn = _copy_fn()
 
     label = source_dirs[0].name if source_dirs else "empty"
 

@@ -2,7 +2,7 @@
 # MERci/analysis/cli_compute_texture_stats.py
 """
 Standalone SLURM-array-task entry point for the texture-based BG/FG
-discriminator explored in ``notebooks/misc/measure_tissue_thickness.ipynb``
+discriminator explored in ``notebooks/misc/measure_tissue_thickness_test.ipynb``
 (section 14) -- computes one FOV's per-z Gaussian-smoothed-Laplacian-variance
 profile and writes it under ``--output-dir`` using the exact same
 ``<image-stem>_texture.npy`` filename convention that notebook's own
@@ -31,7 +31,6 @@ to-compute split that cell already does for the local/sequential path).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -41,6 +40,7 @@ import numpy as np
 _MERCI_SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.io import iter_image_frames   # noqa: E402
 from scipy.ndimage    import gaussian_filter, laplace   # noqa: E402
 
@@ -59,9 +59,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--sigma", type=float, default=1.0,
                     help="Gaussian pre-smoothing sigma (pixels) before the Laplacian -- "
                          "must match the notebook's TEXTURE_SMOOTH_SIGMA.")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest line index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
+    cli.add_task_args(p)
     p.add_argument("--frame-width", type=int, default=None,
                     help="Only needed for .dax input (raw byte reshape); ignored for "
                          ".zarr/.tiff, which carry their own shape.")
@@ -69,27 +67,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _read_manifest_line(manifest: Path, index: int) -> Path:
-    lines = [ln.strip() for ln in manifest.read_text().splitlines() if ln.strip()]
-    if not 0 <= index < len(lines):
-        raise IndexError(f"Manifest {manifest} has {len(lines)} line(s); requested index {index}.")
-    return Path(lines[index])
-
-
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    fpath         = _read_manifest_line(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    fpath         = Path(cli.manifest_line(args.manifest, task_id))
     frame_indices = [int(x) for x in args.frame_indices.split(",")]
 
     # Same computation as the notebook's own local/sequential path (section 14):

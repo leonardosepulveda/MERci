@@ -29,8 +29,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 from .alignment import phase_drift, remove_hot_pixels
+from .merlin_config import apply_microscope_orientation
 from .positions import find_grid_neighbor
 
 log = logging.getLogger(__name__)
@@ -58,33 +60,6 @@ _ORIENTATION_COMBINATIONS = [
     for flip_horizontal in (False, True)
     for flip_vertical in (False, True)
 ]
-
-
-def apply_microscope_orientation(
-    img:              np.ndarray,
-    transpose:        bool = False,
-    flip_horizontal:  bool = False,
-    flip_vertical:    bool = False,
-) -> np.ndarray:
-    """
-    Re-orient a raw camera frame to match MERlin's own microscope-parameters
-    convention (``data/configs/merlin/microscope/*.json``'s ``transpose``/
-    ``flip_horizontal``/``flip_vertical`` fields).
-
-    Order matters and is fixed: transpose first, then flip_horizontal
-    (``np.flip(..., axis=1)``, i.e. mirror columns), then flip_vertical
-    (``axis=0``, mirror rows) -- exactly the order used by this project's own
-    historical BC341 reference implementation (``transform_image``, see this
-    module's docstring), which these same microscope-parameters JSON files
-    were written for.
-    """
-    if transpose:
-        img = img.T
-    if flip_horizontal:
-        img = np.flip(img, axis=1)
-    if flip_vertical:
-        img = np.flip(img, axis=0)
-    return img
 
 
 @dataclass
@@ -192,10 +167,10 @@ def register_neighbor_pair(
     stage position (µm), and the registration's normalised RMS error.
     """
     if orient_transpose or orient_flip_horizontal or orient_flip_vertical:
-        anchor_img   = apply_microscope_orientation(
-            anchor_img, orient_transpose, orient_flip_horizontal, orient_flip_vertical)
-        neighbor_img = apply_microscope_orientation(
-            neighbor_img, orient_transpose, orient_flip_horizontal, orient_flip_vertical)
+        orientation = dict(transpose=orient_transpose, flip_horizontal=orient_flip_horizontal,
+                           flip_vertical=orient_flip_vertical)
+        anchor_img   = apply_microscope_orientation(anchor_img, **orientation)
+        neighbor_img = apply_microscope_orientation(neighbor_img, **orientation)
     a_crop, n_crop = crop_overlap(anchor_img, neighbor_img, direction, overlap_fraction)
     shift, error = phase_drift(
         remove_hot_pixels(a_crop), remove_hot_pixels(n_crop), upsample_factor
@@ -315,7 +290,7 @@ def detect_image_orientation(
     tolerance_fraction: float = 0.25,
     upsample_factor:    int = 10,
     seed:               Optional[int] = 0,
-) -> Tuple[Tuple[bool, bool, bool], "pd.DataFrame"]:
+) -> Tuple[Tuple[bool, bool, bool], pd.DataFrame]:
     """
     Audit/fallback search: try all 8 (transpose, flip_horizontal,
     flip_vertical) combinations on a small trial set and report whichever
@@ -447,8 +422,7 @@ def fit_camera_rotation(
 
     Uses ``affine6p`` (``pip install affine6p``) to fit a full 2-D affine
     (rotation + scale + shear + translation) from >= 3 point
-    correspondences by least squares -- the same package this correction's
-    own historical precedent (BC341, see this module's docstring) validated.
+    correspondences by least squares.
 
     Parameters
     ----------

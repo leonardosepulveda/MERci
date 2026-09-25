@@ -23,13 +23,13 @@ exact same function ``RoundScheduler`` calls when running locally.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 _MERCI_SRC = Path(__file__).resolve().parents[2]   # .../MERci/src/MERci/analysis/cli_build_round_mosaic.py -> .../MERci/src
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.config   import ExperimentConfig    # noqa: E402
 from MERci.common.metadata import ExperimentMetadata  # noqa: E402
 from MERci.progress        import ProgressTracker     # noqa: E402
@@ -46,8 +46,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--manifest", type=Path, default=None,
                     help="Text file, one round id per line -- for array-job use "
                          "when several rounds need mosaics in one submission.")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest line index; defaults to $SLURM_ARRAY_TASK_ID.")
+    cli.add_task_args(p)
     p.add_argument("--image-suffix", default=".zarr")
     p.add_argument("--positions-file", type=Path, default=None,
                     help="Positions file to load (defaults to the first "
@@ -60,18 +59,7 @@ def _resolve_round_id(args: argparse.Namespace) -> int:
         return args.round_id
     if args.manifest is None:
         raise SystemExit("Give either --round-id or --manifest.")
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set."
-            )
-        task_id = int(task_id_env)
-    lines = [ln.strip() for ln in args.manifest.read_text().splitlines() if ln.strip()]
-    if not 0 <= task_id < len(lines):
-        raise IndexError(f"Manifest {args.manifest} has {len(lines)} line(s); requested {task_id}.")
-    return int(lines[task_id])
+    return int(cli.manifest_line(args.manifest, cli.task_id(args)))
 
 
 def _resolve_positions_file(sample_dir: Path, override: Path = None) -> Path:
@@ -88,12 +76,8 @@ def main(argv=None) -> None:
     round_id = _resolve_round_id(args)
     sample_dir = args.sample_dir
 
-    config = ExperimentConfig(
-        data_dir       = sample_dir / "data",
-        metadata_dir   = sample_dir / "metadata",
-        analysis_dir   = sample_dir / "analysis",
-        settings_dir   = sample_dir / "settings",
-        round_info_csv = sample_dir / "metadata" / "round_info.csv",
+    config = ExperimentConfig.from_sample_dir(
+        sample_dir,
         positions_txt  = _resolve_positions_file(sample_dir, args.positions_file),
         image_suffix   = args.image_suffix,
     )

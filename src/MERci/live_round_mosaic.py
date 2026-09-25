@@ -67,19 +67,19 @@ from skimage.transform import resize as sk_resize
 
 from .common.config import ExperimentConfig
 from .common.io import is_path_stable, read_image_frames
-from .common.metadata import ExperimentMetadata, RoundInfo, SeriesInfo
-from .acquisition.configs import find_frame_table_for_hal_config
+from .common.metadata import (
+    FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo, first_existing_path,
+)
+from .acquisition.configs import iter_round_frame_tables
 from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
-from .acquisition.positions import find_exterior_fovs
+from .acquisition.positions import find_exterior_fovs, median_nn_distance
 from .analysis.ffc import apply_ffc, compute_ffc_field_for_color, load_ffc_field, save_ffc_field
 from .analysis.fov import create_thumbnail
 from .analysis.round import _layout_tiles
+from .progress import thumbnail_filename
 from .scheduler import resolve_round_flip_y
 from .plots.round_mosaic_plots import show_round_mosaic
 
-# Real imaging_round values start at 1 (acquisition.dave.create_round_info),
-# so 0 is never a real round id.
-FOCUSTEST_ROUND_ID = 0
 
 
 def register_focustest_round(
@@ -95,7 +95,7 @@ def register_focustest_round(
 
     It's a standalone calibration procedure, not a real imaging round in
     ``round_info.csv``, so :meth:`ExperimentMetadata.load` never sees it.
-    Registering it here (as *focustest_round_id*, default 0) lets it show up
+    Registering it here (as *focustest_round_id*) lets it show up
     in a round-selection UI exactly like any other round, with no further
     setup, whenever this experiment actually has a focus-test HAL config and
     its own ``data/focus_test/`` movies.
@@ -206,10 +206,7 @@ class LiveRoundMosaicBuilder:
         # (likely NOT to carry real tissue signal) -- computed once from the
         # full planned FOV grid, independent of what's imaged so far.
         positions = {f: metadata.fovs[f].position for f in metadata.fovs}
-        coords_arr = np.array([positions[f] for f in sorted(positions)])
-        from scipy.spatial import KDTree
-        nn_dist, _ = KDTree(coords_arr).query(coords_arr, k=2)
-        self.step_size_um = float(np.median(nn_dist[:, 1]))
+        self.step_size_um = median_nn_distance([positions[f] for f in sorted(positions)])
         self.exterior_fov_ids: Set[int] = find_exterior_fovs(positions, self.step_size_um)
 
         self._ffc_fields: Dict[float, np.ndarray] = {}
@@ -233,14 +230,7 @@ class LiveRoundMosaicBuilder:
         leave the round with no resolved colors at all.
         """
         color_frames: Dict[float, int] = {}
-        for s in self.metadata.series_for_round(round_id):
-            if not s.hal_config:
-                continue
-            frame_table_path = find_frame_table_for_hal_config(
-                self.config.settings_dir / s.hal_config, self.config.metadata_dir)
-            if frame_table_path is None:
-                continue
-            frame_table = pd.read_csv(frame_table_path)
+        for _, frame_table in iter_round_frame_tables(round_id, self.config, self.metadata):
             for color in sorted(frame_table["color"].dropna().unique()):
                 if round_id != self.focustest_round_id and any(
                     round(color) == round(excluded) for excluded in self.excluded_colors
@@ -255,31 +245,15 @@ class LiveRoundMosaicBuilder:
                           f"{resolved_z:.1f} um (requested {self.target_z_um:.1f} um) -- frame {frame_idx}")
         return color_frames
 
-    def resolve_round_by_imaging_type(self, imaging_type: str) -> Optional[int]:
-        """Return the round id whose series has ``imaging_type == imaging_type``, else None."""
-        target = imaging_type.strip().lower()
-        for round_id in sorted(self.metadata.rounds):
-            for s in self.metadata.series_for_round(round_id):
-                if (s.imaging_type or "").strip().lower() == target:
-                    return round_id
-        return None
-
     def resolve_round_token(self, token) -> int:
         """``int`` -> that round id directly; ``str`` -> resolved by imaging_type."""
         if isinstance(token, str):
-            round_id = self.resolve_round_by_imaging_type(token)
-            if round_id is None:
-                raise ValueError(f"No round has a series with imaging_type={token!r} "
-                                  f"-- check round_info.csv, or use an explicit round id.")
-            return round_id
+            return self.metadata.round_for_imaging_type(token)
         return int(token)
 
     def round_label_for(self, round_id: int):
         """``"cells"`` if *round_id* has a cells series, else *round_id* itself."""
-        for s in self.metadata.series_for_round(round_id):
-            if (s.imaging_type or "").strip().lower() == "cells":
-                return "cells"
-        return round_id
+        return "cells" if self.metadata.is_cells_round(round_id) else round_id
 
     # ── FOV / processed-state bookkeeping ───────────────────────────────────
 
@@ -287,21 +261,19 @@ class LiveRoundMosaicBuilder:
         series = self.metadata.series_for_round(round_id)
         return [
             fov_id for fov_id in sorted(self.metadata.fovs)
-            if any(s.resolve_path(fov_id, self.config.image_suffix).exists() for s in series)
+            if first_existing_path(series, fov_id, self.config.image_suffix) is not None
         ]
 
     def thumbnail_path_for(self, image_path: Path, frame_idx: int) -> Path:
-        return self.thumbnails_dir / f"{image_path.stem}_frame{frame_idx:03d}.png"
+        return self.thumbnails_dir / thumbnail_filename(image_path.stem, frame_idx)
 
     def fov_is_processed(
         self, round_id: int, fov_id: int, color_frames: Dict[float, int], series: List[SeriesInfo],
     ) -> bool:
         """True iff *fov_id* has a cached thumbnail for EVERY color of this round."""
-        existing = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-        existing = [p for p in existing if p.exists()]
-        if not existing:
+        image_path = first_existing_path(series, fov_id, self.config.image_suffix)
+        if image_path is None:
             return False
-        image_path = existing[0]
         return all(self.thumbnail_path_for(image_path, frame_idx).exists()
                    for frame_idx in color_frames.values())
 
@@ -429,10 +401,9 @@ class LiveRoundMosaicBuilder:
 
         samples = []
         for fov_id in candidate_ids:
-            paths = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-            existing = [p for p in paths if p.exists() and is_path_stable(p)]
-            if existing:
-                samples.append((existing[0], frame_idx))
+            path = first_existing_path(series, fov_id, self.config.image_suffix, stable=True)
+            if path is not None:
+                samples.append((path, frame_idx))
         if not samples:
             return None
 
@@ -484,18 +455,13 @@ class LiveRoundMosaicBuilder:
             if self.enable_ffc else None
         pooled = []
         for fov_id in sample_ids:
-            paths = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-            # is_path_stable, not just .exists(): a sampled FOV's file can
-            # already exist while HAL is still mid-write -- reading a
-            # not-yet-written frame from it would raise the same
-            # IndexError/truncated-read build_round_mosaic otherwise guards
-            # against. Skipping it here just shrinks this one-time sample
-            # pool by one; a later cycle recomputes and caches the real range.
-            existing = [p for p in paths if p.exists() and is_path_stable(p)]
-            if not existing:
+            # stable=True: a file HAL is still writing can't be read yet;
+            # skipping it only shrinks this one-time sample.
+            path = first_existing_path(series, fov_id, self.config.image_suffix, stable=True)
+            if path is None:
                 continue
             try:
-                frame = read_image_frames(existing[0], [frame_idx],
+                frame = read_image_frames(path, [frame_idx],
                                            frame_width=self.config.frame_width,
                                            frame_height=self.config.frame_height)[0]
             except Exception as exc:
@@ -534,22 +500,22 @@ class LiveRoundMosaicBuilder:
         arrays :meth:`get_canvas` holds).
         """
         series = self.metadata.series_for_round(round_id)
-        last_redraw = [0.0]      # mutable cells so maybe_redraw can update them
-        last_disk_save = [0.0]
+        last_redraw = last_disk_save = 0.0
 
         def maybe_redraw(force: bool = False) -> None:
+            nonlocal last_redraw, last_disk_save
             now = time.time()
-            if not (force or (now - last_redraw[0]) >= self.live_redraw_min_interval_sec):
+            if not (force or (now - last_redraw) >= self.live_redraw_min_interval_sec):
                 return
-            save_full_res = force or (now - last_disk_save[0]) >= self.disk_save_min_interval_sec
+            save_full_res = force or (now - last_disk_save) >= self.disk_save_min_interval_sec
             show_round_mosaic(
                 round_id, {c: self.get_canvas(round_id, c) for c in color_frames}, label,
                 mosaic_paths={c: self.mosaic_path(round_id, c) for c in color_frames},
                 live_preview_max_px=self.live_preview_max_px, save_full_res=save_full_res,
             )
-            last_redraw[0] = now
+            last_redraw = now
             if save_full_res:
-                last_disk_save[0] = now
+                last_disk_save = now
 
         for color_nm, frame_idx in color_frames.items():
             ffc_field = self.get_or_compute_ffc_field(color_nm, frame_idx, fov_ids, series)
@@ -571,11 +537,9 @@ class LiveRoundMosaicBuilder:
             vmin_vmax = self.get_or_compute_contrast_range(round_id, color_nm, frame_idx, series, fov_ids)
 
             for fov_id in still_pending:
-                existing = [s.resolve_path(fov_id, self.config.image_suffix) for s in series]
-                existing = [p for p in existing if p.exists()]
-                if not existing:
+                image_path = first_existing_path(series, fov_id, self.config.image_suffix)
+                if image_path is None:
                     continue
-                image_path = existing[0]
 
                 if not is_path_stable(image_path):
                     print(f"  round {round_id}, {color_nm:.0f} nm, FOV {fov_id}: "

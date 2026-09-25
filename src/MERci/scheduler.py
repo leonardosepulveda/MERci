@@ -1,15 +1,12 @@
 # MERci/scheduler.py
 """
-High-level scheduling logic for the three notebook types.
+High-level scheduling logic for the scheduler notebooks.
 
 FOVScheduler
     → continuously processes new image files during fluidics windows
 
 RoundScheduler
     → monitors FOV progress; creates mosaics as soon as each round is complete
-
-ExperimentScheduler
-    → blocks until all rounds are done, then runs an experiment-level callback
 """
 from __future__ import annotations
 
@@ -17,13 +14,12 @@ import logging
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
-import pandas as pd
 
 from .common.config   import ExperimentConfig
 from .common.metadata import ExperimentMetadata
-from .common.io       import discover_image_files
+from .common.io       import filter_stable_paths, find_image_paths
 from .transfer        import transfer_round, mirror_tree
 from .progress        import ProgressTracker
 from .state           import ExperimentStateMonitor, ExperimentPhase
@@ -35,8 +31,8 @@ from .analysis.round  import (
 from .analysis import ffc as ffc_mod
 from .acquisition.configs import (
     read_hal_flip_vertical,
-    find_frame_table_for_hal_config,
     get_color_frame_indices,
+    iter_round_frame_tables,
 )
 
 log = logging.getLogger(__name__)
@@ -98,15 +94,10 @@ def resolve_round_color_frame_indices(
     if config.settings_dir is None or config.metadata_dir is None:
         return {}
 
-    for s in metadata.series_for_round(round_id):
-        if s.hal_config:
-            hal_path = config.settings_dir / s.hal_config
-            ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
-            if ft_path is not None:
-                ft = pd.read_csv(ft_path, index_col=0)
-                indices = get_color_frame_indices(ft)
-                if indices:
-                    return indices
+    for _, ft in iter_round_frame_tables(round_id, config, metadata):
+        indices = get_color_frame_indices(ft)
+        if indices:
+            return indices
     log.warning(
         "Could not determine color frame indices for round %d; "
         "falling back to frame 0.", round_id
@@ -326,10 +317,6 @@ class FOVScheduler:
 
     # ── Internal processing ───────────────────────────────────────────────────
 
-    def _build_task(self, fpath: Path) -> Tuple[Path, dict]:
-        """Build the (image_path, kwargs) pair passed to ``analyze_file``."""
-        return fpath, build_fov_task_kwargs(fpath, self.config, self.tracker)
-
     def _process_pending(self) -> int:
         """Discover and analyse all pending FOV files. Returns count processed.
 
@@ -339,19 +326,16 @@ class FOVScheduler:
         """
         root = self.config.analysis_data_dir
         try:
-            all_files = sorted(set(discover_image_files(root, self.config.image_suffix)))
+            all_files = find_image_paths(root, self.config.image_suffix)
         except OSError:
             log.warning("Could not scan %s (disk unreachable?) — skipping.", root)
             all_files = []
+        # Cheap sentinel/subset filters first; the stability wait only for what's left.
         pending = self.tracker.pending_fov_files(all_files)
-
-        # Restrict to the requested FOV subset when specified
         if self.config.fov_subset is not None:
             fov_set = set(self.config.fov_subset)
-            pending = [
-                f for f in pending
-                if self.meta.fov_id_of_file(f) in fov_set
-            ]
+            pending = [f for f in pending if self.meta.fov_id_of_file(f) in fov_set]
+        pending = filter_stable_paths(pending)
 
         log.info(
             "Pending: %d of %d image files need FOV analysis.",
@@ -360,7 +344,7 @@ class FOVScheduler:
         if not pending:
             return 0
 
-        tasks = [self._build_task(f) for f in pending]
+        tasks = [(f, build_fov_task_kwargs(f, self.config, self.tracker)) for f in pending]
         n_workers = self.config.resolved_n_workers
 
         # Serial path (single worker) — simpler, in-process, easier to debug.
@@ -451,7 +435,7 @@ class RoundScheduler:
         count = 0
         for rid in pending:
             try:
-                self._analyse_one_round(rid)
+                build_round_mosaics(rid, self.config, self.meta, self.tracker)
                 count += 1
             except Exception:
                 log.exception("Error building mosaic for round %d", rid)
@@ -462,10 +446,6 @@ class RoundScheduler:
         return count
 
     # ── Transfer helpers ──────────────────────────────────────────────────────
-
-    def _source_dirs_for_round(self, round_id: int) -> List[Path]:
-        """Return the unique data directories that hold files for *round_id*."""
-        return source_dirs_for_round(round_id, self.meta)
 
     def _process_pending_transfers(self, phase: ExperimentPhase) -> None:
         """
@@ -496,7 +476,7 @@ class RoundScheduler:
 
     def _start_transfer_for_round(self, round_id: int, time_remaining: Optional[float] = None) -> None:
         """Launch a background thread to copy round *round_id* to transfer_dest."""
-        src_dirs = self._source_dirs_for_round(round_id)
+        src_dirs = source_dirs_for_round(round_id, self.meta)
         if not src_dirs:
             log.warning("Round %d: no source dirs found — skipping transfer.", round_id)
             return
@@ -521,72 +501,3 @@ class RoundScheduler:
                 log.error("Round %d: transfer failed — will retry next tick.", round_id)
 
         transfer_round(src_dirs, self.config.transfer_dest, on_complete=_on_done)
-
-    # ── Round analysis helpers ────────────────────────────────────────────────
-
-    def _resolve_flip_y(self, round_id: int) -> bool:
-        """Return the flip_y value for *round_id*."""
-        return resolve_round_flip_y(round_id, self.config, self.meta)
-
-    def _color_frame_indices(self, round_id: int) -> Dict[float, int]:
-        """Return {color_nm: frame_idx} for the middle-z slice of *round_id*."""
-        return resolve_round_color_frame_indices(round_id, self.config, self.meta)
-
-    def _analyse_one_round(self, round_id: int) -> None:
-        build_round_mosaics(round_id, self.config, self.meta, self.tracker)
-
-
-# ── Experiment Scheduler ──────────────────────────────────────────────────────
-
-class ExperimentScheduler:
-    """
-    Waits until all round-level analyses are complete, then triggers a
-    user-supplied experiment-level analysis function.
-    """
-
-    def __init__(
-        self,
-        config: ExperimentConfig,
-        metadata: ExperimentMetadata,
-        tracker: ProgressTracker,
-    ) -> None:
-        self.config  = config
-        self.meta    = metadata
-        self.tracker = tracker
-
-    def all_rounds_complete(self) -> bool:
-        return all(
-            self.tracker.is_round_done(rid)
-            for rid in self.meta.valid_round_ids()
-        )
-
-    def wait_and_run(
-        self,
-        experiment_fn: Callable[["ExperimentConfig", "ExperimentMetadata"], None],
-        poll_interval: float = 120.0,
-        on_tick: Optional[Callable[[dict], None]] = None,
-    ) -> None:
-        """
-        Block until all rounds are done, then call
-        ``experiment_fn(config, metadata)``.
-
-        Parameters
-        ----------
-        experiment_fn : your experiment-level analysis function
-        poll_interval : seconds between progress checks
-        on_tick       : called with the current summary dict on every check
-        """
-        log.info("Experiment scheduler started; polling every %.0f s.", poll_interval)
-        while not self.all_rounds_complete():
-            summary = self.tracker.summary(self.meta)
-            log.info(
-                "Waiting: rounds %d/%d done, files %d/%d done.",
-                summary["rounds_done"], summary["rounds_total"],
-                summary["files_fov_done"], summary["files_total"],
-            )
-            if on_tick is not None:
-                on_tick(summary)
-            time.sleep(poll_interval)
-
-        log.info("All rounds complete → running experiment-level analysis.")
-        experiment_fn(self.config, self.meta)

@@ -33,8 +33,6 @@ to be ``pip install``ed on the cluster.
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
 from pathlib import Path
 
@@ -44,6 +42,7 @@ import pandas as pd
 _MERCI_SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_MERCI_SRC))
 
+from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.metadata import ExperimentMetadata          # noqa: E402
 from MERci.analysis.completeness import check_one_file         # noqa: E402
 
@@ -60,34 +59,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
                     help="CSV with a fov_id column -- one row per pending FOV.")
     p.add_argument("--output-dir", required=True, type=Path,
                     help="Directory to write 'fov<fov_id>_completeness.csv' into.")
-    p.add_argument("--array-task-id", type=int, default=None,
-                    help="0-based manifest row index; defaults to $SLURM_ARRAY_TASK_ID "
-                         "(useful for manual testing outside SLURM).")
+    cli.add_task_args(p)
     return p.parse_args(argv)
-
-
-def _read_manifest_fov_id(manifest: Path, index: int) -> int:
-    with open(manifest, newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    if not 0 <= index < len(rows):
-        raise IndexError(f"Manifest {manifest} has {len(rows)} row(s); requested index {index}.")
-    return int(rows[index]["fov_id"])
 
 
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
-    task_id = args.array_task_id
-    if task_id is None:
-        task_id_env = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if task_id_env is None:
-            raise SystemExit(
-                "No --array-task-id given and $SLURM_ARRAY_TASK_ID is not set "
-                "(this script is meant to run as one task of a SLURM array job)."
-            )
-        task_id = int(task_id_env)
-
-    fov_id = _read_manifest_fov_id(args.manifest, task_id)
+    task_id = cli.task_id(args)
+    fov_id = int(cli.manifest_row(args.manifest, task_id)["fov_id"])
     round_ids = {int(r) for r in args.round_ids.split(",")}
 
     meta = ExperimentMetadata.load(args.round_info_csv, args.positions_txt, args.data_dir,

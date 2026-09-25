@@ -24,10 +24,10 @@ import numpy as np
 import pandas as pd
 
 from ..common.config import ExperimentConfig
-from ..common.metadata import ExperimentMetadata, SeriesInfo
+from ..common.metadata import ExperimentMetadata, SeriesInfo, first_existing_path
 from ..common.io import read_image_frames
-from ..acquisition.configs import find_frame_table_for_hal_config, get_all_color_frame_indices
-from .spot_localization import detect_beads_2d, compute_background_median
+from ..acquisition.configs import get_all_color_frame_indices, iter_round_frame_tables
+from .spot_localization import detect_foci_with_background
 
 
 def evenly_spaced_picks(items: Sequence, n: int) -> List:
@@ -70,14 +70,7 @@ def resolve_round_color_frame_indices(
     ascending-z list for that color.
     """
     color_frames: Dict[float, List[int]] = {}
-    for s in metadata.series_for_round(round_id):
-        if not s.hal_config:
-            continue
-        frame_table_path = find_frame_table_for_hal_config(
-            config.settings_dir / s.hal_config, config.metadata_dir)
-        if frame_table_path is None:
-            continue
-        frame_table = pd.read_csv(frame_table_path)
+    for _, frame_table in iter_round_frame_tables(round_id, config, metadata):
         for color in sorted(frame_table["color"].dropna().unique()):
             if any(round(color) == round(excluded) for excluded in excluded_colors):
                 continue
@@ -116,8 +109,7 @@ def detect_foci_in_crop(frames: np.ndarray, crop_size: Optional[int], min_dist_p
     """
     cropped = np.stack([crop_center(f, crop_size) for f in frames], axis=0)
     max_proj = cropped.max(axis=0).astype(np.float32)
-    bg_med = compute_background_median(max_proj)
-    candidates = detect_beads_2d(max_proj, min_dist_px, thresh_sigma)
+    bg_med, candidates = detect_foci_with_background(max_proj, min_dist_px, thresh_sigma)
     return max_proj, bg_med, candidates
 
 
@@ -135,10 +127,10 @@ def compute_fov_round_color_spots(
     *fov_id* isn't imaged yet for this round -- so the caller can retry on a
     later run rather than caching an empty/wrong result.
     """
-    existing = [p for p in (s.resolve_path(fov_id, config.image_suffix) for s in series) if p.exists()]
-    if not existing:
+    image_path = first_existing_path(series, fov_id, config.image_suffix)
+    if image_path is None:
         return None
-    frames = read_image_frames(existing[0], frame_indices,
+    frames = read_image_frames(image_path, frame_indices,
                                 frame_width=config.frame_width, frame_height=config.frame_height)
     max_proj, bg_med, candidates = detect_foci_in_crop(frames, crop_size, min_dist_px, thresh_sigma)
     rows = [

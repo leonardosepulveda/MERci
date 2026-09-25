@@ -65,7 +65,7 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
 
     Parameters
     ----------
-    microscope : ``"MF3"`` or ``"MF5"``
+    microscope : any key of ``_COLOUR_TO_CHANNEL`` (e.g. ``"MF3"``, ``"ST2"``)
     """
     if microscope not in _COLOUR_TO_CHANNEL:
         raise ValueError(
@@ -485,7 +485,7 @@ def sequence_stem(kind: str, name: str, tier: Optional[str] = None) -> str:
     Parameters
     ----------
     kind : ``"bits"``, ``"cells"``, ``"transit"``, ``"drift"`` (a stage-
-           drift-check round -- see ``notebooks/misc/calculate_stage_drift.ipynb``),
+           drift-check round -- see ``notebooks/misc/stage_drift_beads.ipynb``),
            or ``"focustest"`` (the auto-generated focus-lock-test movie config
            -- see ``04_create_dave_config.ipynb``'s "Focus-lock test recipe"
            section)
@@ -654,49 +654,35 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
     Build the text content of the ``<z_offsets>`` XML element from
     ``frame_table["z"]``.
 
-    Values are laid out in rows matching the colour sequence length (the most
-    common consecutive-run length), with a comma after every value except the
-    last.  Bead and end frames with a different run length are handled gracefully.
+    One row per colour sequence (row width = the most common run length of
+    equal consecutive z values), a comma after every value but the last.
+    Values keep their full precision (``1.25`` stays ``1.25``; HAL moves the
+    stage to exactly what is written here).
     """
     from collections import Counter
+    from itertools import groupby
 
     z_vals = frame_table["z"].astype(float).tolist()
-    n      = len(z_vals)
+    run_lengths = [len(list(g)) for _, g in groupby(z_vals)]
+    counts = Counter(run_lengths)
+    group_size = max(counts, key=lambda k: (counts[k], k)) if counts else 1
 
-    # Determine row width from the most common consecutive run length
-    run_lengths: List[int] = []
-    count, last = 0, object()
-    for val in z_vals:
-        if val == last:
-            count += 1
-        else:
-            if last is not object():
-                run_lengths.append(count)
-            count, last = 1, val
-    if count:
-        run_lengths.append(count)
+    def _fmt(v: float) -> str:
+        t = f"{v:.4f}".rstrip("0")
+        return t + "0" if t.endswith(".") else t
 
-    group_size = Counter(run_lengths).most_common(1)[0][0] if run_lengths else 1
-
-    # Format all z values in rows of group_size
-    indent  = "         "
-    lines:  List[str] = []
-    row_buf: List[str] = []
-
-    for i, val in enumerate(z_vals):
-        suffix = "," if i < n - 1 else ""
-        row_buf.append(f"{val:.1f}{suffix}")
-        if len(row_buf) == group_size:
-            lines.append(indent + "  ".join(row_buf))
-            row_buf = []
-
-    if row_buf:
-        lines.append(indent + "  ".join(row_buf))
-
+    items = [_fmt(v) + ("," if i < len(z_vals) - 1 else "") for i, v in enumerate(z_vals)]
+    indent = "         "
+    lines = [indent + "  ".join(items[i:i + group_size]) for i in range(0, len(items), group_size)]
     return "\n" + "\n".join(lines) + "\n      "
 
 
 # ── HAL config inspection helpers ────────────────────────────────────────────
+
+def _read_hal_text(hal_config_path: Path) -> str:
+    with open(hal_config_path, "rb") as fh:
+        return fh.read().decode("ISO-8859-1")
+
 
 def read_hal_flip_vertical(hal_config_path: Path) -> bool:
     """
@@ -704,8 +690,7 @@ def read_hal_flip_vertical(hal_config_path: Path) -> bool:
     HAL config at *hal_config_path*.  Returns ``False`` on any parse error.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<flip_vertical[^>]*>(\d+)</flip_vertical>", text)
         return bool(m and int(m.group(1)) == 1)
     except Exception:
@@ -718,8 +703,7 @@ def read_hal_exposure_time(hal_config_path: Path) -> "Optional[float]":
     *hal_config_path*, or ``None`` on any parse error or missing element.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<exposure_time[^>]*>([\d.]+)</exposure_time>", text)
         return float(m.group(1)) if m else None
     except Exception:
@@ -741,8 +725,7 @@ def find_frame_table_for_hal_config(
     Returns ``None`` when the frame table cannot be found.
     """
     try:
-        with open(hal_config_path, "rb") as fh:
-            text = fh.read().decode("ISO-8859-1")
+        text = _read_hal_text(hal_config_path)
         m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
         if not m:
             return None
@@ -761,6 +744,31 @@ def find_frame_table_for_hal_config(
         return None
     except Exception:
         return None
+
+
+def iter_round_frame_tables(round_id: int, config, metadata):
+    """
+    Yield ``(series, frame_table)`` for each of *round_id*'s series whose HAL
+    config resolves to a frame table (:func:`find_frame_table_for_hal_config`).
+    Frame tables are read with ``index_col=0``: the index is the frame number.
+    """
+    if config.settings_dir is None:
+        return
+    for s in metadata.series_for_round(round_id):
+        if not s.hal_config:
+            continue
+        ft_path = find_frame_table_for_hal_config(Path(config.settings_dir) / s.hal_config,
+                                                  config.metadata_dir)
+        if ft_path is not None:
+            yield s, pd.read_csv(ft_path, index_col=0)
+
+
+def load_round_frame_table(round_id: int, config, metadata) -> pd.DataFrame:
+    """Frame table of *round_id*'s first series that has one (see
+    :func:`iter_round_frame_tables`). Raises FileNotFoundError if none does."""
+    for _, frame_table in iter_round_frame_tables(round_id, config, metadata):
+        return frame_table
+    raise FileNotFoundError(f"No frame table found for round {round_id}")
 
 
 def get_color_frame_indices(
@@ -851,8 +859,7 @@ def read_shutter_reference(hal_config_path: Path) -> str:
     ValueError
         If no ``<shutters>`` element is found.
     """
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<shutters[^>]*>([^<]+)</shutters>", text)
     if not m:
         raise ValueError(
@@ -863,8 +870,7 @@ def read_shutter_reference(hal_config_path: Path) -> str:
 
 def read_hal_frame_count(hal_config_path: Path) -> "Optional[int]":
     """Return the ``<frames>`` value from the HAL config, or ``None`` if absent."""
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<frames[^>]*>\s*(\d+)\s*</frames>", text)
     return int(m.group(1)) if m else None
 
@@ -882,8 +888,7 @@ def parse_z_offsets(hal_config_path: Path) -> List[float]:
         does not use the hardware Z-nanopositioner scan — so per-frame z cannot
         be determined.
     """
-    with open(hal_config_path, "rb") as fh:
-        text = fh.read().decode("ISO-8859-1")
+    text = _read_hal_text(hal_config_path)
     m = re.search(r"<z_offsets[^>]*>(.*?)</z_offsets>", text, flags=re.DOTALL)
     if not m or not m.group(1).strip():
         raise ValueError(

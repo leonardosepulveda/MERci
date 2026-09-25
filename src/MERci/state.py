@@ -1,4 +1,4 @@
-# MERci/acquisition/state.py
+# MERci/state.py
 """
 Determine whether the microscope is currently imaging or idle, and compute
 the time elapsed since the last imaging round ended.
@@ -21,8 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from .common.config import ExperimentConfig
 
@@ -101,29 +100,6 @@ class ExperimentStateMonitor:
             time_since_imaging=tsi,
             should_analyze=in_window,
         )
-
-    def wait_for_analysis_window(
-        self,
-        poll_interval: float = 30.0,
-        on_tick: Optional[Callable[["ExperimentPhase"], None]] = None,
-    ) -> ExperimentPhase:
-        """
-        Block until ``should_analyze`` is True, then return the phase.
-
-        Parameters
-        ----------
-        poll_interval : seconds between checks
-        on_tick       : optional callback called with the phase on every check
-                        (use this in notebooks to display a live status line)
-        """
-        while True:
-            phase = self.snapshot()
-            if on_tick is not None:
-                on_tick(phase)
-            if phase.should_analyze:
-                return phase
-            log.debug("Not in analysis window: %s", phase)
-            time.sleep(poll_interval)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

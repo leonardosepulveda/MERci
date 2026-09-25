@@ -1,4 +1,4 @@
-# MERci/fov.py
+# MERci/analysis/fov.py
 """
 FOV-level analyses.  All public functions accept a pre-loaded numpy array
 (so the scheduler can read the file once and pass it to multiple functions).
@@ -20,12 +20,10 @@ counter_mean/counter_percentile/rebin_counter/tpc_from_counter
 tpc_profile_from_counters  – per-z true-pixel-count profile (z_first_um/z_last_um/
                               is_contiguous) purely from a compute_channel_counters() result
 intensity_percentiles_from_counters/measure_intensity_percentiles/
-load_intensity_percentiles/load_all_intensity_percentiles
+load_all_intensity_percentiles
                             – per-frame (frame, z, color, min, p<N>..., max) intensity
                               table, exact percentiles derived from a
                               compute_channel_counters() result, saved/loaded as parquet
-resolve_round_by_imaging_type – (imaging_round, frame_table) for round_info.csv's first
-                              row matching a given imaging_type (e.g. "cells")
 compute_tissue_fraction     – per-FOV true-pixel-count tissue coverage (0-1), same
                               method/estimator as misc/measure_tissue_thickness_test.ipynb
 resolve_barcode_bit_lookup  – {bit: (round_id, frame_index)} for every combinatorial
@@ -43,6 +41,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..progress import thumbnail_filename
+
 log = logging.getLogger(__name__)
 
 
@@ -52,13 +52,24 @@ def _atomic_save(path: Path, save_fn) -> None:
     """
     Call ``save_fn(tmp_path)`` then rename ``tmp_path`` → ``path`` atomically.
     Prevents other processes from reading a partially-written output file.
+    On Windows the rename fails while another process has *path* open (e.g.
+    a viewer notebook reading it), so it is retried a few times.
     """
+    import time
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".tmp_{os.getpid()}_{path.name}")
     try:
         save_fn(tmp)
-        tmp.replace(path)   # atomic on POSIX; overwrites destination
+        for attempt in range(5):
+            try:
+                tmp.replace(path)   # atomic; overwrites destination
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
     except Exception:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
@@ -153,7 +164,7 @@ def create_thumbnails_for_stack(
 
     paths = []
     for fi in frame_indices:
-        out = Path(output_dir) / f"{stem}_frame{fi:03d}.png"
+        out = Path(output_dir) / thumbnail_filename(stem, fi)
         if not out.exists():
             create_thumbnail(stack[fi], out, target_size, percentile_clip)
         paths.append(out)
@@ -186,17 +197,18 @@ def measure_stats(
     """
     records = []
     for fi, frame in enumerate(stack):
-        flat = frame.ravel().astype(np.float64)
+        flat = frame.ravel()
+        p01, median, p99 = np.percentile(flat, [1, 50, 99])
         records.append({
             "file":   source_filename,
             "frame":  fi,
             "min":    int(flat.min()),
             "max":    int(flat.max()),
-            "mean":   float(flat.mean()),
-            "median": float(np.median(flat)),
-            "std":    float(flat.std()),
-            "p01":    float(np.percentile(flat,  1)),
-            "p99":    float(np.percentile(flat, 99)),
+            "mean":   float(flat.mean(dtype=np.float64)),
+            "median": float(median),
+            "std":    float(flat.std(dtype=np.float64)),
+            "p01":    float(p01),
+            "p99":    float(p99),
         })
 
     df = pd.DataFrame(records)
@@ -240,11 +252,17 @@ def get_histogram(
 
     n_frames = len(stack)
     all_counts = np.zeros((n_frames, bins), dtype=np.int64)
-    edges: Optional[np.ndarray] = None
+    edges = np.histogram_bin_edges([], bins=bins, range=hist_range)
+    # uint16 over the full range with 2**k bins: bin = value >> (16 - k), same
+    # assignment as np.histogram (checked for every value) but O(n), no sort.
+    shift = 16 - (bins.bit_length() - 1)
+    fast = (tuple(hist_range) == (0, 65535) and bins & (bins - 1) == 0 and 0 <= shift <= 16)
 
     for fi, frame in enumerate(stack):
-        counts, edges = np.histogram(frame.ravel(), bins=bins, range=hist_range)
-        all_counts[fi] = counts
+        if fast and frame.dtype == np.uint16:
+            all_counts[fi] = np.bincount(frame.ravel() >> shift, minlength=bins)
+        else:
+            all_counts[fi] = np.histogram(frame.ravel(), bins=bins, range=hist_range)[0]
 
     bin_centers = 0.5 * (edges[:-1] + edges[1:])
 
@@ -323,40 +341,6 @@ def analyze_file(
     sentinel = Path(sentinel_path)
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.touch()
-    return image_path.name
-
-
-def compute_histogram_only(
-    image_path:      Path,
-    histogram_path:  Path,
-    frame_width:     Optional[int]      = None,
-    frame_height:    Optional[int]      = None,
-    histogram_bins:  int                = 512,
-    histogram_range: Tuple[int, int]    = (0, 65535),
-) -> str:
-    """
-    Read one image file's stack and save its per-frame histogram --
-    unlike :func:`analyze_file`, does NOT also compute thumbnails/stats,
-    for callers that only need the histogram (e.g. a process-pool-
-    parallelized backfill outside the standard FOV-analysis pipeline).
-
-    Top-level, picklable function so it can be dispatched to a
-    :class:`concurrent.futures.ProcessPoolExecutor` worker, same
-    convention as :func:`analyze_file`.
-
-    Returns
-    -------
-    The image filename (for logging by the parent).
-    """
-    from MERci.common.io import read_image
-
-    image_path = Path(image_path)
-    stack = read_image(image_path, frame_width=frame_width, frame_height=frame_height)
-    try:
-        if not Path(histogram_path).exists():
-            get_histogram(stack, Path(histogram_path), bins=histogram_bins, hist_range=histogram_range)
-    finally:
-        del stack
     return image_path.name
 
 
@@ -533,12 +517,9 @@ def measure_intensity_percentiles(
 
     Reads every frame in *frame_table* via :func:`compute_channel_counters`
     (frame-selective, one frame decoded at a time) rather than a single
-    whole-stack :func:`~MERci.common.io.read_image` call -- a benchmark
-    against real lineage-tracing FOVs (215 frames, 2304x2304 uint16) showed
-    both approaches cost about the same wall time (~45-55s, dominated by
-    215 calls to ``numpy.unique``, not by I/O), but the frame-selective
-    read peaks at ~250MB instead of ~4.8GB, since it never holds the whole
-    stack in memory at once.
+    whole-stack :func:`~MERci.common.io.read_image` call: similar wall time,
+    but peak memory ~250MB instead of ~4.8GB for a 215-frame 2304x2304
+    uint16 stack.
 
     Parameters
     ----------
@@ -561,11 +542,6 @@ def measure_intensity_percentiles(
     _atomic_save(output_path, lambda tmp: df.to_parquet(str(tmp), index=False))
     log.debug("Intensity percentiles saved (%d frames): %s", len(df), output_path)
     return df
-
-
-def load_intensity_percentiles(parquet_path: Path) -> pd.DataFrame:
-    """Load a previously saved :func:`measure_intensity_percentiles` parquet file."""
-    return pd.read_parquet(parquet_path)
 
 
 def load_all_intensity_percentiles(output_dir: Path) -> pd.DataFrame:
@@ -634,29 +610,6 @@ def tpc_profile_from_counters(channel_counters: Dict, threshold: float, tpc_thre
 
 # ── Tissue fraction (per-FOV, single-channel true-pixel-count coverage) ────────
 
-def resolve_round_by_imaging_type(config, imaging_type: str) -> Tuple[int, pd.DataFrame]:
-    """
-    ``(imaging_round, frame_table)`` for ``round_info.csv``'s first row whose
-    ``imaging_type`` matches (e.g. ``"cells"``).
-
-    Raises
-    ------
-    ValueError if no round has that ``imaging_type``.
-    """
-    from ..acquisition.configs import find_frame_table_for_hal_config
-
-    round_info = pd.read_csv(config.round_info_csv)
-    match = round_info.loc[round_info["imaging_type"] == imaging_type]
-    if match.empty:
-        raise ValueError(f"No round with imaging_type={imaging_type!r} in {config.round_info_csv}")
-    row = match.iloc[0]
-    round_id = int(row["imaging_round"])
-    hal_path = config.settings_dir / row["hal_config"]
-    ft_path  = find_frame_table_for_hal_config(hal_path, config.metadata_dir)
-    frame_table = pd.read_csv(ft_path, index_col=0)
-    return round_id, frame_table
-
-
 def compute_tissue_fraction(
     config, meta, cache_dir: Path, label: str,
     *, channel_nm: float = 405.0, n_background_frames: int = 10,
@@ -695,7 +648,9 @@ def compute_tissue_fraction(
     from ..common.io import read_image_frames
     from ..progress_display import ProgressReporter
 
-    round_id, frame_table = resolve_round_by_imaging_type(config, "cells")
+    from ..acquisition.configs import load_round_frame_table
+    round_id = meta.round_for_imaging_type("cells")
+    frame_table = load_round_frame_table(round_id, config, meta)
     channel_frames  = frame_table[frame_table["color"].round(0) == round(channel_nm)].sort_values("z")
     z_frame_indices = list(zip(channel_frames.index.tolist(), channel_frames["z"].tolist()))
     if not z_frame_indices:
