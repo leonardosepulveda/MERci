@@ -114,21 +114,18 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
 # (fixed per microscope, see _CAMERA_PIXELS above) and the objective's
 # magnification -- unlike frame size/channel map/acquisition type above,
 # which are camera/scope hardware properties independent of which objective
-# is mounted, this needs a second key. Historically every scope ran a single
-# 60X objective, so MFX/ST2 (2304-px sensors) image at 0.0878 µm/px and the
-# MF-series (MF2-MF5, 2048-px) at 0.108 µm/px at 60X. ST2 additionally
-# supports a 40X objective: 0.1317 µm/px = 0.0878 * (60/40) -- a SCALED
-# placeholder (magnification ratio applied to the 60X-calibrated value), not
-# yet a real calibration measurement; replace with a measured value once one
-# is available (see e.g. `misc/MF2_60XSil1.3_zcorrection.ipynb` for how a
-# real per-objective calibration is done). Together with the sensor size
-# this fixes the FOV footprint (fov_size_um = pixel_size_um * image_size_px),
-# used to lay out the scanning grid in before_imaging/02.
+# is mounted, this needs a second key. Where a scope has a MERlin
+# microscope-parameters JSON (data/configs/merlin/microscope/), the value here
+# is that file's ``microns_per_pixel``, so MERci and MERlin agree: MF3-MF5
+# 0.109, ST2 0.0878 (60X) and 0.1317 (40X). MF2 and MFX have no such file.
+# Together with the sensor size this fixes the FOV footprint
+# (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning
+# grid in before_imaging/02.
 _OBJECTIVE_PIXEL_SIZE_UM: Dict[Tuple[str, str], float] = {
-    ("MF2", "60X"): 0.108, ("MF3", "60X"): 0.108, ("MF4", "60X"): 0.108, ("MF5", "60X"): 0.108,
+    ("MF2", "60X"): 0.108, ("MF3", "60X"): 0.109, ("MF4", "60X"): 0.109, ("MF5", "60X"): 0.109,
     ("MFX", "60X"): 0.0878,
     ("ST2", "60X"): 0.0878,
-    ("ST2", "40X"): 0.0878 * 60.0 / 40.0,   # 0.1317 -- scaled placeholder, see comment above
+    ("ST2", "40X"): 0.1317,
 }
 # Which objective each microscope uses when the caller doesn't name one --
 # keeps every existing single-objective-per-scope call site working
@@ -153,7 +150,7 @@ def get_camera_pixel_size_um(microscope: Optional[str], objective: Optional[str]
     *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
     entry in ``_DEFAULT_OBJECTIVE`` (today, every scope has exactly one) --
     omit it to keep prior single-objective-per-scope behaviour unchanged.
-    MFX/ST2 → 0.0878 µm/px at 60X, MF-series (MF2–MF5) → 0.108 µm/px at 60X;
+    MFX/ST2 → 0.0878 µm/px at 60X, MF2 → 0.108, MF3–MF5 → 0.109 µm/px at 60X;
     ST2 also has a 40X objective. Unknown microscope/objective falls back to
     0.108 (no error, so estimates still run) — extend
     ``_OBJECTIVE_PIXEL_SIZE_UM``/``_DEFAULT_OBJECTIVE`` for new scopes/objectives.
@@ -175,11 +172,12 @@ def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None)
 
     * MFX, ST2 (60X) → ``(0.0878 µm/px, 2304 px)``
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
-    * MF2–MF5 (60X)   → ``(0.108 µm/px, 2048 px)``
+    * MF2 (60X)       → ``(0.108 µm/px, 2048 px)``
+    * MF3–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
 
     *objective* defaults to *microscope*'s own default objective (see
     ``_DEFAULT_OBJECTIVE``) — omit it to keep prior behaviour unchanged.
-    Unknown microscope/objective falls back to the MF-series 60X values.
+    Unknown microscope/objective falls back to 0.108 µm/px, 2048 px.
 
     Parameters
     ----------
