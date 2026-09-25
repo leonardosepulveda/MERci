@@ -39,7 +39,7 @@ class ExperimentConfig:
     Acquisition parameters
     ----------------------
     microscope            : microscope identifier, e.g. ``"MF3"``, ``"MF5"``
-    pixel_size_um         : camera pixel size in µm
+    pixel_size_um         : camera pixel size in µm; None → the microscope's MERlin JSON
     image_size_px         : number of pixels along one side of a raw frame
     non_overlap_fraction  : fraction of the FOV covered per stage step
                             (step_size_um = pixel_size_um × image_size_px
@@ -80,7 +80,7 @@ class ExperimentConfig:
     image_dtype:            str            = "uint16"
     frame_width:            Optional[int]  = None
     frame_height:           Optional[int]  = None
-    pixel_size_um:          float          = 0.109
+    pixel_size_um:          Optional[float] = None   # None → the microscope's MERlin JSON value
     image_size_px:          int            = 2048
     non_overlap_fraction:   float          = 0.9
 
@@ -189,6 +189,10 @@ class ExperimentConfig:
             "round_info_csv", "positions_txt",
         ):
             setattr(self, attr, Path(getattr(self, attr)))
+
+        if self.pixel_size_um is None:
+            from ..acquisition.configs import get_camera_pixel_size_um
+            self.pixel_size_um = get_camera_pixel_size_um(self.microscope)
 
         if self.settings_dir is not None:
             self.settings_dir = Path(self.settings_dir)

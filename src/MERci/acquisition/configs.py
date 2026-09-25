@@ -34,6 +34,7 @@ Usage
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple
@@ -42,6 +43,8 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
+
+from .merlin_config import resolve_microscope_parameters_filename
 
 
 # ── Channel / colour mapping ─────────────────────────────────────────────────
@@ -110,27 +113,21 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
 
 
 # Camera pixel size projected onto the sample (µm/pixel), per (microscope,
-# objective). Pixel size depends on both the camera's physical pixel pitch
-# (fixed per microscope, see _CAMERA_PIXELS above) and the objective's
-# magnification -- unlike frame size/channel map/acquisition type above,
-# which are camera/scope hardware properties independent of which objective
-# is mounted, this needs a second key. Where a scope has a MERlin
-# microscope-parameters JSON (data/configs/merlin/microscope/), the value here
-# is that file's ``microns_per_pixel``, so MERci and MERlin agree: MF2-MF5
-# 0.109, ST2 0.0878 (60X) and 0.1317 (40X). MFX has no such file.
-# Together with the sensor size this fixes the FOV footprint
+# objective). It depends on the objective as well as the camera, so it takes
+# a second key. The value comes from the scope's MERlin microscope-parameters
+# JSON (``microns_per_pixel`` in data/configs/merlin/microscope/, see
+# merlin_config.resolve_microscope_parameters_filename), so MERci and MERlin
+# always agree. Together with the sensor size this fixes the FOV footprint
 # (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning
 # grid in before_imaging/02.
-_OBJECTIVE_PIXEL_SIZE_UM: Dict[Tuple[str, str], float] = {
-    ("MF2", "60X"): 0.109, ("MF3", "60X"): 0.109, ("MF4", "60X"): 0.109, ("MF5", "60X"): 0.109,
+_MICROSCOPE_PARAMETERS_DIR = Path(__file__).resolve().parents[3] / "data" / "configs" / "merlin" / "microscope"
+# Scopes with no microscope-parameters JSON.
+_PIXEL_SIZE_UM_WITHOUT_JSON: Dict[Tuple[str, str], float] = {
     ("MFX", "60X"): 0.0878,
-    ("ST2", "60X"): 0.0878,
-    ("ST2", "40X"): 0.1317,
 }
 # Which objective each microscope uses when the caller doesn't name one --
 # keeps every existing single-objective-per-scope call site working
-# unchanged. Extend this + _OBJECTIVE_PIXEL_SIZE_UM together when a
-# microscope gains a new objective.
+# unchanged.
 _DEFAULT_OBJECTIVE: Dict[str, str] = {
     "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X", "MFX": "60X", "ST2": "60X",
 }
@@ -147,17 +144,19 @@ def get_camera_pixel_size_um(microscope: Optional[str], objective: Optional[str]
     """
     Return the sample-plane pixel size (µm/pixel) for *microscope* + *objective*.
 
-    *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
-    entry in ``_DEFAULT_OBJECTIVE`` (today, every scope has exactly one) --
-    omit it to keep prior single-objective-per-scope behaviour unchanged.
-    MFX/ST2 → 0.0878 µm/px at 60X, MF-series (MF2–MF5) → 0.109 µm/px at 60X;
-    ST2 also has a 40X objective. Unknown microscope/objective falls back to
-    0.108 (no error, so estimates still run) — extend
-    ``_OBJECTIVE_PIXEL_SIZE_UM``/``_DEFAULT_OBJECTIVE`` for new scopes/objectives.
+    Read from that scope's MERlin microscope-parameters JSON
+    (``microns_per_pixel``). *objective* (e.g. ``"60X"``, ``"40X"``) defaults
+    to that microscope's entry in ``_DEFAULT_OBJECTIVE``. A scope with no JSON
+    uses ``_PIXEL_SIZE_UM_WITHOUT_JSON``; an unknown microscope/objective
+    falls back to 0.108 (no error, so estimates still run).
     """
     key = str(microscope).strip().upper() if microscope is not None else ""
     obj = str(objective).strip().upper() if objective is not None else _DEFAULT_OBJECTIVE.get(key, "")
-    return _OBJECTIVE_PIXEL_SIZE_UM.get((key, obj), _DEFAULT_CAMERA_PIXEL_SIZE_UM)
+    try:
+        path = _MICROSCOPE_PARAMETERS_DIR / resolve_microscope_parameters_filename(key, obj)
+    except ValueError:
+        return _PIXEL_SIZE_UM_WITHOUT_JSON.get((key, obj), _DEFAULT_CAMERA_PIXEL_SIZE_UM)
+    return float(json.loads(path.read_text(encoding="utf-8"))["microns_per_pixel"])
 
 
 def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None) -> FOVGeometry:
