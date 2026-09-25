@@ -6,8 +6,6 @@ comment style guide (see the root `CLAUDE.md`'s "Code clarity" section for
 that); it's specifically about cell structure, caching, progress reporting,
 and plot legibility.
 
-Reference implementation: `notebooks/misc/measure_tissue_thickness.ipynb`.
-
 ## 1. Separate calculation from display
 
 If a step involves both a nontrivial calculation and a plot or printed
@@ -78,7 +76,7 @@ constants (defined once in its Parameters section, reused by every plotting
 cell) are the reference values -- reuse the same sizes (or the same pattern)
 in new notebooks rather than picking new numbers per plot.
 
-## 6. Save every displayed figure to `analysis/figures/`
+## 6. Save every displayed figure to `SAMPLE_DIR/figures/MERci/`
 
 Every cell that calls `plt.show()` on a real figure (not a quick throwaway
 diagnostic) should also `fig.savefig(...)` a copy to
@@ -185,4 +183,4 @@ jupyter nbconvert --clear-output --inplace path/to/notebook.ipynb
 ```
 
 This never loses a figure that actually mattered -- real figures already
-get saved to `analysis/figures/` separately per guideline 6.
+get saved to `SAMPLE_DIR/figures/MERci/` separately per guideline 6.

@@ -107,12 +107,13 @@ src/MERci/
     positions.py           FOV grid generation, scanning paths, multi-tissue boundaries
     mosaic.py              derive tissue boundaries from a Steve low-mag mosaic
     alignment.py           cross-microscope FOV transfer, bead-drift registration
+    camera_rotation.py     camera-vs-stage rotation correction, microscope orientation flags
     dave.py                Dave experiment-recipe XML generation
     kilroy.py              Kilroy fluidics-protocol resolution/consistency checks
     data_organization.py   MERlin data-organization CSV
     merlin_config.py       MERlin input/config-file generation (SAMPLE_DIR/merlin/)
     fishtank_config.py     fishtank input/config-file generation (lineage_tracing_lineage only)
-    display.py             print_frame_table, display_xml
+    display.py             print_frame_table, display_xml, display_file
     cluster_submit.py      sbatch script generation for cluster-side QC analysis
     pipeline_config.py     PipelineConfig/MerlinConfig/FishtankConfig -- loads data/pipelines/<id>_pipeline.yaml
     pipeline_export.py     export one pipeline's notebooks to SAMPLE_DIR/notebooks/ (sibling of MERci/)
@@ -123,8 +124,16 @@ src/MERci/
     stage_z.py             stage-z drift QC from HAL's .off focus-lock sidecars
     spot_localization.py   bead detection / 3D Gaussian fitting / PSF simulation
     completeness.py         per-FOV raw-file existence + zarr chunk-integrity checks (no decompression)
-    cli_analyze_fov.py     standalone SLURM-array-task script (self-locating, no pip install needed)
-    cli_build_round_mosaic.py  same, for round mosaics
+    elevation.py           per-pixel tissue elevation/thickness, FFC from interior FOVs, GIF/movie/z-mosaic
+    cell_mapping.py        per-cell identity matching between two segmentations of one tissue
+    fast_spot_quantification.py  per-bit hyb-reagent spot QC (during_imaging)
+    imaged_fovs.py         which round a live acquisition-progress view watches
+    view_intensity_stats.py  load annotated per-FOV stats (after_imaging/04)
+    batch_sample_review.py backfill + combined stats across a batch of samples (after_imaging/05)
+    cli_*.py               standalone SLURM-array-task scripts (self-locating, no pip install
+                           needed), one per cluster_submit builder; shared args in _cli_common.py
+  live_round_mosaic.py     LiveRoundMosaicBuilder -- live quick-look mosaic (during_imaging/round_mosaics)
+  plots/                   plotting halves of the notebooks above (round mosaics, stats, batch review)
   state.py                 ExperimentStateMonitor — imaging vs. fluidics phase detection
   progress.py              ProgressTracker — sentinel-file completion tracking
   progress_display.py      ProgressReporter — live console/notebook progress+ETA
@@ -229,8 +238,7 @@ Every notebook follows [`NOTEBOOK_GUIDELINES.md`](NOTEBOOK_GUIDELINES.md):
 separate calculation cells from display/plot cells, cache under
 `analysis/cache/<notebook_name>/`, skip recomputation when cache is valid,
 report progress (n/total, elapsed, ETA) in nontrivial loops, explicit plot
-font sizes. Reference implementation:
-`notebooks/misc/measure_tissue_thickness_test.ipynb`.
+font sizes.
 
 **Diagnostic images**: save every diagnostic image meant for the user's own
 eyes to a real path under the experiment tree or repo (never only the
