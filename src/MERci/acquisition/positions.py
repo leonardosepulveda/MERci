@@ -1506,33 +1506,18 @@ def build_boundary_path_optimized(
 
 # ── Irregular (single-axis-adaptive) grid ──────────────────────────────────────
 #
-# An alternative to the regular create_grid_positions/generate_scanning_path
-# pipeline above: one axis (fixed_axis) stays on a single regular lattice
-# (needed so adjacent rows/columns share a phase and therefore overlap); the
-# other (cross) axis is rebuilt independently per fixed-axis position, snug
-# to that row/column's own local tissue extent -- fewer wasted FOVs on an
-# irregularly-shaped tissue than a plain regular grid, at the cost of a
-# weaker (not globally phase-locked) cross-axis overlap margin.
+# Alternative to the regular grid above: the fixed axis stays on one lattice
+# (so adjacent rows/columns share a phase and overlap), and the cross axis is
+# rebuilt per fixed-axis position to fit that row/column's own tissue
+# extent. Fewer wasted FOVs on irregular tissue, weaker cross-axis overlap.
+# Validated against the regular grid in notebooks/tests/irregular_grid/.
 #
-# Validated against the production regular-grid pipeline in
-# notebooks/tests/irregular_grid/test_irregular_grid_boustrophedon_return_path.ipynb,
-# notebooks/tests/irregular_grid/test_irregular_grid_downstream_qc_tools.ipynb, and
-# notebooks/tests/irregular_grid/test_irregular_grid_column_overlap_correction.ipynb --
-# see each notebook's own Takeaways for the validated numbers this code was
-# ported from.
-#
-# Typical workflow (mirrors the regular-grid one at the top of this module):
-#   1. build_irregular_bands            - per-fixed-axis-position cross-axis lists
-#   2. fix_overlap_clusters             - REQUIRED per-band post-processing --
-#                                          corrects a real construction defect
-#                                          (see its own docstring) before path
-#                                          ordering
-#   3. generate_irregular_scanning_path - order into a boustrophedon path
-#   4. filter_scanning_path             - same production filter as the regular grid
-#   5. patch_uncovered_gaps             - REQUIRED coverage-guarantee step --
-#                                          closes real tissue gaps this grid's
-#                                          own per-band/per-piece construction
-#                                          can leave (see its own docstring)
+# Workflow:
+#   1. build_irregular_bands            - cross-axis positions per band
+#   2. fix_overlap_clusters             - REQUIRED per band before ordering
+#   3. generate_irregular_scanning_path - boustrophedon order
+#   4. filter_scanning_path             - same filter as the regular grid
+#   5. patch_uncovered_gaps             - REQUIRED coverage guarantee
 #   6. determine_return_side + close_scanning_path - optional loop closure
 #   (build_irregular_boundary_path / optimize_irregular_grid wrap 1-6.)
 

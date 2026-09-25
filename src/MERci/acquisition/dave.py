@@ -510,22 +510,13 @@ def create_round_info_multitissue(
             )
 
     # ── Continuous FOV numbering across segments ────────────────────────────────
-    # We want every boundary movie in a round to share ONE movie name (e.g.
-    # ``hal-mf3-cells``) with a single running FOV index 0…(ΣtBoundaryFOVs−1),
-    # and likewise every transit movie to share one name — while KEEPING the
-    # per-segment loops so the boundary→transit interleaving is preserved.
-    #
-    # Dave numbers each loop 0…n−1 independently, so shared names would collide.
-    # The patched ``v2Generator`` accepts a per-movie ``start`` offset and fixed
-    # ``pad`` (see ``dave_fov_offset_patch``); we compute them here from the FOV
-    # counts of the positions files that Dave will iterate. ``start`` for a segment
-    # is the number of FOVs in the preceding segments of the SAME group (boundary
-    # vs transit), in traversal order; ``pad`` is a fixed zero-pad width wide enough
-    # for the whole group (≥3 to keep the conventional 3-digit index).
-    #
-    # NOTE: because the movie names are now shared, the generated recipe REQUIRES
-    # the patched Dave. Under stock Dave the ``start``/``pad`` attributes are
-    # ignored and the shared names would overwrite each other.
+    # All boundary movies of a round share one movie name with one running FOV
+    # index (likewise all transit movies), while keeping per-segment loops for
+    # the boundary/transit interleaving. Dave numbers each loop from 0, so the
+    # patched v2Generator (dave_fov_offset_patch) takes a per-movie ``start``
+    # (FOVs in the earlier segments of the same group) and a fixed ``pad``
+    # (fov_pad_width of the group total). The recipe therefore REQUIRES the
+    # patched Dave: stock Dave ignores start/pad and the shared names collide.
     counts = [count_positions(pos_dir / posfile) for (_, _, _, posfile) in seg_templates]
 
     boundary_total = sum(c for (t, c) in zip(seg_templates, counts) if t[0] == "boundary")
