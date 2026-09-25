@@ -14,6 +14,23 @@ T_MAX_ADAPTOR = 6000.0   # 100 min — adaptor-based fluidics
 T_MAX_DIRECT  = 3000.0   # 50 min  — direct-readout fluidics
 
 
+def default_n_workers() -> int:
+    """
+    Usable CPUs minus 2 (>= 1). Counts the CPUs this process may run on
+    (``os.sched_getaffinity``: a SLURM job's allocation, not the whole
+    node) where available, else ``os.cpu_count()``. Capped at 61 on
+    Windows, the most ``ProcessPoolExecutor`` accepts there.
+    """
+    import os
+    import sys
+    try:
+        n_cpus = len(os.sched_getaffinity(0))
+    except AttributeError:          # not available on Windows/macOS
+        n_cpus = os.cpu_count() or 2
+    n = max(1, n_cpus - 2)
+    return min(n, 61) if sys.platform == "win32" else n
+
+
 @dataclass
 class ExperimentConfig:
     """
@@ -120,7 +137,7 @@ class ExperimentConfig:
     #                  acquisition drive while the microscope is writing.
     analysis_mode:        str            = "same_drive"
     analysis_source_dir:  Optional[Path] = None   # mode A: second-drive mirror to analyse from
-    n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → cpu_count - 2
+    n_analysis_workers:   Optional[int]  = None   # FOV process-pool size; None → default_n_workers()
 
     # ── Derived properties ─────────────────────────────────────────────────────
 
@@ -144,8 +161,7 @@ class ExperimentConfig:
         """Number of FOV worker processes to use (>= 1)."""
         if self.n_analysis_workers is not None:
             return max(1, int(self.n_analysis_workers))
-        import os
-        return max(1, (os.cpu_count() or 2) - 2)
+        return default_n_workers()
 
     @classmethod
     def from_sample_dir(cls, sample_dir: Path, **kwargs) -> "ExperimentConfig":
