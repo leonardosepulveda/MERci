@@ -78,47 +78,34 @@ _ACQUISITION_SUBFOLDER_TOKENS = {"merfish", "lineage", "epi", "disk"}
 
 def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     """
-    Determine the true experiment id and acquisition-subfolder name from
-    where this MERci clone lives on disk.
+    The experiment id and acquisition-subfolder name, from where this MERci
+    clone sits on disk (``SAMPLE_DIR = merci_dir.parent``):
 
-    Two layouts are possible for ``SAMPLE_DIR = merci_dir.parent``:
+    * **Flat** (default): ``SAMPLE_DIR`` is the experiment folder, e.g.
+      ``.../251225_LT027_saving_time/MERci``; its name is the id and there is
+      no subfolder.
+    * **Split**: ``SAMPLE_DIR`` is one acquisition of a sample, e.g.
+      ``.../LT058_sample_07/merfish/MERci`` next to ``.../lineage/``. The id is
+      one level up; ``"merfish"`` is only a local file-naming tag.
 
-    * **Flat** (default): ``SAMPLE_DIR`` itself is the experiment folder, e.g.
-      ``.../251225_LT027_saving_time/MERci``. ``SAMPLE_DIR.name`` IS the
-      experiment id; there is no acquisition subfolder.
-    * **Split**: this acquisition lives under its own acquisition-type
-      subfolder, sibling to another acquisition of the same sample, e.g.
-      ``.../LT058_sample_07/merfish/MERci`` (with ``.../LT058_sample_07/lineage/``
-      alongside it). ``SAMPLE_DIR.name`` (``"merfish"``) is just this
-      acquisition's own local file-naming tag, NOT the experiment id -- the
-      true id is one level further up.
+    It is split exactly when ``SAMPLE_DIR.name`` is in
+    ``_ACQUISITION_SUBFOLDER_TOKENS``. This avoids relying on how experiment
+    ids are named (older ones are date-prefixed).
 
-    Distinguishing the two from folder structure alone, without depending on
-    the experiment id following any particular naming convention (older
-    experiments are date-prefixed, e.g. ``"251225_LT027_saving_time"``, which
-    doesn't match a newer ``"LT058_sample_07"``-style pattern at all): a
-    split layout's acquisition subfolder name is always one of a small, fixed
-    vocabulary already hard-coded throughout the codebase for exactly this
-    purpose (``_ACQUISITION_SUBFOLDER_TOKENS``). If ``SAMPLE_DIR.name`` is one of those
-    tokens, treat it as the split layout; otherwise, flat.
-
-    This does NOT change most per-notebook local file naming (``dave-{mic}-
-    {N}hybs-{name}.xml``, data-organization/merlin/fishtank script filenames,
-    etc. all still use the bare ``sample_name`` returned here). The one
-    exception is ``positions_*.txt``/``fov_layout_*.png`` filenames, which use
-    :func:`positions_file_tag` instead -- see that function for why. Use this
-    function where the TRUE top-level experiment id is needed: constructing
-    cluster-facing paths (``DATA_HOME``/``MERLIN_HOME``/``FOLDER_NAME`` in
-    notebook 06, ``resolve_cluster_sample_dir`` in notebook 07).
+    Local file names (Dave, data organization, merlin/fishtank scripts) use the
+    returned ``sample_name``, except ``positions_*.txt``/``fov_layout_*.png``,
+    which use :func:`positions_file_tag`. Use this wherever the true
+    experiment id is needed, e.g. cluster paths (``DATA_HOME``/``MERLIN_HOME``/
+    ``FOLDER_NAME`` in notebook 06, ``resolve_cluster_sample_dir`` in 07).
 
     Parameters
     ----------
-    merci_dir : path to this MERci clone (``MERCI_DIR`` in every notebook)
+    merci_dir : this MERci clone (``MERCI_DIR`` in every notebook)
 
     Returns
     -------
-    (sample_name, imaging_dir) : the true experiment id, and the acquisition-
-    type subfolder name (``""`` in the flat layout).
+    (sample_name, imaging_dir) : the experiment id, and the acquisition
+    subfolder name (``""`` for the flat layout).
     """
     sample_dir = Path(merci_dir).parent
     if sample_dir.name.lower() in _ACQUISITION_SUBFOLDER_TOKENS:

@@ -538,50 +538,33 @@ def remove_hot_pixels(
     sigma_floor: float = 5.0,
 ) -> np.ndarray:
     """
-    Replace isolated hot/dead camera pixels with their local median, before
+    Replace isolated hot/dead camera pixels with their local median before
     registration (:func:`phase_drift`).
 
-    Hot/defective pixels sit at a FIXED detector position, so they are
-    identical in every frame and dominate ``phase_cross_correlation`` --
-    pinning the estimated drift to exactly ``[0, 0]`` whenever the real
-    fiducial (bead) signal is dim. They are isolated single-pixel spikes far
-    above the *local* median; a real bead spans several pixels (the PSF) and
-    so sits on a bright neighbourhood with a value close to its own local
-    median. That difference is what lets this drop hot pixels while leaving
-    beads untouched. Ported from a validated fix to the same bug in fishtank
-    (``jweissmanlab/fishtank``'s ``detect_spots_script.py``, which this
-    module's ``phase_drift`` already mirrors for its registration primitive) --
-    confirmed on real data there: the detector flags ~10 isolated hot pixels
-    per frame and zero real bead pixels, and drift recovered after removal
-    matches whether only the saturated hot pixel or all of them are removed.
-
-    Why not just clip at a fixed maximum (e.g. the dtype max)? A fixed cutoff
-    is detector-specific and only catches FULLY SATURATED pixels; a hot pixel
-    reading e.g. 12000 on a ~100 background is just as disruptive but slips
-    through. The local-median ratio test below is intensity-agnostic and
-    catches saturated and sub-saturation hot pixels alike, without flagging a
-    real (bright but spatially extended) bead.
+    Hot pixels sit at a fixed detector position in every frame, so they
+    dominate ``phase_cross_correlation`` and pin the drift to ``[0, 0]`` when
+    beads are dim. A hot pixel is a single-pixel spike far above its local
+    median; a bead spans several pixels (the PSF), so it is close to its local
+    median. A local-median ratio catches saturated and sub-saturation hot
+    pixels alike without touching beads, which a fixed maximum would not.
+    Same fix as fishtank's ``detect_spots_script.py``, whose registration
+    ``phase_drift`` mirrors.
 
     Parameters
     ----------
-    img         : 2-D registration image (a single bead/fiducial frame)
-    size        : side length (pixels) of the square window for the local
-                  median; 3 isolates single-pixel spikes -- a larger window
-                  also catches small clusters but risks eroding faint beads
-    ratio       : a pixel is flagged when its value exceeds ``ratio`` times its
-                  local median. Hot pixels sit on background, so this ratio is
-                  large (~10-600 observed); real bead cores sit on a bright
-                  neighbourhood, so theirs is ~1-2. 5.0 separates them.
-    sigma_floor : also require the excess over the local median to exceed
-                  ``sigma_floor`` times the background-noise standard
-                  deviation, so faint noise blips on near-zero background
-                  (where the ratio alone can be large) are not flagged. Units:
-                  noise sigma.
+    img         : 2-D registration image (one bead/fiducial frame)
+    size        : local-median window (pixels). 3 isolates single-pixel spikes;
+                  larger also catches small clusters but can erode faint beads.
+    ratio       : flag pixels above ``ratio`` × local median. Hot pixels were
+                  observed at ~10-600×, bead cores at ~1-2×; 5.0 separates them.
+    sigma_floor : also require the excess over the local median to exceed this
+                  many background-noise sigmas, so noise on near-zero
+                  background is not flagged
 
     Returns
     -------
-    Copy of *img* with hot pixels replaced by their local median (returned
-    unchanged, no copy, if none are flagged).
+    Copy of *img* with hot pixels replaced by their local median (*img* itself,
+    uncopied, if none are flagged).
     """
     local_median = median_filter(img, size=size, mode="nearest").astype(np.float64)
     excess = img.astype(np.float64) - local_median   # height of each pixel above its neighbours

@@ -122,22 +122,14 @@ def load_protocol_durations(path: Path) -> Dict[str, float]:
 
 def protocol_last_flowed_valve(path: Path, protocol_name: str) -> Optional[str]:
     """
-    Return the last ``<valve>`` command in *protocol_name* that was actually
-    followed by a ``<pump>`` step (a real flow) -- ``None`` if the protocol
-    never flows anything.
+    The last ``<valve>`` in *protocol_name* that is followed by a ``<pump>``
+    (a real flow), or ``None`` if the protocol never flows.
 
-    Deliberately NOT just the protocol's last ``<valve>``: some Kilroy
-    configs end a protocol with a bare valve *reposition* move that has no
-    ``<pump>`` after it (e.g. parking the valve at the next hyb's port ready
-    for the following cycle) -- e.g. a protocol ending
-    `<valve>Set Image</valve><pump>...</pump><valve>Set Hyb 1</valve>` (no
-    pump after the trailing valve). Taking the literal last valve name there
-    ("Set Hyb 1") instead of the last one that actually flowed ("Set Image")
-    made ``_add_fluidics``'s already-flowed
-    detection (see ``dave.py``) wrongly conclude the image buffer was NOT
-    already flowed, appending a real second "Flow Image Buffer" step after
-    every hybridization -- a genuine double-flow this function exists to
-    prevent detecting incorrectly.
+    Not simply the last ``<valve>``: a protocol can end with a bare reposition,
+    e.g. ``<valve>Set Image</valve><pump>...</pump><valve>Set Hyb 1</valve>``
+    (parking at the next port). Here the answer is "Set Image". Returning
+    "Set Hyb 1" would make ``dave._between_round_protocols`` miss that the
+    image buffer already flowed, and it would flow it a second time.
     """
     current_valve: Optional[str] = None
     last_flowed:   Optional[str] = None
