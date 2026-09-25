@@ -58,6 +58,7 @@ def build_fov_task_kwargs(fpath: Path, config: ExperimentConfig, tracker: Progre
         thumbnail_percentile_clip = config.thumbnail_percentile_clip,
         histogram_bins            = config.histogram_bins,
         histogram_range           = config.histogram_range,
+        orientation               = load_microscope_orientation(config.microscope),
     )
 
 
@@ -189,7 +190,6 @@ def build_round_mosaics(
                 thumbnail_size=config.thumbnail_size,
                 padding=config.mosaic_padding,
                 flip_y=flip_y,
-                orientation=orientation,
             )
         any_mosaic_built = True
 

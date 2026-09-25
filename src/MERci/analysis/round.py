@@ -84,10 +84,9 @@ def create_mosaic(
                       without re-deriving the scale/offset math here.
     orientation     : optional camera orientation flags
                       (:func:`MERci.acquisition.merlin_config.load_microscope_orientation`),
-                      applied to each thumbnail before placement. Thumbnails
-                      are saved in raw camera orientation, so without this a
-                      tile's content is rotated/mirrored relative to its
-                      neighbours even though the tile sits at the right place.
+                      applied to each thumbnail before placement. Leave it
+                      ``None`` for thumbnails from ``fov.analyze_file`` or the
+                      live round-mosaic, which are already oriented.
 
     Returns
     -------
@@ -189,9 +188,11 @@ def create_mosaic_ffc(
                       the whole assembled float canvas's non-background
                       pixels, not per tile
     labels, label_color, highlight_fov_ids, highlight_color, highlight_width,
-    return_tile_bboxes, orientation : same as :func:`create_mosaic`.
-                      *orientation* is applied after the FFC division, since
-                      *ffc_field* is in raw camera orientation.
+    return_tile_bboxes : same as :func:`create_mosaic`
+    orientation     : camera orientation flags, applied after the FFC
+                      division (*ffc_field* is in raw camera orientation).
+                      Raw frames need it, or each tile's content is
+                      rotated/mirrored relative to its neighbours.
 
     Returns
     -------

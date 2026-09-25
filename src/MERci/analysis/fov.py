@@ -41,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..acquisition.merlin_config import apply_microscope_orientation
 from ..progress import thumbnail_filename
 
 log = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ def create_thumbnails_for_stack(
     frame_indices: Optional[List[int]] = None,
     target_size: Tuple[int, int] = (200, 200),
     percentile_clip: Tuple[float, float] = (1.0, 99.0),
+    orientation: Optional[Dict[str, bool]] = None,
 ) -> List[Path]:
     """
     Create thumbnails for one or more frames in an image stack.
@@ -154,6 +156,10 @@ def create_thumbnails_for_stack(
     frame_indices : which frames to process; ``None`` → all frames
     target_size   : output thumbnail size (width, height) in pixels
     percentile_clip: contrast stretch percentiles
+    orientation   : camera orientation flags
+                    (:func:`MERci.acquisition.merlin_config.load_microscope_orientation`)
+                    applied to each frame first, so thumbnails on disk are in
+                    stage orientation (as the live round-mosaic writes them)
 
     Returns
     -------
@@ -166,7 +172,10 @@ def create_thumbnails_for_stack(
     for fi in frame_indices:
         out = Path(output_dir) / thumbnail_filename(stem, fi)
         if not out.exists():
-            create_thumbnail(stack[fi], out, target_size, percentile_clip)
+            frame = stack[fi]
+            if orientation:
+                frame = apply_microscope_orientation(frame, **orientation)
+            create_thumbnail(frame, out, target_size, percentile_clip)
         paths.append(out)
     return paths
 
@@ -295,6 +304,7 @@ def analyze_file(
     thumbnail_percentile_clip: Tuple[float, float]      = (1.0, 99.0),
     histogram_bins:            int                      = 512,
     histogram_range:           Tuple[int, int]          = (0, 65535),
+    orientation:               Optional[Dict[str, bool]] = None,
 ) -> str:
     """
     Run every FOV-level analysis for one image file: read the stack **once**,
@@ -327,6 +337,7 @@ def analyze_file(
             frame_indices=thumbnail_frames,
             target_size=thumbnail_size,
             percentile_clip=thumbnail_percentile_clip,
+            orientation=orientation,
         )
         if not Path(stats_path).exists():
             measure_stats(stack, Path(stats_path), source_filename=image_path.name)
