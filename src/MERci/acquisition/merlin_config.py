@@ -11,7 +11,6 @@ file, and a real, live slurm submit script) — nothing here is a guess.
 
 Functions
 ---------
-create_microscope_parameters_json — MERlin's per-scope calibration JSON
 create_codebook_csv               — MERlin's gene/barcode codebook CSV
 create_cluster_resource_allocation — per-task slurm resource overrides (YAML,
     with calibrated tasks' mem/time commented out for MERlin to compute)
@@ -34,9 +33,9 @@ load_sequential_gene_names       — {bit: gene_name} for lib_name's non-barcode
 load_readout_name_overrides      — {bit: probe_name} per-experiment override for
     readoutName (e.g. an NDB-series adaptor bit), no pipeline-level default
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
-load_microscope_orientation      — read a microscope's flip_horizontal/flip_vertical/
-    transpose flags (MERlin's own defaults when absent, confirmed against
-    merlin.core.dataset.py, not assumed)
+load_microscope_parameters       — a microscope's parameters JSON, the single source
+    of every camera property (orientation, pixel size, frame size); no defaults
+load_microscope_orientation      — its flip_horizontal/flip_vertical/transpose flags
 apply_microscope_orientation     — apply those flags to a raw frame in MERlin's own
     order (transpose, then flip_horizontal, then flip_vertical)
 build_merlin_analysis_parameters — assemble MERlin's task-parameters
@@ -195,8 +194,8 @@ def resolve_microscope_parameters_filename(microscope: str, objective: Optional[
     microscope has exactly one) -- omit it to keep prior single-objective-
     per-scope behaviour unchanged.
     """
-    microscope = microscope.upper()
-    obj = objective.upper() if objective is not None else \
+    microscope = str(microscope).strip().upper()
+    obj = objective.strip().upper() if objective is not None else \
         _DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE.get(microscope, "")
     try:
         return _MICROSCOPE_PARAMETERS_BY_SCOPE[(microscope, obj)]
@@ -209,73 +208,42 @@ def resolve_microscope_parameters_filename(microscope: str, objective: Optional[
 
 # ── Microscope parameters ───────────────────────────────────────────────────
 
-def create_microscope_parameters_json(
-    output_path:       Path,
-    flip_horizontal:    Optional[bool]              = None,
-    flip_vertical:      Optional[bool]               = None,
-    transpose:          Optional[bool]               = None,
-    image_dimensions:   Optional[Tuple[int, int]]     = None,
-    microns_per_pixel:  float                         = 0.108,
-) -> Path:
+MICROSCOPE_PARAMETERS_DIR = Path(__file__).resolve().parents[3] / "data" / "configs" / "merlin" / "microscope"
+# Every camera property MERci takes from a microscope-parameters JSON. Each
+# file must state all of them: MERci has no defaults of its own.
+_CAMERA_FIELDS = ("flip_horizontal", "flip_vertical", "transpose", "microns_per_pixel", "image_dimensions")
+
+
+def load_microscope_parameters(
+    microscope:      str,
+    objective:       Optional[str] = None,
+    microscope_dir:  Path          = MICROSCOPE_PARAMETERS_DIR,
+) -> Dict[str, Any]:
     """
-    Write a MERlin microscope-parameters JSON.
+    The MERlin microscope-parameters JSON for *microscope* + *objective*
+    (resolved via :func:`resolve_microscope_parameters_filename`), the single
+    source of every camera property: orientation, pixel size, frame size.
 
-    Only non-``None`` fields are included, matching the real templates —
-    e.g. ``MERFISH5.json`` has only ``microns_per_pixel``, while
-    ``MERFISH3/4.json`` and ``STORM2_60X.json``/``STORM2_40X.json`` add
-    ``flip_horizontal``/``flip_vertical``/``transpose``/``image_dimensions``.
+    Raises ``ValueError`` for an unknown microscope/objective or a file
+    missing any of ``_CAMERA_FIELDS``.
     """
-    params: Dict[str, Any] = {}
-    if flip_horizontal is not None:
-        params["flip_horizontal"] = flip_horizontal
-    if flip_vertical is not None:
-        params["flip_vertical"] = flip_vertical
-    if transpose is not None:
-        params["transpose"] = transpose
-    if image_dimensions is not None:
-        params["image_dimensions"] = list(image_dimensions)
-    params["microns_per_pixel"] = microns_per_pixel
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as fh:
-        json.dump(params, fh, indent=4)
-    return output_path
+    path = Path(microscope_dir) / resolve_microscope_parameters_filename(microscope, objective)
+    params = json.loads(path.read_text(encoding="utf-8"))
+    missing = [k for k in _CAMERA_FIELDS if k not in params]
+    if missing:
+        raise ValueError(f"{path.name} is missing {missing}")
+    return params
 
 
-def load_microscope_orientation(microscope: str, microscope_dir: Path) -> Dict[str, bool]:
+def load_microscope_orientation(microscope: str, microscope_dir: Path = MICROSCOPE_PARAMETERS_DIR) -> Dict[str, bool]:
     """
-    Read a microscope's ``flip_horizontal``/``flip_vertical``/``transpose``
-    flags from its MERlin microscope-parameters JSON (resolved via
-    :func:`resolve_microscope_parameters_filename`).
-
-    Defaults for an absent field match MERlin's own
-    (``merlin.core.dataset.Dataset._load_microscope_parameters``) exactly --
-    confirmed directly against that source, not assumed:
-    ``flip_horizontal=True``, ``flip_vertical=False``, ``transpose=True``.
-    A file with none of the three (e.g. ``MERFISH5.json``, which has only
-    ``microns_per_pixel``) is therefore NOT "no transform" -- it's MERlin's
-    full default orientation.
-
-    Parameters
-    ----------
-    microscope      : microscope id, e.g. ``"ST2"``
-    microscope_dir  : directory containing the microscope-parameters JSONs
-                      (``MERci/data/configs/merlin/microscope/``)
-
-    Returns
-    -------
-    dict with keys ``flip_horizontal``, ``flip_vertical``, ``transpose``
-    (all ``bool``), ready to pass as ``**kwargs`` to
+    A microscope's ``flip_horizontal``/``flip_vertical``/``transpose`` flags
+    from its MERlin microscope-parameters JSON
+    (:func:`load_microscope_parameters`), ready to pass as ``**kwargs`` to
     :func:`apply_microscope_orientation`.
     """
-    path = Path(microscope_dir) / resolve_microscope_parameters_filename(microscope)
-    params = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return {
-        "flip_horizontal": params.get("flip_horizontal", True),
-        "flip_vertical":   params.get("flip_vertical", False),
-        "transpose":       params.get("transpose", True),
-    }
+    params = load_microscope_parameters(microscope, microscope_dir=microscope_dir)
+    return {k: bool(params[k]) for k in ("flip_horizontal", "flip_vertical", "transpose")}
 
 
 def apply_microscope_orientation(

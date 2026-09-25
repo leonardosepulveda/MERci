@@ -40,7 +40,8 @@ class ExperimentConfig:
     ----------------------
     microscope            : microscope identifier, e.g. ``"MF3"``, ``"MF5"``
     pixel_size_um         : camera pixel size in µm; None → the microscope's MERlin JSON
-    image_size_px         : number of pixels along one side of a raw frame
+    image_size_px         : number of pixels along one side of a raw frame; None → the
+                            microscope's MERlin JSON
     non_overlap_fraction  : fraction of the FOV covered per stage step
                             (step_size_um = pixel_size_um × image_size_px
                                            × non_overlap_fraction)
@@ -81,7 +82,7 @@ class ExperimentConfig:
     frame_width:            Optional[int]  = None
     frame_height:           Optional[int]  = None
     pixel_size_um:          Optional[float] = None   # None → the microscope's MERlin JSON value
-    image_size_px:          int            = 2048
+    image_size_px:          Optional[int]  = None   # None → the microscope's MERlin JSON value
     non_overlap_fraction:   float          = 0.9
 
     # ── Timing (seconds) ──────────────────────────────────────────────────────
@@ -190,9 +191,11 @@ class ExperimentConfig:
         ):
             setattr(self, attr, Path(getattr(self, attr)))
 
+        from ..acquisition.configs import get_camera_frame_size, get_camera_pixel_size_um
         if self.pixel_size_um is None:
-            from ..acquisition.configs import get_camera_pixel_size_um
             self.pixel_size_um = get_camera_pixel_size_um(self.microscope)
+        if self.image_size_px is None:
+            self.image_size_px = get_camera_frame_size(self.microscope)[0]
 
         if self.settings_dir is not None:
             self.settings_dir = Path(self.settings_dir)
