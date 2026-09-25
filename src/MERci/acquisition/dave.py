@@ -601,6 +601,292 @@ def create_round_info_multitissue(
 
 # ── Dave config builder ────────────────────────────────────────────────────────
 
+# ── create_dave_config helpers ───────────────────────────────────────────────
+
+# The Kilroy configs in data/configs/kilroy/ only define "Hybridize"/
+# "Hybridize Adaptors" protocols for hyb indices 1-24 (one physical
+# fluidics port per protocol) -- a >24-round protocol (e.g. the 25-round
+# lineage_tracing_lineage pipeline) needs the operator to physically
+# reload an already-used port with fresh reagent for the extra round(s),
+# so the KILROY PROTOCOL for hyb index 25 onward reuses port 2's name
+# (26 -> port 3, ...), never port 1. Only the protocol called changes --
+# the loop label and data folder for that round still use its true hyb
+# index, so nothing collides with hyb 2's own folder/label.
+MAX_KILROY_HYB = 24
+
+# Leading comment for a recipe with any "multi" (variable-z-per-FOV) round:
+# nothing else in the recipe hints that its positions files need a 3rd column.
+_VARIABLE_Z_COMMENT = (
+    "VARIABLE-Z-PER-FOV EXPERIMENT.\n"
+    "The positions file(s) referenced below must carry a 3rd column\n"
+    "per line naming the HAL parameters set (hal_config filename, no\n"
+    ".xml extension) to use for that specific FOV, e.g.:\n"
+    "  1234.5,987.6,hal-config-st2-bits-shallow-750f10_650f10_560f10\n"
+    "A plain \"x,y\" line falls back to whatever HAL parameters are\n"
+    "currently active. Requires the patched Dave described in\n"
+    "misc/dave_multi_z/README.md (replaces storm_control/dave/\n"
+    "xml_generators/v2Generator.py) -- a stock Dave will silently\n"
+    "ignore the 3rd column and reuse whichever parameters were last set."
+)
+
+
+def _kilroy_hyb_idx(hyb_idx: int) -> int:
+    """Kilroy hybridize-protocol index for *hyb_idx* (wraps past ``MAX_KILROY_HYB``)."""
+    if hyb_idx <= MAX_KILROY_HYB:
+        return hyb_idx
+    return hyb_idx - (MAX_KILROY_HYB - 1)
+
+
+def _round_has_bits(round_info: pd.DataFrame, rid: int) -> bool:
+    """True if round *rid* images bits (not just cells / transit)."""
+    rrows = round_info[round_info["imaging_round"] == rid]
+    if "imaging_type" in round_info.columns:
+        types = {str(t).strip().lower() for t in rrows["imaging_type"].dropna()}
+        if types:
+            return "bits" in types
+    return any("cells" not in str(s) for s in rrows["series"])
+
+
+def _hyb_idx(round_id: int, first_bits_round: Optional[int]) -> int:
+    """Bit/hyb index (1-based) of imaging round *round_id* -- offset so a
+    leading cells round never shifts it (round *first_bits_round* -> 1)."""
+    if first_bits_round is not None and round_id >= first_bits_round:
+        return round_id - first_bits_round + 1
+    return round_id
+
+
+def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str,
+               settings_dir: Path, num_focus_checks: int) -> None:
+    """Append one <movie> (resolving its HAL frame count) to *parent_loop*."""
+    movie_name   = series_to_movie_name(str(row["series"]))
+    hal_stem     = Path(str(row["hal_config"])).stem
+    hal_path     = resolve_hal_config_path(settings_dir, hal_stem)
+    try:
+        n_frames = get_hal_frame_count(hal_path)
+    except (FileNotFoundError, ValueError) as exc:
+        n_frames = 0
+        # Previously silent: a movie written with <length>0</length> isn't just
+        # a cosmetic gap in estimate_dave_experiment's time/storage totals --
+        # it's a zero-frame movie in the REAL recipe Dave would run. Surface it
+        # immediately so a missing/misnamed hal_config is never mistaken for
+        # "0 s, 0 B this round" being a legitimate estimate.
+        print(f"[create_dave_config] WARNING: could not read <frames> from "
+              f"{hal_path} ({exc}) -- movie {movie_name!r} written with "
+              f"<length>0</length>. Check that round_info.csv's hal_config "
+              f"column ({hal_stem!r}) matches a real file in {settings_dir}.")
+
+    movie   = ET.SubElement(parent_loop, "movie")
+    name_el = ET.SubElement(movie, "name")
+    name_el.set("increment", "Yes")
+    name_el.text = movie_name
+    # Continuous FOV numbering across per-segment loops (multi-boundary layout):
+    # when round_info carries fov_start/fov_pad, emit them as the patched Dave's
+    # <name start=… pad=…> so boundary (and transit) movies share one name yet
+    # keep a single running, non-colliding index. Absent columns → stock Dave
+    # numbering (single-positions layout is unaffected).
+    if "fov_start" in row.index and pd.notna(row.get("fov_start")):
+        name_el.set("start", str(int(row["fov_start"])))
+    if "fov_pad" in row.index and pd.notna(row.get("fov_pad")):
+        name_el.set("pad", str(int(row["fov_pad"])))
+    # A "multi" (variable-z-per-FOV) round must NOT get a static <length>/
+    # <parameters> here: nodeToDict's field extraction (storm_control's
+    # movieNodeToDict) resolves each tag via plain ElementTree.find(),
+    # which returns the FIRST match in document order. Since these two
+    # elements are written before <variable_entry>, a static value here
+    # would always shadow whatever the position itself supplies once
+    # expanded (via the positions file's per-line hal_config column and
+    # the patched Dave in dave_variable_z_patch/) -- silently discarding
+    # the whole point of per-FOV tiering. Absent tissue_thickness column
+    # (every "single" round, i.e. all of today's experiments) -> the
+    # normal, unaffected behaviour.
+    if row.get("tissue_thickness") != "multi":
+        ET.SubElement(movie, "length").text     = str(n_frames)
+        ET.SubElement(movie, "parameters").text = hal_stem
+    cf = ET.SubElement(movie, "check_focus")
+    ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
+    ET.SubElement(cf, "focus_scan")
+    ET.SubElement(movie, "overwrite").text = "False"
+    ve = ET.SubElement(movie, "variable_entry")
+    ve.set("name", variable_name)
+
+
+def _between_round_protocols(
+    hyb_idx:            int,
+    skip_cleave:        bool,
+    use_adaptors:       bool,
+    fluidics_protocols: Optional[Sequence[str]],
+    resolver:           Optional[KilroyProtocolResolver],
+    kilroy_config:      Optional[Path],
+) -> List[str]:
+    """Kilroy protocol names for the fluidics block before hyb *hyb_idx*."""
+    if fluidics_protocols is not None:
+        fl_protocols = list(fluidics_protocols)
+        if resolver is not None:
+            resolver.validate(fl_protocols)
+        return fl_protocols
+    if resolver is not None:
+        # Names taken from the Kilroy config (see kilroy_config).
+        cleave = [] if skip_cleave else [resolver.cleave(adaptors=use_adaptors)]
+        kilroy_hyb_idx = _kilroy_hyb_idx(hyb_idx)
+        if use_adaptors:
+            steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=True), resolver.readouts()]
+        else:
+            steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=False)]
+        # Some Kilroy protocols (e.g. "Hybridize N") already end by
+        # setting/flowing the imaging buffer themselves -- appending the
+        # standalone image-buffer protocol on top would flow it twice.
+        # Detected by comparing the LAST VALVE THAT ACTUALLY FLOWED
+        # (protocol_last_flowed_valve, not just the last <valve>
+        # element) in the step immediately preceding it (readouts, or
+        # the hybridize step itself) against the standalone
+        # protocol's own last-flowed valve, rather than hard-coding
+        # which Dave step this can happen after. Using the literal
+        # last <valve> element instead of the last one that flowed
+        # is NOT equivalent: a Kilroy config can end a protocol with
+        # a bare valve reposition move with no <pump> after it (e.g.
+        # parking at the next hyb's port), which is not itself a
+        # flow -- using the literal last <valve> element there causes
+        # a real double-flow bug (see protocol_last_flowed_valve's
+        # docstring).
+        image_buffer = resolver.image_buffer()
+        preceding_last_flow = protocol_last_flowed_valve(kilroy_config, steps[-1])
+        buffer_last_flow    = protocol_last_flowed_valve(kilroy_config, image_buffer)
+        already_flowed = bool(preceding_last_flow and buffer_last_flow
+                              and preceding_last_flow.lower() == buffer_last_flow.lower())
+        if not already_flowed:
+            steps.append(image_buffer)
+        return cleave + steps
+    if use_adaptors:
+        # Legacy hard-coded names (no Kilroy cross-check).
+        return ([] if skip_cleave else ["Cleave adaptors"]) + [
+            f"Hyb adaptors {hyb_idx}",
+            "Hyb readouts",
+            "Flow Image Buffer",
+        ]
+    return ([] if skip_cleave else ["Cleave direct"]) + [
+        f"Hybridize {hyb_idx}",
+        "Wash and Imaging Buffers",
+    ]
+
+
+def _fluidics_after(
+    round_id:             int,
+    is_last:              bool,
+    first_bits_round:     Optional[int],
+    first_hyb_no_cleave:  bool,
+    include_final_cleave: bool,
+    use_adaptors:         bool,
+    fluidics_protocols:   Optional[Sequence[str]],
+    resolver:             Optional[KilroyProtocolResolver],
+    kilroy_config:        Optional[Path],
+) -> Optional[Tuple[str, List[str]]]:
+    """``(loop name, protocols)`` of the fluidics block that FOLLOWS *round_id*,
+    or None if there is none.
+
+    *round_id* need not itself exist in ``round_info`` -- only
+    ``round_id + 1`` (the round this fluidics precedes) matters, so passing
+    ``round_ids[0] - 1`` gives a LEADING fluidics block before a round_info
+    slice's first round (see ``create_dave_config``'s ``leading_fluidics``).
+    """
+    if not is_last:
+        next_round = round_id + 1
+        # Hyb number tracks the bit/hyb index of the NEXT imaging round (not
+        # the raw imaging_round number), so a leading cells round shifts
+        # neither the Kilroy protocol numbers nor the loop's own name.
+        hyb_idx = _hyb_idx(next_round, first_bits_round)
+        # The fluidics that precedes the FIRST bits round omits the cleave.
+        is_first_hyb = (first_bits_round is not None and next_round == first_bits_round)
+        skip_cleave  = is_first_hyb and first_hyb_no_cleave
+        return (f"Hyb {hyb_idx:02d} Fluidics",
+                _between_round_protocols(hyb_idx, skip_cleave, use_adaptors,
+                                         fluidics_protocols, resolver, kilroy_config))
+    if include_final_cleave:
+        if resolver is not None:
+            return "Fluidics Final", [resolver.cleave(adaptors=use_adaptors)]
+        return "Fluidics Final", ["Cleave adaptors" if use_adaptors else "Cleave direct"]
+    return None
+
+
+class _RecipeWriter:
+    """One Dave recipe being built: its command sequence, loop variables and
+    the currently active save directory."""
+
+    def __init__(self, create_data_dirs: bool):
+        self.root = ET.Element("recipe")
+        self.seq  = ET.SubElement(self.root, "command_sequence")
+        self.create_data_dirs = create_data_dirs
+        self.imaging_loop_vars:  List[Tuple[str, str]]       = []
+        self.fluidics_loop_vars: List[Tuple[str, List[str]]] = []
+        self._created_dirs: set = set()
+        self._current_dir:  Optional[str] = None   # last <change_directory> emitted
+
+    def change_directory(self, dir_value) -> None:
+        """
+        Emit a ``<change_directory>`` (sets HAL's save dir for the FOLLOWING loop)
+        from *dir_value*, and — when ``create_data_dirs`` — create that folder.
+
+        HAL rejects a directory that does not exist, and nothing in Dave/HAL makes
+        it, so the directory is created here. De-duplicated: emitting the directory
+        that is already active is a no-op. No-op when *dir_value* is
+        missing/blank/NaN (e.g. round_info has no ``data_dir`` column).
+        """
+        if not pd.notna(dir_value):
+            return
+        dpath = str(dir_value).strip()
+        if not dpath or dpath == self._current_dir:
+            return
+        ET.SubElement(self.seq, "change_directory").text = dpath
+        self._current_dir = dpath
+        if self.create_data_dirs and dpath not in self._created_dirs:
+            self._created_dirs.add(dpath)
+            try:
+                Path(dpath).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                # Non-fatal: recipe still written. Warn so the user creates the
+                # folder on the acquisition machine (HAL requires it to exist).
+                print(f"[create_dave_config] WARNING: could not create data dir "
+                      f"{dpath!r}: {exc}. Create it on the acquisition computer "
+                      f"before running Dave.")
+
+    def imaging_loop(self, name: str, positions_path: str) -> ET.Element:
+        """Append an imaging ``<loop>`` and its own same-named positions loop_variable."""
+        loop = ET.SubElement(self.seq, "loop")
+        loop.set("name", name)
+        self.imaging_loop_vars.append((name, positions_path))
+        return loop
+
+    def fluidics_loop(self, block: Optional[Tuple[str, List[str]]]) -> None:
+        """Append a fluidics ``<loop>`` from ``_fluidics_after``'s result (None: nothing)."""
+        if block is None:
+            return
+        fl_name, fl_protocols = block
+        fl_loop = ET.SubElement(self.seq, "loop")
+        fl_loop.set("name", fl_name)
+        ET.SubElement(fl_loop, "variable_entry").set("name", fl_name)
+        self.fluidics_loop_vars.append((fl_name, fl_protocols))
+
+    def write(self, output_path: Path, leading_comment: Optional[str]) -> None:
+        """Append the loop variables and write the recipe XML."""
+        # Grouped under two labeled comments so the two kinds of loop_variable
+        # (position files vs. fluidics protocol lists) are easy to tell apart when
+        # reading the raw XML.
+        if self.imaging_loop_vars:
+            self.root.append(ET.Comment(" POSITION VARIABLES "))
+        for lname, pos_path in self.imaging_loop_vars:
+            lv = ET.SubElement(self.root, "loop_variable")
+            lv.set("name", lname)
+            ET.SubElement(lv, "file_path").text = pos_path
+        if self.fluidics_loop_vars:
+            self.root.append(ET.Comment(" FLUIDICS VARIABLES "))
+        for lname, protocols in self.fluidics_loop_vars:
+            lv = ET.SubElement(self.root, "loop_variable")
+            lv.set("name", lname)
+            val = ET.SubElement(lv, "value")
+            for protocol in protocols:
+                ET.SubElement(val, "valve_protocol").text = protocol
+        _write_dave_xml(self.root, Path(output_path), leading_comment=leading_comment)
+
+
 def create_dave_config(
     round_info:           pd.DataFrame,
     positions_file:       Path,
@@ -798,8 +1084,6 @@ def create_dave_config(
         The estimate when ``print_estimate`` is True, else None.
     """
     round_ids = sorted(round_info["imaging_round"].unique())
-    n_rounds  = len(round_ids)
-    has_data_dir = "data_dir" in round_info.columns
 
     # Per-segment layout: active when round_info carries a positions_file column
     # AND a positions_dir is given (the multi-boundary layout). Otherwise every
@@ -813,312 +1097,49 @@ def create_dave_config(
         KilroyProtocolResolver(load_kilroy_protocols(kilroy_config))
         if kilroy_config is not None else None
     )
-
-    def _round_has_bits(rid: int) -> bool:
-        """True if round *rid* images bits (not just cells / transit)."""
-        rrows = round_info[round_info["imaging_round"] == rid]
-        if "imaging_type" in round_info.columns:
-            types = {str(t).strip().lower() for t in rrows["imaging_type"].dropna()}
-            if types:
-                return "bits" in types
-        return any("cells" not in str(s) for s in rrows["series"])
-
-    bits_round_ids   = [rid for rid in round_ids if _round_has_bits(rid)]
+    bits_round_ids   = [rid for rid in round_ids if _round_has_bits(round_info, rid)]
     first_bits_round = bits_round_ids[0] if bits_round_ids else None
-
-    def _hyb_idx(round_id: int) -> int:
-        """Bit/hyb index (1-based) of imaging round *round_id* -- offset so a
-        leading cells round never shifts it (round *first_bits_round* -> 1)."""
-        if first_bits_round is not None and round_id >= first_bits_round:
-            return round_id - first_bits_round + 1
-        return round_id
-
-    # The Kilroy configs in data/configs/kilroy/ only define "Hybridize"/
-    # "Hybridize Adaptors" protocols for hyb indices 1-24 (one physical
-    # fluidics port per protocol) -- a >24-round protocol (e.g. the 25-round
-    # lineage_tracing_lineage pipeline) needs the operator to physically
-    # reload an already-used port with fresh reagent for the extra round(s),
-    # so the KILROY PROTOCOL for hyb index 25 onward reuses port 2's name
-    # (26 -> port 3, ...), never port 1. This only changes which protocol
-    # gets called in _add_fluidics below -- the loop label and data folder
-    # for that round still use the true hyb_idx from _hyb_idx above, so
-    # nothing collides with hyb 2's own folder/label.
-    MAX_KILROY_HYB = 24
-
-    def _kilroy_hyb_idx(hyb_idx: int) -> int:
-        if hyb_idx <= MAX_KILROY_HYB:
-            return hyb_idx
-        return hyb_idx - (MAX_KILROY_HYB - 1)
-
-    def _imaging_label(round_id: int) -> str:
-        """Base loop label for imaging round *round_id*: the fixed \"Cells
-        Imaging\" for the (single) non-bits round, else \"Hyb NN Imaging\"."""
-        if round_id in bits_round_ids:
-            return f"Hyb {_hyb_idx(round_id):02d} Imaging"
-        return "Cells Imaging"
-
-    root = ET.Element("recipe")
-    seq  = ET.SubElement(root, "command_sequence")
-
-    imaging_loop_vars:  list[tuple[str, str]]       = []
-    fluidics_loop_vars: list[tuple[str, list[str]]] = []
-    created_dirs:       set[str]                    = set()
-    current_dir:        Optional[str]               = None   # last <change_directory> emitted
-
-    def _add_change_directory(dir_value) -> None:
-        """
-        Emit a ``<change_directory>`` (sets HAL's save dir for the FOLLOWING loop)
-        from *dir_value*, and — when ``create_data_dirs`` — create that folder.
-
-        HAL rejects a directory that does not exist, and nothing in Dave/HAL makes
-        it, so the directory is created here. De-duplicated: emitting the directory
-        that is already active is a no-op, so setting the round's directory before
-        its fluidics does not repeat it before the round's imaging loop. No-op when
-        the round_info has no ``data_dir`` column or the value is blank/NaN.
-        """
-        nonlocal current_dir
-        if not has_data_dir or not pd.notna(dir_value):
-            return
-        dpath = str(dir_value).strip()
-        if not dpath or dpath == current_dir:
-            return
-        ET.SubElement(seq, "change_directory").text = dpath
-        current_dir = dpath
-        if create_data_dirs and dpath not in created_dirs:
-            created_dirs.add(dpath)
-            try:
-                Path(dpath).mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                # Non-fatal: recipe still written. Warn so the user creates the
-                # folder on the acquisition machine (HAL requires it to exist).
-                print(f"[create_dave_config] WARNING: could not create data dir "
-                      f"{dpath!r}: {exc}. Create it on the acquisition computer "
-                      f"before running Dave.")
-
-    def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str) -> None:
-        """Append one <movie> (resolving its HAL frame count) to *parent_loop*."""
-        movie_name   = series_to_movie_name(str(row["series"]))
-        hal_stem     = Path(str(row["hal_config"])).stem
-        hal_path     = resolve_hal_config_path(settings_dir, hal_stem)
-        try:
-            n_frames = get_hal_frame_count(hal_path)
-        except (FileNotFoundError, ValueError) as exc:
-            n_frames = 0
-            # Previously silent: a movie written with <length>0</length> isn't just
-            # a cosmetic gap in estimate_dave_experiment's time/storage totals --
-            # it's a zero-frame movie in the REAL recipe Dave would run. Surface it
-            # immediately so a missing/misnamed hal_config is never mistaken for
-            # "0 s, 0 B this round" being a legitimate estimate.
-            print(f"[create_dave_config] WARNING: could not read <frames> from "
-                  f"{hal_path} ({exc}) -- movie {movie_name!r} written with "
-                  f"<length>0</length>. Check that round_info.csv's hal_config "
-                  f"column ({hal_stem!r}) matches a real file in {settings_dir}.")
-
-        movie   = ET.SubElement(parent_loop, "movie")
-        name_el = ET.SubElement(movie, "name")
-        name_el.set("increment", "Yes")
-        name_el.text = movie_name
-        # Continuous FOV numbering across per-segment loops (multi-boundary layout):
-        # when round_info carries fov_start/fov_pad, emit them as the patched Dave's
-        # <name start=… pad=…> so boundary (and transit) movies share one name yet
-        # keep a single running, non-colliding index. Absent columns → stock Dave
-        # numbering (single-positions layout is unaffected).
-        if "fov_start" in row.index and pd.notna(row.get("fov_start")):
-            name_el.set("start", str(int(row["fov_start"])))
-        if "fov_pad" in row.index and pd.notna(row.get("fov_pad")):
-            name_el.set("pad", str(int(row["fov_pad"])))
-        # A "multi" (variable-z-per-FOV) round must NOT get a static <length>/
-        # <parameters> here: nodeToDict's field extraction (storm_control's
-        # movieNodeToDict) resolves each tag via plain ElementTree.find(),
-        # which returns the FIRST match in document order. Since these two
-        # elements are written before <variable_entry>, a static value here
-        # would always shadow whatever the position itself supplies once
-        # expanded (via the positions file's per-line hal_config column and
-        # the patched Dave in dave_variable_z_patch/) -- silently discarding
-        # the whole point of per-FOV tiering. Absent tissue_thickness column
-        # (every "single" round, i.e. all of today's experiments) -> the
-        # normal, unaffected behaviour.
-        if row.get("tissue_thickness") != "multi":
-            ET.SubElement(movie, "length").text     = str(n_frames)
-            ET.SubElement(movie, "parameters").text = hal_stem
-        cf = ET.SubElement(movie, "check_focus")
-        ET.SubElement(cf, "num_focus_checks").text = str(num_focus_checks)
-        ET.SubElement(cf, "focus_scan")
-        ET.SubElement(movie, "overwrite").text = "False"
-        ve = ET.SubElement(movie, "variable_entry")
-        ve.set("name", variable_name)
-
-    def _add_fluidics(round_id: int, is_last: bool) -> None:
-        """Append the between-round fluidics loop that FOLLOWS *round_id*.
-
-        *round_id* need not itself exist in ``round_info`` -- only
-        ``round_id + 1`` (the round this fluidics precedes) is looked up, so a
-        caller can pass ``round_ids[0] - 1`` to emit a LEADING fluidics block
-        before a round_info slice's first round (see ``leading_fluidics``).
-        """
-        if not is_last:
-            next_round = round_id + 1
-            # Hyb number tracks the bit/hyb index of the NEXT imaging round (not
-            # the raw imaging_round number), so a leading cells round shifts
-            # neither the Kilroy protocol numbers nor the loop's own name.
-            hyb_idx = _hyb_idx(next_round)
-            fl_name = f"Hyb {hyb_idx:02d} Fluidics"
-
-            # The fluidics that precedes the FIRST bits round omits the cleave.
-            is_first_hyb = (first_bits_round is not None and next_round == first_bits_round)
-            skip_cleave  = is_first_hyb and first_hyb_no_cleave
-
-            if fluidics_protocols is not None:
-                fl_protocols = list(fluidics_protocols)
-                if resolver is not None:
-                    resolver.validate(fl_protocols)
-            elif resolver is not None:
-                # Names taken from the Kilroy config (see kilroy_config).
-                cleave = [] if skip_cleave else [resolver.cleave(adaptors=use_adaptors)]
-                kilroy_hyb_idx = _kilroy_hyb_idx(hyb_idx)
-                if use_adaptors:
-                    steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=True), resolver.readouts()]
-                else:
-                    steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=False)]
-                # Some Kilroy protocols (e.g. "Hybridize N") already end by
-                # setting/flowing the imaging buffer themselves -- appending the
-                # standalone image-buffer protocol on top would flow it twice.
-                # Detected by comparing the LAST VALVE THAT ACTUALLY FLOWED
-                # (protocol_last_flowed_valve, not just the last <valve>
-                # element) in the step immediately preceding it (readouts, or
-                # the hybridize step itself) against the standalone
-                # protocol's own last-flowed valve, rather than hard-coding
-                # which Dave step this can happen after. Using the literal
-                # last <valve> element instead of the last one that flowed
-                # is NOT equivalent: a Kilroy config can end a protocol with
-                # a bare valve reposition move with no <pump> after it (e.g.
-                # parking at the next hyb's port), which is not itself a
-                # flow -- using the literal last <valve> element there causes
-                # a real double-flow bug (see protocol_last_flowed_valve's
-                # docstring).
-                image_buffer = resolver.image_buffer()
-                preceding_last_flow = protocol_last_flowed_valve(kilroy_config, steps[-1])
-                buffer_last_flow    = protocol_last_flowed_valve(kilroy_config, image_buffer)
-                already_flowed = bool(preceding_last_flow and buffer_last_flow
-                                      and preceding_last_flow.lower() == buffer_last_flow.lower())
-                if not already_flowed:
-                    steps.append(image_buffer)
-                fl_protocols = cleave + steps
-            elif use_adaptors:
-                # Legacy hard-coded names (no Kilroy cross-check).
-                fl_protocols = ([] if skip_cleave else ["Cleave adaptors"]) + [
-                    f"Hyb adaptors {hyb_idx}",
-                    "Hyb readouts",
-                    "Flow Image Buffer",
-                ]
-            else:
-                fl_protocols = ([] if skip_cleave else ["Cleave direct"]) + [
-                    f"Hybridize {hyb_idx}",
-                    "Wash and Imaging Buffers",
-                ]
-        elif include_final_cleave:
-            fl_name = "Fluidics Final"
-            if resolver is not None:
-                fl_protocols = [resolver.cleave(adaptors=use_adaptors)]
-            else:
-                fl_protocols = ["Cleave adaptors" if use_adaptors else "Cleave direct"]
-        else:
-            return
-
-        fl_loop = ET.SubElement(seq, "loop")
-        fl_loop.set("name", fl_name)
-        ve = ET.SubElement(fl_loop, "variable_entry")
-        ve.set("name", fl_name)
-        fluidics_loop_vars.append((fl_name, fl_protocols))
+    fluidics_kw = dict(
+        first_bits_round=first_bits_round, first_hyb_no_cleave=first_hyb_no_cleave,
+        include_final_cleave=include_final_cleave, use_adaptors=use_adaptors,
+        fluidics_protocols=fluidics_protocols, resolver=resolver, kilroy_config=kilroy_config,
+    )
+    writer = _RecipeWriter(create_data_dirs)
 
     if leading_fluidics and round_ids:
-        _add_fluidics(round_ids[0] - 1, is_last=False)
+        writer.fluidics_loop(_fluidics_after(round_ids[0] - 1, False, **fluidics_kw))
 
     for idx, round_id in enumerate(round_ids):
-        is_last = (idx == n_rounds - 1)
+        is_last = (idx == len(round_ids) - 1)
         rows    = round_info[round_info["imaging_round"] == round_id]
+        # Fixed "Cells Imaging" for the (single) non-bits round.
+        label   = (f"Hyb {_hyb_idx(round_id, first_bits_round):02d} Imaging"
+                   if round_id in bits_round_ids else "Cells Imaging")
 
         if segment_mode:
             # One loop per (round, segment) -- a Dave loop iterates a single
-            # positions file. Each loop gets its OWN loop_variable, named
-            # identically to the loop itself: Dave's real v2Generator
-            # (handleLoop) looks up `self.loop_variable_names.index(loop.attrib["name"])`
-            # -- every <loop> MUST have a <loop_variable> of the exact same
-            # name, full stop. A <movie>'s <variable_entry> cannot "alias" a
-            # differently-named loop_variable declared elsewhere: it does its
-            # own independent index() lookup and reads the CURRENT iterator
-            # state for THAT loop_variable, which is only ever advanced by the
-            # one <loop> whose name matches it. So when several rounds visit
-            # the same segment, each round still declares its own
-            # loop_variable pointing at the same positions file -- Dave has no
-            # mechanism to share one across differently-named loops (a shared
-            # name here raises ValueError: '<loop name>' is not in list).
-            # Each segment sets its own save directory just before its loop.
+            # positions file. Each loop gets its OWN same-named loop_variable
+            # (see "One <loop_variable> per loop" in the docstring), and each
+            # segment sets its own save directory just before its loop.
             for _, row in rows.iterrows():
                 seg   = str(row.get("segment", "")).strip() or series_to_movie_name(str(row["series"]))
-                lname = f"{_imaging_label(round_id)} - {seg}"
-                _add_change_directory(row.get("data_dir"))
-                loop  = ET.SubElement(seq, "loop")
-                loop.set("name", lname)
-                _add_movie(loop, row, lname)
-                imaging_loop_vars.append((lname, str(positions_dir / str(row["positions_file"]))))
+                lname = f"{label} - {seg}"
+                writer.change_directory(row.get("data_dir"))
+                loop = writer.imaging_loop(lname, str(positions_dir / str(row["positions_file"])))
+                _add_movie(loop, row, lname, settings_dir, num_focus_checks)
         else:
             # Single loop for the round; all movies share positions_file and one
-            # save directory (from the round's first row's data_dir). This loop
-            # gets its own loop_variable (named identically to it) even though
-            # every round points at the same positions file -- see the
-            # segment_mode branch above for why Dave requires this per-loop
-            # declaration rather than one shared across rounds.
-            img_name = _imaging_label(round_id)
-            _add_change_directory(rows.iloc[0].get("data_dir") if has_data_dir else None)
-            img_loop = ET.SubElement(seq, "loop")
-            img_loop.set("name", img_name)
+            # save directory (from the round's first row's data_dir).
+            writer.change_directory(rows.iloc[0].get("data_dir"))
+            loop = writer.imaging_loop(label, str(positions_file))
             for _, row in rows.iterrows():
-                _add_movie(img_loop, row, img_name)
-            imaging_loop_vars.append((img_name, str(positions_file)))
+                _add_movie(loop, row, label, settings_dir, num_focus_checks)
 
-        _add_fluidics(round_id, is_last)
+        writer.fluidics_loop(_fluidics_after(round_id, is_last, **fluidics_kw))
 
-    # ── Loop variables ─────────────────────────────────────────────────────────
-    # Grouped under two labeled comments so the two kinds of loop_variable
-    # (position files vs. fluidics protocol lists) are easy to tell apart when
-    # reading the raw XML.
-    if imaging_loop_vars:
-        root.append(ET.Comment(" POSITION VARIABLES "))
-    for lname, pos_path in imaging_loop_vars:
-        lv = ET.SubElement(root, "loop_variable")
-        lv.set("name", lname)
-        ET.SubElement(lv, "file_path").text = pos_path
-
-    if fluidics_loop_vars:
-        root.append(ET.Comment(" FLUIDICS VARIABLES "))
-    for lname, protocols in fluidics_loop_vars:
-        lv = ET.SubElement(root, "loop_variable")
-        lv.set("name", lname)
-        val = ET.SubElement(lv, "value")
-        for protocol in protocols:
-            ET.SubElement(val, "valve_protocol").text = protocol
-
-    # Flag a variable-z-per-FOV experiment directly in the saved file, so
-    # anyone opening the recipe (not just this function's caller) sees the
-    # positions-file requirement immediately -- easy to miss otherwise, since
-    # nothing else in the recipe itself hints that "multi" rounds need a 3rd
-    # column per position.
-    leading_comment = None
-    if "tissue_thickness" in round_info.columns and (round_info["tissue_thickness"] == "multi").any():
-        leading_comment = (
-            "VARIABLE-Z-PER-FOV EXPERIMENT.\n"
-            "The positions file(s) referenced below must carry a 3rd column\n"
-            "per line naming the HAL parameters set (hal_config filename, no\n"
-            ".xml extension) to use for that specific FOV, e.g.:\n"
-            "  1234.5,987.6,hal-config-st2-bits-shallow-750f10_650f10_560f10\n"
-            "A plain \"x,y\" line falls back to whatever HAL parameters are\n"
-            "currently active. Requires the patched Dave described in\n"
-            "misc/dave_multi_z/README.md (replaces storm_control/dave/\n"
-            "xml_generators/v2Generator.py) -- a stock Dave will silently\n"
-            "ignore the 3rd column and reuse whichever parameters were last set."
-        )
-    _write_dave_xml(root, Path(output_path), leading_comment=leading_comment)
+    is_variable_z = ("tissue_thickness" in round_info.columns
+                     and (round_info["tissue_thickness"] == "multi").any())
+    writer.write(output_path, _VARIABLE_Z_COMMENT if is_variable_z else None)
 
     if print_estimate:
         return _print_estimate(output_path, kilroy_config, settings_dir,
