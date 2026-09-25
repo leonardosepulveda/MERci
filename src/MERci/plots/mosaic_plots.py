@@ -22,50 +22,33 @@ def plot_tile_intensity_histograms(
     show_threshold:  bool = True,
 ) -> Tuple[object, Optional[float]]:
     """
-    Overlay one log-space pixel-intensity histogram per tile (thin gray
-    lines), plus a solid combined histogram, weighted 50/50 between
-    "empty" and "signal" tiles (:func:`_classify_tiles_by_signal`) rather
-    than pooled by raw pixel count -- lets an outlier tile (a different
-    objective, a debris/bubble FOV, ...) stand out, and helps pick a fixed
-    segmentation threshold by eye instead of trusting Otsu blindly.
+    Overlay one log-intensity histogram per tile (thin lines) and a combined
+    histogram (solid), to spot outlier tiles and pick a segmentation
+    threshold by eye.
 
-    On a dataset where most FOVs are tissue-free, pooling by raw pixel
-    count lets the (much more numerous) empty tiles'
-    background peak swamp the real tissue peak down to ~3% of the combined
-    histogram's max density -- under the 5% prominence cutoff
-    :func:`estimate_bimodal_threshold` requires, so it always returned
-    ``None`` even though the tissue peak is clearly real (visible in the
-    per-tile lines). Weighting the two classes equally instead of by pixel
-    count fixes this regardless of how lopsided the empty/signal tile split
-    is, since the two classes always contribute equal weight to the
-    combined curve.
+    The combined histogram weights "empty" and "signal" tiles 50/50
+    (:func:`_classify_tiles_by_signal`) instead of pooling pixels: when most
+    tiles are empty, pooling shrinks the tissue peak below the 5% prominence
+    :func:`estimate_bimodal_threshold` needs, and no threshold is found.
 
-    Every histogram (per-tile and combined) is computed over the same
-    ``log10`` bin edges (spanning the full range across all tiles) so the
-    overlaid shapes are directly comparable, and all are density-normalized
-    so tiles don't need to be the same pixel count to compare shapes.
-
-    When the combined histogram is clearly bimodal, the valley between its
-    two most prominent peaks is estimated (:func:`estimate_bimodal_threshold`),
-    drawn as a vertical line labelled with the threshold in linear intensity
-    units, and returned -- so it can be used directly as ``THRESHOLD`` in the
-    segmentation cell instead of Otsu's often-biased pick (see
-    :func:`segment_mosaic_tissue`'s docstring for why Otsu can be biased when
-    one class vastly outnumbers the other in pixel count).
+    All histograms share the same ``log10`` bin edges and are density-
+    normalized, so their shapes compare directly. If the combined histogram is
+    bimodal, the valley between its two main peaks
+    (:func:`estimate_bimodal_threshold`) is drawn and returned, for use as
+    ``THRESHOLD`` instead of Otsu.
 
     Parameters
     ----------
-    tiles : from :func:`load_steve_mosaic` (or a filtered subset).
-    bins : number of bins across the full log10(intensity) range.
-    ax : optional existing matplotlib Axes to draw into.
-    color, alpha : shared line style for every tile's (thin) histogram.
-    show_threshold : draw the estimated valley threshold as a vertical line
-        with a text label, if a clearly bimodal shape is found.
+    tiles : from :func:`load_steve_mosaic` (or a subset)
+    bins : number of bins over the full log10(intensity) range
+    ax : optional matplotlib Axes to draw into
+    color, alpha : line style for the per-tile histograms
+    show_threshold : draw the estimated threshold as a labelled vertical line
 
     Returns
     -------
-    (ax, threshold) : the matplotlib Axes drawn into, and the estimated
-        linear-space threshold (``None`` if no clearly bimodal shape found).
+    (ax, threshold) : the Axes, and the threshold in linear intensity (``None``
+        if the histogram is not clearly bimodal).
     """
     import matplotlib.pyplot as plt
 

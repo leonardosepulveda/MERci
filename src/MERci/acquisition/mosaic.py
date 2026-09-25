@@ -1,62 +1,41 @@
 # MERci/acquisition/mosaic.py
 """
-Derive tissue-boundary / hole polygons automatically from a Steve low-mag
-mosaic, instead of drawing ``boundary_positions*.txt``/``hole*.txt`` by hand.
+Derive tissue-boundary / hole polygons from a Steve low-mag mosaic instead
+of drawing ``boundary_positions*.txt``/``hole*.txt`` by hand.
 
-Typical workflow (see ``02_create_boundary_from_mosaic.ipynb``)
-------------------------------------------------------------------
-1. ``load_steve_mosaic`` – read a Steve ``.msc`` manifest + its ``.stv`` tile
-   pickles (each tile already carries its own stage position, pixel size,
-   and display stacking order, so no separate calibration step is needed).
-2. ``assemble_mosaic_canvas`` – paste every tile into one flattened image in
-   real stage-micron coordinates. Tiles can mix objectives/pixel sizes and
-   deliberately overlap (e.g. a few high-mag alignment FOVs over a low-mag
-   scan); each is resampled using its own native pixel size, and overlaps
-   are resolved by Steve's own stacking order (topmost tile wins), not
-   averaged. Drop tiles from the list first (e.g. by ``objective_name``)
-   only if some should be excluded rather than composited.
-3. ``plots.mosaic_plots.plot_tile_intensity_histograms`` – overlay every tile's log-space
-   intensity histogram, to pick a fixed segmentation threshold by eye when
-   Otsu doesn't separate tissue from background well on a given sample.
-4. ``segment_mosaic_tissue`` – threshold + clean up the canvas into tissue
-   and hole polygons, in the same ``x_um, y_um`` coordinate space that
-   ``boundary_positions.txt``/``hole*.txt`` already use.
-5. ``plots.mosaic_plots.plot_mosaic_segmentation`` – overlay the detected polygons on the
-   canvas for a visual sanity check before committing to them (thresholding
-   parameters are re-run interactively until the overlay looks right).
-6. ``save_boundary_from_mosaic`` – write the polygons out in the exact
-   filename convention ``positions.discover_boundary_files``/
-   ``load_hole_polygons`` already expect, so
-   ``02_create_positions_from_boundaries.ipynb`` picks them up unchanged.
+Workflow (``02_create_boundary_from_mosaic.ipynb``)
+---------------------------------------------------
+1. ``load_steve_mosaic`` -- read a Steve ``.msc`` manifest and its ``.stv``
+   tiles (each carries its stage position, pixel size and stacking order).
+2. ``assemble_mosaic_canvas`` -- paste the tiles into one image in stage
+   microns. Tiles may mix objectives and overlap: each is resampled at its
+   own pixel size and the topmost (Steve's stacking order) wins. Drop tiles
+   from the list first (e.g. by ``objective_name``) to exclude them.
+3. ``plots.mosaic_plots.plot_tile_intensity_histograms`` -- per-tile
+   log-intensity histograms, to pick a threshold by eye when Otsu fails.
+4. ``segment_mosaic_tissue`` -- threshold and clean up the canvas into
+   tissue and hole polygons, in the ``x_um, y_um`` space the boundary and
+   hole files use.
+5. ``plots.mosaic_plots.plot_mosaic_segmentation`` -- overlay the polygons
+   on the canvas to check them before saving.
+6. ``save_boundary_from_mosaic`` -- write the polygons with the filenames
+   ``positions.discover_boundary_files``/``load_hole_polygons`` expect.
 
-Steve file formats (reverse-engineered from ``storm_control.steve``, not
-otherwise documented)
-------------------------------------------------------------------------
-* ``<name>.msc`` – plain text, one comma-separated record per line. An
-  ``objective,<name>,<um_per_pix>,<x_offset>,<y_offset>`` line per configured
-  objective and an ``image,<filename>`` line per saved tile. The per-
-  objective ``(x_offset, y_offset)`` -- Steve's own record of that
-  objective's real parfocal/parcentric misalignment relative to whichever
-  objective it treats as this session's stage-position reference (always
-  ``0.00, 0.00`` on every real ``.msc`` file seen so far) -- IS used, by
-  :func:`load_steve_mosaic`, to correct a real mosaic/high-mag-alignment-
-  tile discrepancy; the ``um_per_pix`` field in the same line is still NOT
-  used for pixel size (see below -- a separate, unrelated field in the
-  same line).
-* ``<name>_<id>.stv`` – a ``pickle.dump`` of the tile's ``ImageItem.__dict__``
-  (minus its Qt graphics item). The keys used here: ``numpy_data`` (the raw,
-  already-oriented camera frame), ``x_um``/``y_um`` (stage position of the
-  frame's *center*), and ``magnification``. The real per-tile pixel size is
-  derived from the tile's own ``x_um``/``x_pix`` ratio and ``magnification``
-  rather than trusting the ``.msc`` objective line's ``um_per_pix`` (which is
-  rounded to 2 decimal places for display) or a hard-coded
-  ``storm_control.steve.coord.Point.pixels_to_um`` value (which is a mutable
-  class attribute, not a universal constant). On a shared microscope where
-  objectives are physically removed/reinstalled between users, the
-  ``(x_offset, y_offset)`` above is NOT a fixed hardware constant either --
-  the same objective pair on the same scope can record different, still-
-  correct values across sessions. It must always be read fresh from each
-  experiment's own ``.msc`` file.
+Steve file formats (from ``storm_control.steve``; not documented elsewhere)
+---------------------------------------------------------------------------
+* ``<name>.msc`` -- text, one comma-separated record per line:
+  ``objective,<name>,<um_per_pix>,<x_offset>,<y_offset>`` per objective and
+  ``image,<filename>`` per tile. The per-objective ``(x_offset, y_offset)``
+  (that objective's misalignment relative to the reference objective, which
+  records ``0.00, 0.00``) is applied by :func:`load_steve_mosaic`. It is not
+  a hardware constant (it changes when objectives are reinstalled), so it
+  is always read from each experiment's own ``.msc``. ``um_per_pix`` is not
+  used (rounded for display).
+* ``<name>_<id>.stv`` -- a pickled ``ImageItem.__dict__``. Keys used:
+  ``numpy_data`` (already-oriented frame), ``x_um``/``y_um`` (stage
+  position of the frame centre) and ``magnification``. Pixel size comes
+  from the tile's own ``x_um``/``x_pix`` and ``magnification``, not from
+  ``um_per_pix`` or ``storm_control``'s mutable ``pixels_to_um``.
 """
 from __future__ import annotations
 
@@ -364,90 +343,44 @@ def segment_mosaic_tissue(
     """
     Threshold a mosaic canvas into tissue and hole polygons.
 
-    Pipeline (each step's purpose, since a single global threshold on the
-    raw canvas is too noisy on real Steve mosaics -- illumination
-    vignetting and tile seams otherwise fragment one tissue mass into
-    hundreds of tiny disjoint specks):
+    A single threshold on the raw canvas breaks one tissue into many specks
+    (vignetting, tile seams), hence the pipeline:
 
-    1. Gaussian-smooth the canvas (``smooth_sigma_um``) to suppress
-       per-pixel/vignetting noise before thresholding.
-    2. Otsu-threshold the smoothed canvas (or use ``threshold`` if given).
-    3. Morphological closing (``close_radius_um``) bridges small real gaps
-       between adjacent bits of the same tissue piece.
-    4. Morphological opening (``open_radius_um``) removes small noise specks
-       that closing alone would keep.
-    5. Dilate outward by ``margin_um`` -- mimics the safety margin a person
-       drawing a boundary by hand would naturally include, so the FOV grid
-       doesn't just barely clip the true tissue edge.
-    6. Fill enclosed background regions to find the tissue's own holes,
-       label connected components of both the tissue and the holes, and
-       trace each labelled region's contour(s) with marching squares
-       (``skimage.measure.find_contours``), converting canvas-pixel
-       coordinates to stage microns via ``canvas.to_um``. A hole component
-       can itself enclose a real tissue **island** (a true donut/annulus
-       shape, e.g. a ring of tissue around an empty center that itself has
-       a tissue clump in the middle) -- marching squares then returns more
-       than one contour for that one hole component: the outer boundary,
-       plus one per island. Each island becomes an **interior ring** of the
-       hole polygon (``shapely.geometry.Polygon(exterior, holes=[...])``),
-       so the island area is correctly excluded *from* the hole (i.e. still
-       imaged) instead of being silently swallowed into a solid disk.
-    7. Drop tissue components below ``min_tissue_area_um2`` -- UNLESS
-       ``near_fragment_max_distance_um`` > 0 and the component is within
-       that distance of an already-kept (large) component AND at least
-       ``min_near_fragment_area_um2`` in its own area, in which case it is
-       kept anyway (see below). Drop holes below ``min_hole_area_um2``,
-       drop islands below ``min_island_area_um2``, and simplify each
-       polygon so no point on it deviates from the raw traced contour by
-       more than ``boundary_max_deviation_um`` (marching squares otherwise
-       produces one vertex per canvas pixel of perimeter).
+    1. Gaussian-smooth (``smooth_sigma_um``).
+    2. Threshold: Otsu on the smoothed canvas, or *threshold* if given.
+    3. Close (``close_radius_um``) to bridge small gaps within a piece.
+    4. Open (``open_radius_um``) to remove noise specks.
+    5. Dilate by ``margin_um``, the safety margin a hand-drawn boundary has.
+    6. Fill enclosed background to find holes, label tissue and hole
+       components, and trace contours (``skimage.measure.find_contours``,
+       converted with ``canvas.to_um``). A tissue island inside a hole becomes
+       an interior ring of the hole polygon, so it is still imaged.
+    7. Drop tissue below ``min_tissue_area_um2`` (except recovered fragments,
+       below), holes below ``min_hole_area_um2`` and islands below
+       ``min_island_area_um2``. Simplify each polygon to within
+       ``boundary_max_deviation_um`` of its traced contour.
 
-    **Recovering small real tissue fragments near an already-kept piece**
-    (``near_fragment_max_distance_um``, default ``0.0`` = disabled, exactly
-    reproducing the original single-threshold behaviour above). A single
-    global ``min_tissue_area_um2`` cannot distinguish a genuine small piece
-    of tissue near the edge of a larger kept piece (e.g. a torn/frayed bit,
-    or a fragment near a hole) from a background dust speck of similar
-    size -- both populations span a near-identical small-area range, so
-    simply lowering the area threshold recovers real fragments at roughly a
-    10-to-1 cost in reintroduced background noise. Distance to an
-    already-kept piece is a much stronger discriminator: a component
-    sitting right at a real tissue's edge is very likely real tissue too,
-    while one sitting alone far out in empty background is very likely
-    debris, regardless of their
-    similar areas. When ``near_fragment_max_distance_um`` > 0, any
-    component below ``min_tissue_area_um2`` is still kept if (a) its
-    nearest pixel is within this distance of an already-kept (>=
-    ``min_tissue_area_um2``) tissue component, AND (b) its own area is at
-    least ``min_near_fragment_area_um2`` (default ``0.0`` -- any size, so
-    long as it clears the distance test; raise this to also require a
-    minimum size even for near-boundary recovery).
+    **Fragment recovery** (``near_fragment_max_distance_um > 0``; default 0 =
+    off). Small real fragments and dust specks have similar areas, so lowering
+    ``min_tissue_area_um2`` brings back ~10 specks per real fragment. Distance
+    separates them better: a small component is kept if it lies within
+    ``near_fragment_max_distance_um`` of a kept (>= ``min_tissue_area_um2``)
+    component and its area is at least ``min_near_fragment_area_um2``.
 
     Parameters
     ----------
-    canvas : from :func:`assemble_mosaic_canvas`.
-    threshold : intensity threshold; ``None`` = Otsu on the smoothed canvas.
-    smooth_sigma_um, close_radius_um, open_radius_um, margin_um :
-        morphology parameters, in microns (converted to canvas pixels
-        internally via ``canvas.pixel_size_um``).
-    min_tissue_area_um2, min_hole_area_um2 : drop components smaller than
-        this (um^2) -- filters residual noise specks after morphology.
-    min_island_area_um2 : drop a hole's interior island (see step 6 above)
-        smaller than this (um^2) -- filters noise specks inside a hole from
-        becoming spurious interior rings; a genuine tissue island is
-        typically well above this.
-    boundary_max_deviation_um : maximum distance (um) any point on the
-        simplified polygon may deviate from the raw traced contour --
-        Shapely ``simplify``'s Douglas-Peucker tolerance. Not a fixed
-        output segment length: straight stretches collapse to few long
-        segments, curvy ones keep more/shorter ones, whatever it takes to
-        stay within this bound.
-    near_fragment_max_distance_um : ``0.0`` (default) disables fragment
-        recovery entirely. > 0 recovers small tissue components within this
-        distance (um) of an already-kept piece -- see above.
-    min_near_fragment_area_um2 : minimum area (um^2) for a recovered
-        fragment (only checked when ``near_fragment_max_distance_um`` > 0).
-        Default ``0.0`` -- no additional size floor beyond the distance test.
+    canvas : from :func:`assemble_mosaic_canvas`
+    threshold : intensity threshold; ``None`` = Otsu
+    smooth_sigma_um, close_radius_um, open_radius_um, margin_um : morphology
+        sizes in µm (converted with ``canvas.pixel_size_um``)
+    min_tissue_area_um2, min_hole_area_um2 : drop smaller components (µm²)
+    min_island_area_um2 : drop smaller islands inside holes (µm²)
+    boundary_max_deviation_um : Douglas-Peucker tolerance for Shapely
+        ``simplify`` (a max deviation, not a segment length)
+    near_fragment_max_distance_um : 0 = no fragment recovery; > 0 = recovery
+        distance (µm)
+    min_near_fragment_area_um2 : minimum area (µm²) of a recovered fragment
+        (default 0 = no minimum)
 
     Returns
     -------
