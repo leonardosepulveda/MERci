@@ -134,13 +134,14 @@ src/MERci/
     cli_*.py               standalone SLURM-array-task scripts (self-locating, no pip install
                            needed), one per cluster_submit builder; shared args in _cli_common.py
   live_round_mosaic.py     LiveRoundMosaicBuilder -- live quick-look mosaic (during_imaging/round_mosaics)
-  plots/                   plotting halves of the notebooks above (round mosaics, stats, batch review)
+  plots/                   all plotting: per-notebook plot modules, experiment_plots (shutter sequence,
+                           FOV layout, stats-over-rounds, figures dir), mosaic_plots, spot_localization_plots
   state.py                 ExperimentStateMonitor — imaging vs. fluidics phase detection
   progress.py              ProgressTracker — sentinel-file completion tracking
   progress_display.py      ProgressReporter — live console/notebook progress+ETA
   scheduler.py             FOVScheduler, RoundScheduler
   transfer.py              transfer_round, mirror_tree
-  visualization.py         shutter sequence, FOV layout, stats-over-rounds plots
+  visualization.py         old import path, re-exports plots/experiment_plots
   disk_audit.py            scan shared-drive sample folders for cleanup candidates
 ```
 

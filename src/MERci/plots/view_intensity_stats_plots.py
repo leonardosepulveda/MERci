@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from ..analysis.stage_z import positions_to_grid_indices
-from ..visualization import DEFAULT_COLOUR, WAVELENGTH_COLOUR
+from .experiment_plots import DEFAULT_COLOUR, WAVELENGTH_COLOUR
 
 
 def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead_z: float = 0.0, bead_color: float = 488.0) -> None:
