@@ -75,6 +75,7 @@ _CODEBOOK_BY_LIB = {
 _MICROSCOPE_PARAMETERS_BY_SCOPE = {
     ("ST2", "60X"): "STORM2_60X.json",
     ("ST2", "40X"): "STORM2_40X.json",
+    ("MF2", "60X"): "MERFISH2.json",
     ("MF3", "60X"): "MERFISH3.json",
     ("MF4", "60X"): "MERFISH4.json",
     ("MF5", "60X"): "MERFISH5.json",
@@ -83,7 +84,7 @@ _MICROSCOPE_PARAMETERS_BY_SCOPE = {
 # mirrors acquisition.configs._DEFAULT_OBJECTIVE, keeping every existing
 # call site (single objective per scope, historically) working unchanged.
 _DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE = {
-    "ST2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X",
+    "ST2": "60X", "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X",
 }
 
 

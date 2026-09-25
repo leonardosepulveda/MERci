@@ -116,13 +116,13 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
 # which are camera/scope hardware properties independent of which objective
 # is mounted, this needs a second key. Where a scope has a MERlin
 # microscope-parameters JSON (data/configs/merlin/microscope/), the value here
-# is that file's ``microns_per_pixel``, so MERci and MERlin agree: MF3-MF5
-# 0.109, ST2 0.0878 (60X) and 0.1317 (40X). MF2 and MFX have no such file.
+# is that file's ``microns_per_pixel``, so MERci and MERlin agree: MF2-MF5
+# 0.109, ST2 0.0878 (60X) and 0.1317 (40X). MFX has no such file.
 # Together with the sensor size this fixes the FOV footprint
 # (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning
 # grid in before_imaging/02.
 _OBJECTIVE_PIXEL_SIZE_UM: Dict[Tuple[str, str], float] = {
-    ("MF2", "60X"): 0.108, ("MF3", "60X"): 0.109, ("MF4", "60X"): 0.109, ("MF5", "60X"): 0.109,
+    ("MF2", "60X"): 0.109, ("MF3", "60X"): 0.109, ("MF4", "60X"): 0.109, ("MF5", "60X"): 0.109,
     ("MFX", "60X"): 0.0878,
     ("ST2", "60X"): 0.0878,
     ("ST2", "40X"): 0.1317,
@@ -150,7 +150,7 @@ def get_camera_pixel_size_um(microscope: Optional[str], objective: Optional[str]
     *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
     entry in ``_DEFAULT_OBJECTIVE`` (today, every scope has exactly one) --
     omit it to keep prior single-objective-per-scope behaviour unchanged.
-    MFX/ST2 → 0.0878 µm/px at 60X, MF2 → 0.108, MF3–MF5 → 0.109 µm/px at 60X;
+    MFX/ST2 → 0.0878 µm/px at 60X, MF-series (MF2–MF5) → 0.109 µm/px at 60X;
     ST2 also has a 40X objective. Unknown microscope/objective falls back to
     0.108 (no error, so estimates still run) — extend
     ``_OBJECTIVE_PIXEL_SIZE_UM``/``_DEFAULT_OBJECTIVE`` for new scopes/objectives.
@@ -172,8 +172,7 @@ def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None)
 
     * MFX, ST2 (60X) → ``(0.0878 µm/px, 2304 px)``
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
-    * MF2 (60X)       → ``(0.108 µm/px, 2048 px)``
-    * MF3–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
+    * MF2–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
 
     *objective* defaults to *microscope*'s own default objective (see
     ``_DEFAULT_OBJECTIVE``) — omit it to keep prior behaviour unchanged.
