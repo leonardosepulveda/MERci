@@ -35,9 +35,6 @@ load_readout_name_overrides      — {bit: probe_name} per-experiment override f
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
 load_microscope_parameters       — a microscope's parameters JSON, the single source
     of every camera property (orientation, pixel size, frame size); no defaults
-load_microscope_orientation      — its flip_horizontal/flip_vertical/transpose flags
-apply_microscope_orientation     — apply those flags to a raw frame in MERlin's own
-    order (transpose, then flip_horizontal, then flip_vertical)
 build_merlin_analysis_parameters — assemble MERlin's task-parameters
     JSON/YAML from atomic per-task YAML files (data/configs/merlin/analysis/
     tasks/) plus an explicit ordered recipe YAML (data/configs/merlin/
@@ -55,7 +52,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
 import yaml
 
 # ── Filename dispatch (ports of the old notebook's hardcoded if/elif chains) ───
@@ -233,59 +229,6 @@ def load_microscope_parameters(
     if missing:
         raise ValueError(f"{path.name} is missing {missing}")
     return params
-
-
-def load_microscope_orientation(microscope: str, microscope_dir: Path = MICROSCOPE_PARAMETERS_DIR) -> Dict[str, bool]:
-    """
-    A microscope's ``flip_horizontal``/``flip_vertical``/``transpose`` flags
-    from its MERlin microscope-parameters JSON
-    (:func:`load_microscope_parameters`), ready to pass as ``**kwargs`` to
-    :func:`apply_microscope_orientation`.
-    """
-    params = load_microscope_parameters(microscope, microscope_dir=microscope_dir)
-    return {k: bool(params[k]) for k in ("flip_horizontal", "flip_vertical", "transpose")}
-
-
-def apply_microscope_orientation(
-    image:           np.ndarray,
-    *,
-    flip_horizontal: bool = True,
-    flip_vertical:   bool = False,
-    transpose:       bool = True,
-) -> np.ndarray:
-    """
-    Re-orient a raw camera frame to match MERlin's own camera->stage
-    convention, in MERlin's own order (confirmed directly against
-    ``merlin.core.dataset.Dataset.load_image``, not assumed):
-    **transpose, then flip_horizontal (axis=1), then flip_vertical (axis=0)**
-    -- each step applied only if its flag is ``True``.
-
-    Use this (with :func:`load_microscope_orientation`'s output) anywhere a
-    raw frame needs to be displayed/assembled in the same orientation MERlin
-    itself decodes it in -- e.g. a diagnostic mosaic laid out by stage
-    position, which otherwise appears rotated/transposed relative to the
-    real tissue layout.
-
-    Parameters
-    ----------
-    image           : 2-D array, any dtype
-    flip_horizontal : mirror along axis 1 (columns)
-    flip_vertical   : mirror along axis 0 (rows)
-    transpose       : swap axes 0 and 1
-
-    Returns
-    -------
-    Re-oriented array (a view where possible; do not rely on it sharing
-    memory with *image*).
-    """
-    out = np.asarray(image)
-    if transpose:
-        out = np.transpose(out)
-    if flip_horizontal:
-        out = np.flip(out, axis=1)
-    if flip_vertical:
-        out = np.flip(out, axis=0)
-    return out
 
 
 # ── Codebook ─────────────────────────────────────────────────────────────────
@@ -1179,3 +1122,12 @@ def derive_reference_first_channel_order(
         )
     rest = [c for c in channel_names if c not in reference_channels]
     return list(reference_channels) + rest
+
+
+def __getattr__(name):
+    # Orientation moved to acquisition.configs; keep old imports working
+    # (e.g. notebooks already exported into an experiment folder).
+    if name in ("load_microscope_orientation", "apply_microscope_orientation"):
+        from . import configs
+        return getattr(configs, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

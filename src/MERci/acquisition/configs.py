@@ -7,6 +7,10 @@ frame, with columns ``color`` (laser wavelength in nm, or NaN for a blank
 frame), ``channel`` (hardware channel index, 0–4), and ``z`` (distance from
 the locked focus in µm).
 
+Also holds the per-microscope camera helpers (frame size, pixel size, and
+``load/apply_microscope_orientation``), all read from the scope's MERlin
+microscope JSON.
+
 Typical round structure
 -----------------------
   [bead_seq]   at z=bead_z           ← fiducial images (e.g. 488)
@@ -43,20 +47,19 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 
-from .merlin_config import load_microscope_parameters
+from .merlin_config import MICROSCOPE_PARAMETERS_DIR, load_microscope_parameters
 
 
 # ── Channel / colour mapping ─────────────────────────────────────────────────
 
-_COLOUR_TO_CHANNEL: Dict[str, Dict] = {
-    "MF2": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF3": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF4": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF5": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    # MFX has only 4 channels (no 750) with a distinct ordering: 0:650, 1:560, 2:488, 3:405
-    "MFX": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
-    # ST2 shares MFX's 4-channel mapping (no 750)
-    "ST2": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
+# Real wavelengths only. A blank (laser-off) frame's colour is NaN and has no
+# channel: use _channel_for, which maps any NaN to a NaN channel.
+_MF_CHANNELS = {405: 4, 488: 3, 560: 2, 650: 1, 750: 0}
+# 4 channels (no 750), in a different order.
+_MFX_CHANNELS = {405: 3, 488: 2, 560: 1, 650: 0}
+_COLOUR_TO_CHANNEL: Dict[str, Dict[int, int]] = {
+    "MF2": _MF_CHANNELS, "MF3": _MF_CHANNELS, "MF4": _MF_CHANNELS, "MF5": _MF_CHANNELS,
+    "MFX": _MFX_CHANNELS, "ST2": _MFX_CHANNELS,
 }
 
 
@@ -68,13 +71,16 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
     Parameters
     ----------
     microscope : any key of ``_COLOUR_TO_CHANNEL`` (e.g. ``"MF3"``, ``"ST2"``)
+
+    Blank frames (NaN colour) are not in the mapping; look a frame's colour
+    up with :func:`_channel_for` instead of indexing directly.
     """
     if microscope not in _COLOUR_TO_CHANNEL:
         raise ValueError(
             f"Unknown microscope '{microscope}'. "
             f"Supported values: {list(_COLOUR_TO_CHANNEL)}"
         )
-    return _COLOUR_TO_CHANNEL[microscope]
+    return dict(_COLOUR_TO_CHANNEL[microscope])
 
 
 # ── Camera geometry ──────────────────────────────────────────────────────────
@@ -146,6 +152,59 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
                        image_size_px=width)
 
 
+def load_microscope_orientation(microscope: str, microscope_dir: Path = MICROSCOPE_PARAMETERS_DIR) -> Dict[str, bool]:
+    """
+    A microscope's ``flip_horizontal``/``flip_vertical``/``transpose`` flags
+    from its MERlin microscope-parameters JSON
+    (:func:`load_microscope_parameters`), ready to pass as ``**kwargs`` to
+    :func:`apply_microscope_orientation`.
+    """
+    params = load_microscope_parameters(microscope, microscope_dir=microscope_dir)
+    return {k: bool(params[k]) for k in ("flip_horizontal", "flip_vertical", "transpose")}
+
+
+def apply_microscope_orientation(
+    image:           np.ndarray,
+    *,
+    flip_horizontal: bool = True,
+    flip_vertical:   bool = False,
+    transpose:       bool = True,
+) -> np.ndarray:
+    """
+    Re-orient a raw camera frame to match MERlin's own camera->stage
+    convention, in MERlin's own order (confirmed directly against
+    ``merlin.core.dataset.Dataset.load_image``, not assumed):
+    **transpose, then flip_horizontal (axis=1), then flip_vertical (axis=0)**
+    -- each step applied only if its flag is ``True``.
+
+    Use this (with :func:`load_microscope_orientation`'s output) anywhere a
+    raw frame needs to be displayed/assembled in the same orientation MERlin
+    itself decodes it in -- e.g. a diagnostic mosaic laid out by stage
+    position, which otherwise appears rotated/transposed relative to the
+    real tissue layout.
+
+    Parameters
+    ----------
+    image           : 2-D array, any dtype
+    flip_horizontal : mirror along axis 1 (columns)
+    flip_vertical   : mirror along axis 0 (rows)
+    transpose       : swap axes 0 and 1
+
+    Returns
+    -------
+    Re-oriented array (a view where possible; do not rely on it sharing
+    memory with *image*).
+    """
+    out = np.asarray(image)
+    if transpose:
+        out = np.transpose(out)
+    if flip_horizontal:
+        out = np.flip(out, axis=1)
+    if flip_vertical:
+        out = np.flip(out, axis=0)
+    return out
+
+
 # Acquisition type (imaging modality) per microscope. This is independent of the
 # channel-mapping / camera-geometry groupings above — e.g. MF2 shares MF3-MF5's
 # channel map and camera but is physically a spinning-disk confocal scope, not
@@ -189,6 +248,12 @@ def _normalise_colour_key(color) -> Optional[int]:
     return int(round(float(color)))
 
 
+def _channel_for(ch_map: Mapping, color):
+    """Channel of *color* in *ch_map*, or NaN for a blank (NaN/None) colour."""
+    key = _normalise_colour_key(color)
+    return np.nan if key is None else ch_map[key]
+
+
 def power_dict_to_channel_list(
     power:         Mapping,
     microscope:    str   = "MF3",
@@ -214,13 +279,7 @@ def power_dict_to_channel_list(
     list of float
         One power per channel, index = channel number, length = channel count.
     """
-    ch_map = get_color_to_channel_dict(microscope)
-    # Real (non-blank) channels only: {int wavelength -> channel index}.
-    colour_to_channel = {
-        _normalise_colour_key(c): int(ch)
-        for c, ch in ch_map.items()
-        if _normalise_colour_key(c) is not None
-    }
+    colour_to_channel = get_color_to_channel_dict(microscope)
     n_channels = max(colour_to_channel.values()) + 1
     channel_power = [float(default_power)] * n_channels
     for color, value in power.items():
@@ -316,17 +375,17 @@ def get_frame_table(
     rows: List[Dict] = []
 
     for color in bead_seq:
-        rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
 
     if scan_mode == "interleaved":
         for z in z_pos:
             for color in color_seq:
-                rows.append({"color": color, "channel": ch_map[color], "z": z})
+                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
     else:  # "sequential"
         for i, color in enumerate(color_seq):
             z_sweep = z_pos if i % 2 == 0 else z_pos[::-1]
             for z in z_sweep:
-                rows.append({"color": color, "channel": ch_map[color], "z": z})
+                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
 
     if z_return_mode == "progressive":
         # Step the objective back toward the coverslip with blank (laser-off)
@@ -340,7 +399,7 @@ def get_frame_table(
         rows.append({"color": np.nan, "channel": np.nan, "z": bead_z})
 
     for color in end_seq:
-        rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
 
     return pd.DataFrame(rows, columns=["color", "channel", "z"])
 
@@ -954,12 +1013,8 @@ def reconstruct_frame_table(
             f"({shutter_path})"
         )
 
-    # channel → color (drop the NaN→NaN entry)
-    inv = {
-        int(ch): color
-        for color, ch in get_color_to_channel_dict(microscope).items()
-        if not pd.isna(ch)
-    }
+    # channel → color
+    inv = {ch: color for color, ch in get_color_to_channel_dict(microscope).items()}
 
     rows: List[Dict] = []
     for i in range(n_frames):

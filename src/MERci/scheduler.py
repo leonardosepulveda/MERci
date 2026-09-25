@@ -29,7 +29,7 @@ from .analysis.round  import (
     create_mosaic_ffc, load_raw_frames_for_round,
 )
 from .analysis import ffc as ffc_mod
-from .acquisition.merlin_config import load_microscope_orientation
+from .acquisition.configs import load_microscope_orientation
 from .acquisition.configs import (
     read_hal_flip_vertical,
     get_color_frame_indices,

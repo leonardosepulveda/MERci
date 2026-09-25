@@ -138,7 +138,7 @@ def compute_fov_projection(
     ``cli_compute_fov_elevation.py``-style SLURM tasks that need several
     statistics from one read should call :func:`project_stack` directly.
     """
-    from MERci.acquisition.merlin_config import apply_microscope_orientation
+    from MERci.acquisition.configs import apply_microscope_orientation
     from MERci.common.io import read_image_frames
 
     stack = read_image_frames(fpath, frame_indices, frame_width, frame_height).astype(np.float32)
@@ -247,14 +247,14 @@ def ffc_correct_and_downsample(
     """
     Reorient (if *orientation* given -- a raw camera frame does not match
     the real stage layout otherwise, see
-    ``MERci.acquisition.merlin_config.apply_microscope_orientation``) ->
+    ``MERci.acquisition.configs.apply_microscope_orientation``) ->
     divide out *ffc_field* -> block-average downsample by
     *downsample_factor*. The one raw-frame operation shared by background-
     threshold estimation and :func:`compute_fov_elevation`.
     """
     from skimage.measure import block_reduce
 
-    from MERci.acquisition.merlin_config import apply_microscope_orientation
+    from MERci.acquisition.configs import apply_microscope_orientation
     from MERci.analysis.ffc import apply_ffc
 
     frame = raw_frame

@@ -81,7 +81,7 @@ in new notebooks rather than picking new numbers per plot.
 Every cell that calls `plt.show()` on a real figure (not a quick throwaway
 diagnostic) should also `fig.savefig(...)` a copy to
 `{figures_dir}/{NOTEBOOK_NAME}.{figure_name}.png`, where `figures_dir` comes
-from `MERci.visualization.get_merci_figures_dir(SAMPLE_DIR, category,
+from `MERci.plots.experiment_plots.get_merci_figures_dir(SAMPLE_DIR, category,
 NOTEBOOK_NAME, subfolder=...)` -- it resolves to
 `SAMPLE_DIR/figures/MERci/<category>/[<subfolder>/]<notebook_name>/`,
 outside the `MERci/` clone (sibling of it, alongside MERlin's own

@@ -41,7 +41,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from ..acquisition.merlin_config import apply_microscope_orientation
+from ..acquisition.configs import apply_microscope_orientation
 from ..progress import thumbnail_filename
 
 log = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 
 # ── Atomic helper ─────────────────────────────────────────────────────────────
 
-def _atomic_save(path: Path, save_fn) -> None:
+def atomic_save(path: Path, save_fn) -> None:
     """
     Call ``save_fn(tmp_path)`` then rename ``tmp_path`` → ``path`` atomically.
     Prevents other processes from reading a partially-written output file.
@@ -78,6 +78,10 @@ def _atomic_save(path: Path, save_fn) -> None:
 
 
 # ── Thumbnail ─────────────────────────────────────────────────────────────────
+
+# Old private name, still imported by notebooks already exported into experiment folders.
+_atomic_save = atomic_save
+
 
 def create_thumbnail(
     frame: np.ndarray,
@@ -128,7 +132,7 @@ def create_thumbnail(
     )
     thumb = (resized * 255).clip(0, 255).astype(np.uint8)
 
-    _atomic_save(
+    atomic_save(
         Path(output_path),
         lambda tmp: Image.fromarray(thumb).save(str(tmp)),
     )
@@ -157,7 +161,7 @@ def create_thumbnails_for_stack(
     target_size   : output thumbnail size (width, height) in pixels
     percentile_clip: contrast stretch percentiles
     orientation   : camera orientation flags
-                    (:func:`MERci.acquisition.merlin_config.load_microscope_orientation`)
+                    (:func:`MERci.acquisition.configs.load_microscope_orientation`)
                     applied to each frame first, so thumbnails on disk are in
                     stage orientation (as the live round-mosaic writes them)
 
@@ -221,7 +225,7 @@ def measure_stats(
         })
 
     df = pd.DataFrame(records)
-    _atomic_save(
+    atomic_save(
         Path(output_path),
         lambda tmp: df.to_csv(str(tmp), index=False),
     )
@@ -280,7 +284,7 @@ def get_histogram(
         "bin_centers": bin_centers,
         "bin_edges":   edges,
     }
-    _atomic_save(
+    atomic_save(
         output_path,
         lambda tmp: np.savez_compressed(str(tmp), **result),
     )
@@ -420,7 +424,7 @@ def save_channel_counters(path: Path, data: Dict) -> None:
         "values_per_z":  np.array(data["values_per_z"], dtype=object),
         "counts_per_z":  np.array(data["counts_per_z"], dtype=object),
     }
-    _atomic_save(path, lambda tmp: np.savez_compressed(str(tmp), **payload))
+    atomic_save(path, lambda tmp: np.savez_compressed(str(tmp), **payload))
 
 
 def load_channel_counters(path: Path) -> Dict:
@@ -550,7 +554,7 @@ def measure_intensity_percentiles(
     df = intensity_percentiles_from_counters(channel_counters, frame_table, percentiles)
 
     output_path = Path(output_path).with_suffix(".parquet")
-    _atomic_save(output_path, lambda tmp: df.to_parquet(str(tmp), index=False))
+    atomic_save(output_path, lambda tmp: df.to_parquet(str(tmp), index=False))
     log.debug("Intensity percentiles saved (%d frames): %s", len(df), output_path)
     return df
 
