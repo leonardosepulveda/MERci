@@ -52,7 +52,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
 import yaml
 
 # ── Filename dispatch (ports of the old notebook's hardcoded if/elif chains) ───
