@@ -470,56 +470,34 @@ def filter_scanning_path(
     subset_polygons:  Optional[List[Polygon]] = None,
 ) -> np.ndarray:
     """
-    Keep FOVs whose camera frame overlaps the tissue boundary; exclude any
-    that are fully contained within a hole region.
+    Keep the FOVs that should be imaged for one tissue boundary.
 
-    Each FOV is modelled as a square of side *fov_size_um* centred at its
-    stage coordinate (``pixel_size_um × image_size_px``).  With the default
-    *min_coverage_fraction* (``0.0``), a FOV is kept when:
+    Each FOV is a square of side *fov_size_um* centred on its stage coordinate.
+    With the default ``min_coverage_fraction=0.0`` a FOV is kept when its
+    square overlaps *boundary_polygon* at all and no hole fully contains it (a
+    FOV partly over a hole still images tissue, so it stays).
 
-    * its square has **any** overlap with *boundary_polygon*, **and**
-    * no hole polygon **fully contains** its square.
+    With ``min_coverage_fraction > 0`` both rules are replaced by one: keep the
+    FOV only if (overlap with the boundary minus every hole) / FOV area is at
+    least that fraction. This drops real low-coverage tissue from the plan,
+    unlike :func:`optimize_grid_offset`'s ``n_low_coverage_fovs``, which only
+    ranks grid phases.
 
-    A FOV that only partially overlaps a hole is kept — it still captures
-    tissue outside the hole.
-
-    Setting *min_coverage_fraction* > 0 replaces BOTH of those rules with
-    one unified, symmetric test instead: keep the FOV only if its real
-    tissue-overlap fraction (overlap with *boundary_polygon* **minus every
-    hole**, divided by the FOV's own area) is at least *min_coverage_fraction*.
-    This is a genuinely different, stricter policy -- it actually DROPS
-    low-coverage boundary/hole-edge tissue from the imaging plan instead of
-    merely re-phasing the grid around it (contrast with
-    :func:`optimize_grid_offset`'s ``n_low_coverage_fovs`` metric, which only
-    re-ranks grid PHASES and never drops a FOV) -- a real coverage/
-    completeness trade-off, not just an efficiency one: whatever real
-    tissue sits in a dropped FOV is never imaged. The default (``0.0``)
-    preserves the original two-rule behaviour above exactly, unchanged.
-
-    *subset_polygons*, if given and non-empty, adds one more independent
-    requirement on top of the two/one rule(s) above: the FOV's square must
-    also **intersect** the union of *subset_polygons* (a whitelist, the
-    opposite sense of *hole_polygons*' blacklist -- see
-    :func:`load_subset_polygons`). ``None``/empty (default) keeps every
-    other rule's result unchanged -- no subset restriction.
+    *subset_polygons* (optional whitelist, see :func:`load_subset_polygons`)
+    adds one more requirement: the square must also intersect their union.
 
     Parameters
     ----------
     coords           : ``(N, 2)`` candidate stage coordinates
     boundary_polygon : outer tissue boundary
-    hole_polygons    : list of Shapely Polygons to exclude
-    fov_size_um      : camera FOV side length in stage units
-                       (``pixel_size_um × image_size_px``)
-    min_coverage_fraction : ``0.0`` (default) keeps the original any-overlap/
-                       hole-full-containment rule exactly. A value > 0
-                       switches to the stricter unified tissue-overlap-
-                       fraction test described above.
-    subset_polygons  : optional whitelist region(s) -- only FOVs overlapping
-                       their union are kept, on top of every other rule.
+    hole_polygons    : Shapely Polygons to exclude
+    fov_size_um      : FOV side length (``pixel_size_um × image_size_px``)
+    min_coverage_fraction : 0 = any-overlap rule; > 0 = tissue-fraction rule
+    subset_polygons  : optional whitelist region(s)
 
     Returns
     -------
-    ``(M, 2)`` array of accepted coordinates in their original order.
+    ``(M, 2)`` array of accepted coordinates, in their original order.
     """
     coords = np.asarray(coords, dtype=float).reshape(-1, 2)
     boxes  = _fov_boxes(coords, fov_size_um)
@@ -737,44 +715,29 @@ def find_exterior_fovs(
     tolerance_fraction:  float = 0.25,
 ) -> Set[int]:
     """
-    Find FOVs on the exterior of an imaged FOV grid -- the true outer
-    perimeter of the imaged footprint, AND the inner boundary of any holes --
-    i.e. any FOV with at least one grid-adjacent neighbour position that is
-    NOT actually imaged.
+    FOVs on the exterior of an imaged grid: the outer perimeter and the edges
+    of any holes, i.e. every FOV with at least one grid-neighbour position
+    that is not imaged.
 
-    Queries real stage coordinates directly via a KD-tree rather than
-    snapping every position onto one shared integer ``(row, col)`` grid
-    index (as the private :func:`_grid_indices` above does): each tissue
-    boundary/piece in a multi-boundary layout gets its own FOV grid centred
-    on that piece's own bounding-box midpoint (see
-    :func:`create_grid_positions`), so different pieces' grids are not in
-    general phase-aligned with each other. A single shared grid-index snap
-    would risk misjudging adjacency exactly at a tissue-piece boundary;
-    testing "is there a real FOV near this exact candidate neighbour
-    position" is correct regardless of any other piece's grid phase, hole
-    geometry, or nearby transit-point irregularity -- so multi-tissue/hole
-    layouts are handled for free, with no per-tissue-piece logic needed.
+    Neighbours are looked up in real stage coordinates with a KD-tree, not by
+    snapping to one shared ``(row, col)`` grid: in a multi-boundary layout each
+    tissue piece has its own grid phase (see :func:`create_grid_positions`), so
+    a shared snap could misjudge adjacency where pieces meet.
 
     Parameters
     ----------
-    positions          : {fov_id: (x, y)} stage coordinates (µm) of the FOVs
-                         to test -- scope this to one round's own real
-                         imaged FOVs (not the raw experiment-wide
-                         positions.txt), so transit-only FOVs (blank frames)
-                         never enter the result.
-    step_size          : grid step size (µm), e.g. ``ExperimentConfig.step_size_um``
-    connectivity       : "4" (N/S/E/W neighbours only) or "8" (+ diagonals).
-                         "8" (default) also catches FOVs at diagonal-only
-                         tissue notches / concave corners / hole-island
-                         corners that "4" would miss.
-    tolerance_fraction : match tolerance for "is a neighbour actually
-                         present", as a fraction of step_size -- absorbs
-                         small positioning jitter without over-matching to a
-                         FOV that is really one grid cell further away.
+    positions          : {fov_id: (x, y)} in µm. Use one round's own imaged
+                         FOVs, not the whole positions file, so transit-only
+                         FOVs never enter the result.
+    step_size          : grid step (µm), e.g. ``ExperimentConfig.step_size_um``
+    connectivity       : "4" (N/S/E/W) or "8" (default, adds diagonals; also
+                         catches FOVs at diagonal-only notches and corners)
+    tolerance_fraction : how close (fraction of *step_size*) a FOV must be to
+                         a neighbour position to count as present
 
     Returns
     -------
-    Set of FOV ids that are exterior (their FFC-estimation candidates).
+    Set of exterior FOV ids.
     """
     if connectivity not in ("4", "8"):
         raise ValueError(f"connectivity must be '4' or '8', got {connectivity!r}")
@@ -1423,106 +1386,55 @@ def optimize_grid_offset(
     subset_polygons:  Optional[List[Polygon]] = None,
 ) -> GridOffsetResult:
     """
-    Search the grid's phase (offset within one *step_size* period) for the
-    one that best minimises the count of near-empty FOVs, wasted (non-tissue)
-    imaged area, scan travel length, and FOV count -- without touching the
-    hard parity constraint :func:`create_grid_positions` already enforces for
-    a short return leg.
+    Search the grid's phase (its offset within one *step_size* period) for the
+    best one by *priority*, keeping *step_size* and *direction* fixed so
+    :func:`create_grid_positions`'s parity rule for a short return leg holds.
 
-    Only the grid's *offset* varies across candidates; *step_size* and
-    *direction* stay fixed (per the parity rule they'd otherwise break), so
-    this is a phase search, not a redesign of the grid itself. Offsets a
-    full *step_size* apart reproduce the same lattice against a polygon
-    fixed in space, so ``[-step_size/2, step_size/2)`` in each axis covers
-    every distinct phase.
+    Offsets one full step apart give the same lattice, so each axis samples
+    ``[-step_size/2, step_size/2)``.
 
-    ``n_low_coverage_fovs`` (a FOV whose camera square overlaps
-    *effective_tissue* by less than *low_coverage_fraction* of its own area
-    -- :func:`filter_scanning_path`'s own keep rule is coverage-blind, so
-    these near-empty FOVs already survive filtering) is a genuinely distinct
-    objective from ``waste_area_um2``: per-FOV acquisition time is roughly
-    fixed regardless of how much tissue a FOV actually contains, so a
-    count-based objective targets wasted imaging *time* directly, while
-    ``waste_area_um2`` (a continuous area sum, dominated by whichever FOVs
-    happen to be biggest/most wasteful) targets wasted *area* -- related but
-    not the same, and a phase that minimises one need not minimise the
-    other.
+    Metrics per candidate (all minimised):
 
-    Default *priority* leads with ``n_fovs`` itself -- the simplest, most
-    direct proxy for total imaging time (every FOV costs roughly the same
-    fixed acquisition time regardless of content), chosen deliberately over
-    leading with ``n_low_coverage_fovs`` after a full sweep of every
-    priority ordering on a real benchmark
-    (``notebooks/tests/compare_fov_coverage_constraint.ipynb``) showed the
-    two only trade off by a handful of FOVs either way (e.g. 1152 FOVs/214
-    low-coverage vs. 1161 FOVs/209 low-coverage on that benchmark) -- no
-    ordering dominates the other, so the simpler, more directly-motivated
-    objective was preferred.
+    * ``n_fovs`` -- the direct proxy for imaging time (each FOV costs about the
+      same time whatever it contains). First in the default *priority*: on a
+      real benchmark every ordering traded off only a few FOVs against
+      ``n_low_coverage_fovs``, so the simplest objective leads.
+    * ``waste_area_um2`` -- imaged area that is not tissue (holes count as
+      non-tissue, even under FOVs :func:`filter_scanning_path` keeps).
+    * ``total_length_um`` -- scan travel length, measured after
+      :func:`close_scanning_path` when *return_side* is given.
+    * ``n_low_coverage_fovs`` -- FOVs whose tissue fraction is below
+      *low_coverage_fraction*. Counts wasted time rather than wasted area, so
+      it can disagree with ``waste_area_um2``. Ranking only, never drops a FOV.
 
     Parameters
     ----------
     boundary_polygon : the tissue boundary for this segment
-    hole_polygons    : exclusion polygons (applied to this boundary) -- also
-                       subtracted from the boundary when computing wasted
-                       area/coverage below, since a hole-covered pixel is
-                       just as much non-tissue as one outside the boundary
-                       entirely (unlike :func:`filter_scanning_path`, which
-                       only drops FOVs a hole *fully* contains -- a
-                       partially hole-overlapping FOV survives filtering,
-                       and its hole-covered area still counts as waste/
-                       low-coverage here)
+    hole_polygons    : exclusion polygons for this boundary
     step_size        : grid spacing (µm)
-    fov_size_um      : camera FOV side length (µm)
+    fov_size_um      : FOV side length (µm)
     direction        : boustrophedon direction, forwarded to
                        :func:`create_grid_positions`/:func:`generate_scanning_path`
-    return_side      : forwarded to :func:`close_scanning_path`, applied
-                       before each candidate's travel length is measured, so
-                       the reported length matches what the caller will
-                       actually use
-    n_samples        : candidate offsets per axis (``n_samples**2`` total
-                       evaluated) -- odd values include the un-shifted
-                       ``(0, 0)`` centred grid as one candidate
+    return_side      : forwarded to :func:`close_scanning_path`
+    n_samples        : offsets per axis (``n_samples**2`` candidates); an odd
+                       value includes the centred ``(0, 0)`` grid
     priority         : ``GridOffsetCandidate`` field names, most important
-                       first, used to lexicographically rank candidates
-                       (each minimised). Default: FOV count first (the
-                       simplest direct proxy for imaging time), then wasted
-                       area, then travel length, then low-coverage FOV count.
-    low_coverage_fraction : a FOV counts as "low coverage" when its own
-                       tissue-overlap fraction (tissue-overlap area / FOV
-                       area) is strictly below this threshold. Default 0.5
-                       (less than half the FOV is real tissue). Purely a
-                       reporting/ranking metric -- never drops a FOV.
-    min_coverage_fraction : forwarded to :func:`filter_scanning_path` --
-                       ``0.0`` (default) keeps every boundary-overlapping
-                       FOV, matching every candidate evaluated here to that
-                       function's original behaviour. Setting this > 0
-                       actually DROPS low-coverage FOVs from every
-                       candidate instead of just counting them (see that
-                       function's docstring) -- a real coverage/
-                       completeness trade-off, not just a ranking change.
-                       When active, ``n_low_coverage_fovs`` (computed AFTER
-                       filtering) trends toward 0 as *min_coverage_fraction*
-                       approaches *low_coverage_fraction*, since few/no
-                       surviving FOVs can then fall below that threshold --
-                       the two parameters answer different questions
-                       (report vs. actually exclude) and are not meant to
-                       be tuned to the same value as a matter of course.
-    subset_polygons  : forwarded to :func:`filter_scanning_path` -- optional
-                       whitelist region(s), applied to every candidate offset.
-                       Also intersected into ``effective_tissue`` (the area
-                       ``waste_area_um2``/``n_low_coverage_fovs`` are measured
-                       against) so those metrics reflect the subset-restricted
-                       tissue actually being imaged, not the full boundary.
-                       ``None``/empty (default) leaves both unaffected.
+                       first, for lexicographic ranking
+    low_coverage_fraction : threshold for ``n_low_coverage_fovs`` (default 0.5)
+    min_coverage_fraction : forwarded to :func:`filter_scanning_path`; > 0
+                       actually drops low-coverage FOVs from every candidate.
+                       Answers a different question from
+                       *low_coverage_fraction* (exclude vs. report), so the two
+                       are not meant to share a value.
+    subset_polygons  : forwarded to :func:`filter_scanning_path`, and also
+                       intersected into the tissue the waste/coverage metrics
+                       are measured against
 
     Returns
     -------
-    :class:`GridOffsetResult` -- ``coords`` is the winning candidate's
-    ``(M, 2)`` path (already closed if *return_side* was given, matching
-    :func:`build_boundary_path`'s contract); ``candidates`` holds every
-    evaluated offset's metrics, so a caller can inspect the actual spread
-    (e.g. to see whether the objectives move together or trade off against
-    each other on this particular boundary).
+    :class:`GridOffsetResult` -- ``coords`` is the winner's ``(M, 2)`` path
+    (closed if *return_side* was given, as in :func:`build_boundary_path`);
+    ``candidates`` holds every offset's metrics.
     """
     effective_tissue = _effective_tissue(boundary_polygon, hole_polygons, subset_polygons)
     fov_area = fov_size_um * fov_size_um
@@ -1743,66 +1655,42 @@ def fix_overlap_clusters(
     bad_overlap_frac: float = 0.3,
 ) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
     """
-    Redistribute one band's cross-axis positions to remove piece-boundary
-    overlap clusters -- REQUIRED post-processing for
-    :func:`build_irregular_bands`'s output (see its docstring) before
-    :func:`generate_irregular_scanning_path`.
+    Re-space one band's cross-axis positions to remove overlap clusters at
+    tissue-piece boundaries. REQUIRED after :func:`build_irregular_bands` and
+    before :func:`generate_irregular_scanning_path`.
 
-    When a band's tissue strip splits into several disjoint pieces (a hole/
-    notch narrower than *step_size*), :func:`build_irregular_bands` gives
-    each piece its own independently-centred lattice -- the last point of
-    one piece and the first of the next can then end up much closer
-    together than *step_size*, while every OTHER gap in the band (within
-    one piece) stays exactly *step_size* by construction. This produces a
-    real defect: a few anomalously close/overlapping FOVs concentrated at
-    piece boundaries, confirmed on a real benchmark (see
-    ``notebooks/tests/irregular_grid/test_irregular_grid_column_overlap_correction.ipynb``:
-    18/36 columns affected, worst pairwise overlap fraction 0.997).
+    When a band's tissue splits into disjoint pieces, each piece gets its own
+    centred lattice, so the last FOV of one piece and the first of the next can
+    sit much closer than *step_size* (up to ~full overlap on a real benchmark),
+    while gaps within a piece are exactly *step_size*.
 
-    A **sub-band** is a maximal run of consecutive points bounded by either
-    the band's own ends or a TRUE zero-overlap gap (``overlap_frac <= 0``,
-    footprints that don't touch at all -- a real hole, never redistributed
-    across). If a sub-band contains at least one "bad" gap
-    (``overlap_frac > bad_overlap_frac``, well above the nominal design
-    overlap), ALL of that sub-band's points -- not just the two touching
-    the bad gap, which is a silent no-op for a 2-point cluster (tried
-    first, confirmed broken) -- are re-spaced evenly between the sub-band's
-    own first and last position via ``linspace``, spreading the excess
-    overlap across every gap instead of leaving it concentrated in one
-    place. If the reclaimed span doesn't actually need that many FOVs at
-    the standard *step_size* pitch, the surplus is dropped -- sized via
-    ``ceil(span / step_size) + 1`` so the corrected sub-band's own spacing
-    never exceeds *step_size* (**not** ``round(span / step_size) + 1``,
-    which this function used until a real coverage-gap bug was traced back
-    to it: rounding down under-provisions points whenever ``span /
-    step_size`` sits just under a half-integer, opening a real gap in the
-    corrected sub-band -- confirmed directly on a real benchmark boundary,
-    where it caused several hundred to several thousand µm² of real tissue
-    to go uncovered even at ``min_width_frac=0`` -- see
-    `notebooks/tests/create_positions/03_guarantee_irregular_grid_coverage.ipynb`
-    for the diagnosis and the validated before/after numbers).
+    A **sub-band** is a maximal run of points between the band's ends or a true
+    gap (``overlap_frac <= 0``: footprints that don't touch, i.e. a real hole,
+    never re-spaced across). If a sub-band has any gap with ``overlap_frac >
+    bad_overlap_frac``, ALL its points are re-spaced evenly between its first
+    and last position (moving only the two points at the bad gap does nothing
+    for a 2-point cluster). Its point count becomes
+    ``ceil(span / step_size) + 1``, so spacing never exceeds *step_size*.
+    Use ``ceil``, not ``round``: rounding down leaves real uncovered tissue.
 
-    A total no-op on a band with no bad gaps (in particular, a plain
-    rectangular tissue with no holes) -- verified in the notebook above.
+    A no-op on a band without bad gaps (e.g. a rectangle with no holes).
 
     Parameters
     ----------
     cross_vals       : one band's cross-axis positions (any order; sorted
-                       internally) -- one entry of a
-                       :func:`build_irregular_bands` result
-    fov_size_um      : camera FOV side length (µm)
-    step_size        : nominal lattice spacing (µm) -- used both to judge
-                       "bad" gaps and to size each corrected sub-band
-    bad_overlap_frac : a gap counts as "bad" when its implied pairwise
-                       overlap fraction exceeds this (default 0.3, well
-                       above a typical ~0.10 nominal design overlap)
+                       internally), one entry of a :func:`build_irregular_bands`
+                       result
+    fov_size_um      : FOV side length (µm)
+    step_size        : nominal lattice spacing (µm), used to judge bad gaps and
+                       to size each re-spaced sub-band
+    bad_overlap_frac : overlap fraction above which a gap is bad (default 0.3,
+                       well above a typical ~0.10 design overlap)
 
     Returns
     -------
-    (new_cross_vals, applied) : corrected, sorted cross-axis positions, and
-        a list of ``(lo_idx, hi_idx, n_before, n_after)`` for every
-        sub-band actually redistributed (indices into the ORIGINAL sorted
-        *cross_vals*) -- empty when nothing needed fixing.
+    (new_cross_vals, applied) : corrected, sorted positions, and
+        ``(lo_idx, hi_idx, n_before, n_after)`` for each re-spaced sub-band
+        (indices into the ORIGINAL sorted *cross_vals*); empty if none.
     """
     cross_vals = np.array(sorted(cross_vals), dtype=float)
     n = len(cross_vals)
@@ -1893,64 +1781,36 @@ def patch_uncovered_gaps(
     max_iters:      int   = 5,
 ) -> Tuple[np.ndarray, int]:
     """
-    Add FOVs to close any real tissue gap left by *coords* against
-    *tissue_polygon* -- REQUIRED post-processing for
-    :func:`build_irregular_boundary_path`'s output (see its docstring).
+    Add FOVs to close any tissue left uncovered by *coords*. REQUIRED after
+    :func:`build_irregular_boundary_path`.
 
-    The irregular grid's per-band construction could leave small, real gaps
-    of unphotographed tissue on a complex, multi-hole boundary -- root-
-    caused directly (not assumed) on a real benchmark boundary to
-    :func:`fix_overlap_clusters`'s own ``round()``-based sub-band resizing,
-    now fixed there too (``ceil()``-based, see that function's own
-    docstring -- `notebooks/tests/create_positions/
-    03_guarantee_irregular_grid_coverage.ipynb` for the diagnosis and the
-    validated before/after numbers). This function stays as a second,
-    independent line of defense on top of that fix rather than relying on
-    the upstream arithmetic alone: it measures the true uncovered area
-    (``tissue_polygon`` minus the union of every FOV's own square) and, for
-    each disjoint uncovered piece, tiles that piece's own bounding box with
-    *step_size*-spaced FOV positions (the same :func:`spaced_coords`
-    pattern every other grid axis in this module already uses, so those
-    added FOVs are on the same lattice pitch, not an arbitrary size) --
-    then re-checks and repeats (fixed-point, capped at *max_iters*) in case
-    a first patch pass doesn't fully close a larger/oddly-shaped gap, or a
-    future change to the upstream construction reopens one.
+    A second line of defence behind :func:`fix_overlap_clusters`'s ``ceil``
+    sizing: measure the uncovered area (*tissue_polygon* minus the union of all
+    FOV squares), tile each uncovered piece's bounding box with
+    *step_size*-spaced FOVs (same :func:`spaced_coords` pitch as the grid), and
+    repeat up to *max_iters* times until nothing real is left. A fast no-op
+    when coverage is already complete.
 
-    A near-instant no-op whenever *coords* already fully covers
-    *tissue_polygon*. Only :func:`build_irregular_boundary_path` calls this
-    -- the regular grid (:func:`build_boundary_path`/
-    :func:`build_boundary_path_optimized`) guarantees full coverage by
-    construction: :func:`create_grid_positions` sizes each axis's point
-    count from the LARGER of its two post-shift half-spans (not the
-    original, pre-shift span alone), so a searched offset can never leave
-    the outermost point short of the far bbox edge -- fixed after a real
-    gap was found this way (175 um² uncovered, ST2 40X objective,
-    LT066_sample_01/merfish boundary -- see
-    `notebooks/tests/create_positions/04_sweep_reduced_fov_path_combinations_40x.ipynb`
-    for the original finding and
-    `notebooks/tests/create_positions/05_guarantee_offset_grid_coverage.ipynb`
-    for the fix's own diagnosis and validation).
+    The regular grid (:func:`build_boundary_path`/
+    :func:`build_boundary_path_optimized`) doesn't need this:
+    :func:`create_grid_positions` sizes each axis from the larger post-shift
+    half-span, so a searched offset can't leave the far edge short.
 
     Parameters
     ----------
-    coords         : ``(N, 2)`` FOV center coordinates (µm)
-    tissue_polygon : the tissue region *coords* is meant to cover (a
-                     boundary polygon with holes -- and, if the caller is
-                     also restricting to a subset, the subset too -- already
-                     subtracted/intersected, i.e. the same "effective
-                     tissue" convention :func:`find_fully_redundant_fovs`
-                     uses)
-    step_size      : lattice spacing (µm) for each patch piece's own tiling
-    fov_size_um    : camera FOV side length (µm)
-    eps_um2        : area (µm²) below which a residual uncovered patch is
-                     treated as floating-point noise rather than a real gap
-    max_iters      : safety cap on patch/re-check passes
+    coords         : ``(N, 2)`` FOV centres (µm)
+    tissue_polygon : the region to cover, with holes (and any subset) already
+                     applied -- the same "effective tissue" as
+                     :func:`find_fully_redundant_fovs`
+    step_size      : lattice spacing (µm) for the patch tiling
+    fov_size_um    : FOV side length (µm)
+    eps_um2        : residual area (µm²) treated as floating-point noise
+    max_iters      : cap on patch/re-check passes
 
     Returns
     -------
-    (patched_coords, n_added) : *coords* with any needed FOVs appended at
-        the end (never reordered/removed), and how many were added (``0``
-        when nothing needed patching).
+    (patched_coords, n_added) : *coords* with any new FOVs appended at the end
+        (never reordered or removed), and how many were added.
     """
     half    = fov_size_um / 2.0
     current = np.asarray(coords, dtype=float)
@@ -2298,72 +2158,42 @@ def build_reduced_fov_path(
     remove_redundant_fovs: bool        = True,
 ) -> ReducedFOVPathResult:
     """
-    Build one boundary's final FOV path with a single call.
+    Build one boundary's final FOV path in a single call: a grid builder
+    (picked by *irregular_grid* x *optimize_offset* from
+    :func:`build_boundary_path`, :func:`build_boundary_path_optimized`,
+    :func:`build_irregular_boundary_path`, :func:`optimize_irregular_grid`),
+    then :func:`find_fully_redundant_fovs` (drop a FOV only if all the tissue
+    it covers is also covered by other FOVs).
 
-    Wraps the grid-building step (:func:`build_boundary_path` /
-    :func:`build_boundary_path_optimized` / :func:`build_irregular_boundary_path` /
-    :func:`optimize_irregular_grid`, picked by *irregular_grid* x
-    *optimize_offset*) followed by :func:`find_fully_redundant_fovs`
-    (redundant-FOV removal -- drop a FOV only when every bit of tissue it
-    touches is already covered by some other FOV, i.e. its exclusive
-    overlap with every OTHER FOV's own square subtracted out is empty --
-    see that function's own docstring for the underlying rule and
-    `notebooks/tests/decrease_fov_number/04_find_fully_redundant_fovs.ipynb`
-    for the investigation this was validated against).
-
-    ``find_fully_redundant_fovs`` itself always runs (its own detection is
-    cheap and its ``uncovered_area_um2`` is a useful coverage check either
-    way), but whether its removal is actually APPLIED to the returned
-    ``coords`` is controlled by *remove_redundant_fovs* -- default ``True``
-    for backward compatibility (this function originally applied it
-    unconditionally), but real, independent comparisons against
-    *optimize_offset* need it off: with removal always on, a config that
-    genuinely reduces the raw grid (e.g. ``optimize_offset=True``) can look
-    no better, or even worse, than one that doesn't, simply because the two
-    methods draw from the same pool of "wasted" tip/corner FOVs rather than
-    adding independently (see
-    `notebooks/tests/decrease_fov_number/05_combine_offset_and_redundant_
-    removal.ipynb`) -- confounding, not informative, unless the caller can
-    also see each method's effect on its own.
+    The redundancy detection always runs (``result.redundant`` reports what
+    could be dropped and the uncovered area). *remove_redundant_fovs* decides
+    whether the drop is applied. Turn it off to compare *optimize_offset*
+    settings fairly: both methods remove the same wasted tip/corner FOVs, so
+    with removal on they can look no different.
 
     Parameters
     ----------
     boundary_polygon, hole_polygons, step_size, fov_size_um : as in
         :func:`build_boundary_path`
-    irregular_grid   : ``False`` (default) builds a single regular lattice
-                       (:func:`build_boundary_path`); ``True`` builds a
-                       single-axis-adaptive grid (:func:`build_irregular_boundary_path`)
-                       -- see that section's module-level comment for the tradeoff.
-    optimize_offset  : ``False`` (default) uses the grid's natural (centred)
-                       phase; ``True`` additionally searches the grid's phase
-                       for the one needing fewest FOVs
-                       (:func:`optimize_grid_offset`/:func:`optimize_irregular_grid`,
-                       picked to match *irregular_grid*).
-    direction        : boustrophedon direction -- only used when
-                       ``irregular_grid=False``.
-    fixed_axis       : ``"y"`` or ``"x"`` -- only used when ``irregular_grid=True``
-                       (see :func:`build_irregular_bands`'s docstring).
-    return_side      : forwarded to the picked path builder; ``None``
-                       (default) keeps the raw snake order. Only reorders
-                       the path (see :func:`close_scanning_path`), so it
-                       never affects the final FOV count.
-    n_samples        : candidate offsets evaluated -- only used when
-                       ``optimize_offset=True``.
-    min_coverage_fraction, subset_polygons : forwarded to the picked path
-                       builder, same contract as :func:`build_boundary_path`.
-    eps_um2          : forwarded to :func:`find_fully_redundant_fovs`.
-    remove_redundant_fovs : ``True`` (default) actually drops the FOVs
-                       ``find_fully_redundant_fovs`` finds safe to drop;
-                       ``False`` still runs the detection (so
-                       ``result.redundant`` stays informative -- what
-                       WOULD be dropped, and whether the grid is fully
-                       covered either way) but returns the full,
-                       un-reduced grid as ``coords``.
+    irregular_grid   : False (default) = one regular lattice; True = a
+                       single-axis-adaptive grid (see the "Irregular grid" section
+                       comment for the tradeoff)
+    optimize_offset  : True also searches the grid phase for the fewest FOVs
+    direction        : boustrophedon direction (regular grid only)
+    fixed_axis       : ``"y"`` or ``"x"`` (irregular grid only; see
+                       :func:`build_irregular_bands`)
+    return_side      : forwarded to the path builder; only reorders the path
+                       (:func:`close_scanning_path`), never changes the count
+    n_samples        : candidate offsets (only with ``optimize_offset=True``)
+    min_coverage_fraction, subset_polygons : forwarded to the path builder, as
+                       in :func:`build_boundary_path`
+    eps_um2          : forwarded to :func:`find_fully_redundant_fovs`
+    remove_redundant_fovs : True (default) drops the redundant FOVs; False
+                       returns the full grid as ``coords``
 
     Returns
     -------
-    :class:`ReducedFOVPathResult` -- ``coords`` is the un-reduced grid
-    itself when ``remove_redundant_fovs=False``.
+    :class:`ReducedFOVPathResult`.
     """
     if irregular_grid:
         if optimize_offset:
