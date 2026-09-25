@@ -121,17 +121,6 @@ def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
 # (fov_size_um = pixel_size_um * image_size_px), used to lay out the scanning
 # grid in before_imaging/02.
 _MICROSCOPE_PARAMETERS_DIR = Path(__file__).resolve().parents[3] / "data" / "configs" / "merlin" / "microscope"
-# Scopes with no microscope-parameters JSON.
-_PIXEL_SIZE_UM_WITHOUT_JSON: Dict[Tuple[str, str], float] = {
-    ("MFX", "60X"): 0.0878,
-}
-# Which objective each microscope uses when the caller doesn't name one --
-# keeps every existing single-objective-per-scope call site working
-# unchanged.
-_DEFAULT_OBJECTIVE: Dict[str, str] = {
-    "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X", "MFX": "60X", "ST2": "60X",
-}
-_DEFAULT_CAMERA_PIXEL_SIZE_UM = 0.108
 
 
 class FOVGeometry(NamedTuple):
@@ -140,26 +129,21 @@ class FOVGeometry(NamedTuple):
     image_size_px: int     # camera sensor size in pixels (square)
 
 
-def get_camera_pixel_size_um(microscope: Optional[str], objective: Optional[str] = None) -> float:
+def get_camera_pixel_size_um(microscope: str, objective: Optional[str] = None) -> float:
     """
     Return the sample-plane pixel size (µm/pixel) for *microscope* + *objective*.
 
     Read from that scope's MERlin microscope-parameters JSON
     (``microns_per_pixel``). *objective* (e.g. ``"60X"``, ``"40X"``) defaults
-    to that microscope's entry in ``_DEFAULT_OBJECTIVE``. A scope with no JSON
-    uses ``_PIXEL_SIZE_UM_WITHOUT_JSON``; an unknown microscope/objective
-    falls back to 0.108 (no error, so estimates still run).
+    to that microscope's default objective. Raises ``ValueError`` for a
+    microscope/objective with no JSON.
     """
-    key = str(microscope).strip().upper() if microscope is not None else ""
-    obj = str(objective).strip().upper() if objective is not None else _DEFAULT_OBJECTIVE.get(key, "")
-    try:
-        path = _MICROSCOPE_PARAMETERS_DIR / resolve_microscope_parameters_filename(key, obj)
-    except ValueError:
-        return _PIXEL_SIZE_UM_WITHOUT_JSON.get((key, obj), _DEFAULT_CAMERA_PIXEL_SIZE_UM)
-    return float(json.loads(path.read_text(encoding="utf-8"))["microns_per_pixel"])
+    obj = str(objective).strip() if objective is not None else None
+    filename = resolve_microscope_parameters_filename(str(microscope).strip(), obj)
+    return float(json.loads((_MICROSCOPE_PARAMETERS_DIR / filename).read_text(encoding="utf-8"))["microns_per_pixel"])
 
 
-def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None) -> FOVGeometry:
+def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeometry:
     """
     Return the FOV geometry ``(pixel_size_um, image_size_px)`` for
     *microscope* + *objective*.
@@ -173,9 +157,9 @@ def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None)
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
     * MF2–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
 
-    *objective* defaults to *microscope*'s own default objective (see
-    ``_DEFAULT_OBJECTIVE``) — omit it to keep prior behaviour unchanged.
-    Unknown microscope/objective falls back to 0.108 µm/px, 2048 px.
+    *objective* defaults to *microscope*'s own default objective — omit it
+    to keep prior behaviour unchanged. Raises ``ValueError`` for an unknown
+    microscope/objective.
 
     Parameters
     ----------
