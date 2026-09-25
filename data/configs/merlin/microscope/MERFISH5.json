@@ -1,3 +1,7 @@
 {
-	"microns_per_pixel": 0.109
+    "flip_horizontal": true,
+    "flip_vertical": false,
+    "transpose": true,
+    "microns_per_pixel": 0.109,
+    "image_dimensions": [2048, 2048]
 }
