@@ -568,7 +568,7 @@ def segment_mosaic_tissue(
     )
 
 
-def _estimate_bimodal_threshold(bin_centers_log: np.ndarray, counts: np.ndarray) -> Optional[float]:
+def estimate_bimodal_threshold(bin_centers_log: np.ndarray, counts: np.ndarray) -> Optional[float]:
     """
     Estimate a separating threshold between two modes of a (log-space)
     density histogram, as the valley between its two most prominent peaks.
@@ -652,7 +652,7 @@ def plot_tile_intensity_histograms(
     count lets the (much more numerous) empty tiles'
     background peak swamp the real tissue peak down to ~3% of the combined
     histogram's max density -- under the 5% prominence cutoff
-    :func:`_estimate_bimodal_threshold` requires, so it always returned
+    :func:`estimate_bimodal_threshold` requires, so it always returned
     ``None`` even though the tissue peak is clearly real (visible in the
     per-tile lines). Weighting the two classes equally instead of by pixel
     count fixes this regardless of how lopsided the empty/signal tile split
@@ -665,7 +665,7 @@ def plot_tile_intensity_histograms(
     so tiles don't need to be the same pixel count to compare shapes.
 
     When the combined histogram is clearly bimodal, the valley between its
-    two most prominent peaks is estimated (:func:`_estimate_bimodal_threshold`),
+    two most prominent peaks is estimated (:func:`estimate_bimodal_threshold`),
     drawn as a vertical line labelled with the threshold in linear intensity
     units, and returned -- so it can be used directly as ``THRESHOLD`` in the
     segmentation cell instead of Otsu's often-biased pick (see
@@ -719,7 +719,7 @@ def plot_tile_intensity_histograms(
         combined_label = "all tiles combined"
     ax.plot(bin_centers, combined_counts, "-", color="black", lw=1.8, label=combined_label)
 
-    threshold = _estimate_bimodal_threshold(bin_centers, combined_counts)
+    threshold = estimate_bimodal_threshold(bin_centers, combined_counts)
     if show_threshold and threshold is not None:
         log_threshold = np.log10(threshold)
         ax.axvline(log_threshold, color="crimson", linestyle="--", lw=1.5,

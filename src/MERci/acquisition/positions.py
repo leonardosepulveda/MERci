@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 
 # ── Grid construction ─────────────────────────────────────────────────────────
 
-def _spaced_coords(
+def spaced_coords(
     center: float,
     d_min:  float,
     d_max:  float,
@@ -149,11 +149,11 @@ def create_grid_positions(
     ry = max(cy - ymin, ymax - cy)
 
     if direction == "vertical":
-        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=True)
-        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=False)
+        xs = spaced_coords(cx, cx - rx, cx + rx, step_size, even=True)
+        ys = spaced_coords(cy, cy - ry, cy + ry, step_size, even=False)
     elif direction == "horizontal":
-        xs = _spaced_coords(cx, cx - rx, cx + rx, step_size, even=False)
-        ys = _spaced_coords(cy, cy - ry, cy + ry, step_size, even=True)
+        xs = spaced_coords(cx, cx - rx, cx + rx, step_size, even=False)
+        ys = spaced_coords(cy, cy - ry, cy + ry, step_size, even=True)
     else:
         raise ValueError("direction must be 'vertical' or 'horizontal'")
 
@@ -1638,13 +1638,13 @@ def build_irregular_bands(
     Build per-band (fixed_axis regular-lattice) cross-axis position lists.
 
     One axis (*fixed_axis*) is a single regular lattice spanning the whole
-    boundary's bounding box, built with :func:`_spaced_coords` -- same as
+    boundary's bounding box, built with :func:`spaced_coords` -- same as
     :func:`create_grid_positions`'s own traversal axis. For each fixed-axis
     lattice position, the tissue is intersected with a strip one FOV tall/
     wide centred on it; this can split into several disjoint pieces (e.g.
     either side of a hole) -- each piece gets its OWN cross-axis lattice,
     centred on and spanning just that piece's own extent
-    (:func:`_spaced_coords` with ``even=False``, one centred piece per
+    (:func:`spaced_coords` with ``even=False``, one centred piece per
     contiguous strip of tissue).
 
     Returns a list of ``(fixed_value, cross_array_ascending)``, one entry
@@ -1707,7 +1707,7 @@ def build_irregular_bands(
 
     fixed_center = (fixed_min + fixed_max) / 2.0 + fixed_offset
     if force_parity:
-        fixed_positions = _spaced_coords(fixed_center, fixed_min, fixed_max, step_size, even=True)
+        fixed_positions = spaced_coords(fixed_center, fixed_min, fixed_max, step_size, even=True)
     else:
         span = fixed_max - fixed_min
         n = max(1, int(np.ceil(span / step_size)))
@@ -1730,7 +1730,7 @@ def build_irregular_bands(
                 lo, hi = (pxmin, pxmax) if fixed_axis == "y" else (pymin, pymax)
                 if (hi - lo) < min_width_um:
                     continue
-                piece_positions = _spaced_coords((lo + hi) / 2.0, lo, hi, step_size, even=False)
+                piece_positions = spaced_coords((lo + hi) / 2.0, lo, hi, step_size, even=False)
                 cross_vals.extend(piece_positions.tolist())
         bands.append((float(f), np.array(sorted(cross_vals))))
     return bands
@@ -1909,7 +1909,7 @@ def patch_uncovered_gaps(
     the upstream arithmetic alone: it measures the true uncovered area
     (``tissue_polygon`` minus the union of every FOV's own square) and, for
     each disjoint uncovered piece, tiles that piece's own bounding box with
-    *step_size*-spaced FOV positions (the same :func:`_spaced_coords`
+    *step_size*-spaced FOV positions (the same :func:`spaced_coords`
     pattern every other grid axis in this module already uses, so those
     added FOVs are on the same lattice pitch, not an arbitrary size) --
     then re-checks and repeats (fixed-point, capped at *max_iters*) in case
@@ -1969,8 +1969,8 @@ def patch_uncovered_gaps(
             if piece.area < eps_um2:
                 continue
             pxmin, pymin, pxmax, pymax = piece.bounds
-            xs = _spaced_coords((pxmin + pxmax) / 2.0, pxmin, pxmax, step_size, even=False)
-            ys = _spaced_coords((pymin + pymax) / 2.0, pymin, pymax, step_size, even=False)
+            xs = spaced_coords((pxmin + pxmax) / 2.0, pxmin, pxmax, step_size, even=False)
+            ys = spaced_coords((pymin + pymax) / 2.0, pymin, pymax, step_size, even=False)
             for x in xs:
                 for y in ys:
                     fov = shapely_box(x - half, y - half, x + half, y + half)

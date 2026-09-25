@@ -104,7 +104,7 @@ def create_mosaic(
     fov_ids = sorted(thumbnails.keys())
     tw, th  = thumbnail_size
 
-    pixel_xs, pixel_ys, canvas_w, canvas_h, pixels_per_unit = _layout_tiles(
+    pixel_xs, pixel_ys, canvas_w, canvas_h, pixels_per_unit = layout_tiles(
         fov_ids, positions, tw, th, padding, pixels_per_unit, flip_y,
     )
     log.debug("Mosaic: %d FOVs, scale=%.4f px/unit", len(fov_ids), pixels_per_unit)
@@ -207,7 +207,7 @@ def create_mosaic_ffc(
     fov_ids = sorted(raw_frames.keys())
     tw, th  = thumbnail_size
 
-    pixel_xs, pixel_ys, canvas_w, canvas_h, pixels_per_unit = _layout_tiles(
+    pixel_xs, pixel_ys, canvas_w, canvas_h, pixels_per_unit = layout_tiles(
         fov_ids, positions, tw, th, padding, pixels_per_unit, flip_y,
     )
     log.debug("FFC mosaic: %d FOVs, scale=%.4f px/unit", len(fov_ids), pixels_per_unit)
@@ -395,7 +395,7 @@ def _save_with_overlay(canvas, output_path, tile_bboxes, labels, label_color,
     canvas_image.save(str(output_path))
     return canvas
 
-def _layout_tiles(
+def layout_tiles(
     fov_ids: List[int],
     positions: Dict[int, Tuple[float, float]],
     tw: int,
