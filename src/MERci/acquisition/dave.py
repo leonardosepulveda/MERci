@@ -779,7 +779,7 @@ def create_dave_config(
                             printing the same breakdown twice.
     microscope            : microscope id (e.g. ``"MF3"``, ``"MFX"``, ``"ST2"``)
                             used to pick the camera frame size for the storage
-                            estimate (MFX/ST2 → 2304², MF-series → 2048²; see
+                            estimate (from its microscope JSON; see
                             ``configs.get_camera_frame_size``).  When ``None`` it is
                             inferred from the ``series`` names in ``round_info``.
     estimate_frame_shape  : explicit ``(width, height)`` in pixels for the storage
@@ -1460,10 +1460,11 @@ class ExperimentEstimate:
 
 def estimate_dave_experiment(
     dave_recipe:          Path,
+    *,
+    frame_width:          int,
+    frame_height:         int,
     kilroy_config:        Optional[Path] = None,
     settings_dir:         Optional[Path] = None,
-    frame_width:          int   = 2048,
-    frame_height:         int   = 2048,
     bytes_per_pixel:      int   = 2,
     frame_time_s:         Optional[float] = None,
     readout_overhead_s:   float = 0.0,
@@ -1487,8 +1488,9 @@ def estimate_dave_experiment(
     from the recipe's ``<loop_variable>/<file_path>``).
 
     Camera frame geometry is not stored in the MERci HAL config, so
-    ``frame_width``/``frame_height``/``bytes_per_pixel`` are parameters (default a
-    2048×2048 uint16 sCMOS frame = 8 MiB/frame); adjust them for other cameras.
+    ``frame_width``/``frame_height`` are parameters (take them from
+    ``configs.get_camera_frame_size``), as is ``bytes_per_pixel`` (default
+    2 = uint16).
 
     Parameters
     ----------
