@@ -39,21 +39,11 @@ log = logging.getLogger(__name__)
 
 _DIRECTIONS = ("right", "left", "up", "down")
 
-# Every (transpose, flip_horizontal, flip_vertical) combination --
-# detect_image_orientation()'s audit/fallback search space. Whether a
-# camera's raw frame rows/columns line up with physical stage x/y (and which
-# way) is NOT standardised across microscopes/mountings. MERlin's own
-# microscope-parameters JSON (data/configs/merlin/microscope/*.json) already
-# records the correct, verified combination per microscope as
-# transpose/flip_horizontal/flip_vertical booleans -- read and apply THAT
-# directly (see notebooks/misc/correct_camera_rotation.ipynb section 4)
-# rather than guessing. This 8-combination search exists only as a fallback/
-# audit.
-#
-# Caution: a bug elsewhere (e.g. in crop_overlap below) can make a WRONG
-# combination look best here. If this audit ever ranks a different
-# combination above the microscope-parameters JSON's declared one, don't
-# assume the JSON is wrong -- inspect the raw overlap crops directly first.
+# Every (transpose, flip_horizontal, flip_vertical) combination, the search
+# space of detect_image_orientation (an audit/fallback only: each scope's
+# MERlin microscope JSON holds its verified orientation). If the audit ever
+# disagrees with the JSON, suspect a bug (e.g. in crop_overlap) and inspect
+# the raw overlap crops before doubting the JSON.
 _ORIENTATION_COMBINATIONS = [
     (transpose, flip_horizontal, flip_vertical)
     for transpose in (False, True)
@@ -292,48 +282,31 @@ def detect_image_orientation(
     seed:               Optional[int] = 0,
 ) -> Tuple[Tuple[bool, bool, bool], pd.DataFrame]:
     """
-    Audit/fallback search: try all 8 (transpose, flip_horizontal,
-    flip_vertical) combinations on a small trial set and report whichever
-    gives the SMALLEST median registered-shift magnitude.
+    Audit/fallback: try all 8 (transpose, flip_horizontal, flip_vertical)
+    combinations on a few trial anchors and return the one with the SMALLEST
+    median registered-shift magnitude.
 
-    Prefer reading the real transpose/flip_horizontal/flip_vertical values
-    from this microscope's own MERlin microscope-parameters JSON
-    (``data/configs/merlin/microscope/*.json``) instead of trusting this
-    function's output as the primary source -- it exists to CROSS-CHECK that
-    file (or substitute for it when unavailable), not replace it. A smaller
-    search over a subset of the 3 independent booleans can score best yet
-    still leave a visible residual mis-stitch -- empirically-best-among-
-    limited-options isn't the same as actually correct, which is why this
-    searches the full 8-combination space.
-
-    Why the "smallest median shift" criterion is still reasonable for this
-    exhaustive search: real camera-vs-stage rotation is small (well under a
-    degree), so two genuinely 4-connected-adjacent FOVs should need only a
-    few pixels of correction. A wrong combination has no reason to produce
-    uniformly small shifts across many independent, unrelated
-    correspondences, so picking the minimum-median combination is a real
-    discriminating test, not just noise.
+    The microscope's MERlin JSON (``data/configs/merlin/microscope/*.json``) is
+    the primary source; use this to cross-check it or when it is missing. It
+    searches all 8 combinations because a best-of-a-subset can still leave a
+    visible mis-stitch. The criterion works because real camera rotation is
+    well under a degree, so true neighbours need only a few pixels of shift,
+    and a wrong orientation won't give uniformly small shifts.
 
     Parameters
     ----------
     fov_ids, positions, load_frame, step_size_um, pixel_size_um,
-    overlap_fraction, tolerance_fraction, upsample_factor : same as
+    overlap_fraction, tolerance_fraction, upsample_factor : as in
                   :func:`sample_neighbor_correspondences`
-    n_trial_anchors : how many anchors to sample PER candidate combination
-                  (default 3 -- enough for a clear signal without paying for
-                  a full :func:`sample_neighbor_correspondences` run 8 times
-                  over)
-    seed        : shared across every candidate combination, so all of them
-                  are tested on the SAME trial anchors/neighbours -- an
-                  apples-to-apples comparison, not different FOVs per
-                  candidate
+    n_trial_anchors : anchors sampled per combination (default 3)
+    seed        : shared by all combinations, so every one is scored on the
+                  same anchors and neighbours
 
     Returns
     -------
-    ((transpose, flip_horizontal, flip_vertical), results_df) -- the winning
-    combination, and a DataFrame with one row per candidate (columns:
-    transpose, flip_horizontal, flip_vertical, n_correspondences,
-    median_shift_um) for a full audit trail.
+    ((transpose, flip_horizontal, flip_vertical), results_df) -- the winner, and
+    one row per combination (transpose, flip_horizontal, flip_vertical,
+    n_correspondences, median_shift_um).
     """
     import pandas as pd
 
@@ -595,91 +568,45 @@ def fit_global_positions(
     lsqr_btol:         float = 1.0e-12,
 ) -> GlobalPositionCorrection:
     """
-    Jointly solve for every measured FOV's own real position from all kept
-    pairwise neighbour correspondences, instead of fitting one global affine
-    transform (:func:`fit_camera_rotation`) applied uniformly to the whole
-    nominal grid.
+    Solve for each measured FOV's own position from all kept neighbour
+    correspondences, instead of one global affine (:func:`fit_camera_rotation`)
+    for the whole grid. A global affine only corrects rotation/scale/shear
+    shared by the whole grid; it averages away real per-FOV stage jitter.
 
-    Why this exists: a single global affine can only correct a rotation/
-    scale/shear that's coherent across the WHOLE fov grid -- it cannot
-    correct real, independent per-FOV stage-positioning jitter, even given
-    perfect measurements. A correspondence with a real, clear per-FOV shift
-    can get averaged away into a near-identity global fit if no other
-    correspondence echoes the same pattern, so that real measurement never
-    reaches the "corrected" position at all. Fix: treat every sampled FOV's
-    position as its own free variable, and jointly minimize its disagreement
-    with every correspondence that constrains it, instead of reducing every
-    measurement to one shared rotation/scale.
+    Each correspondence (anchor A, neighbour B) gives
+    ``r_AB = measured_xy(B) - nominal_positions[A]``. Solve::
 
-    Method
-    ------
-    For each kept correspondence (anchor A, neighbour B), the measured
-    relative offset ``r_AB = measured_xy(B) - nominal_positions[A]`` is a
-    direct, independent estimate of B's true position relative to A's own
-    nominal position. Solving::
+        minimize over positions p:  sum_AB || (p[B] - p[A]) - r_AB ||^2
 
-        minimize over every FOV's unknown position p[F]:
-            sum_AB || (p[B] - p[A]) - r_AB ||^2
+    as two sparse linear least-squares problems (x and y,
+    ``scipy.sparse.linalg.lsqr``). Each connected component of the
+    correspondence graph can shift freely, so one FOV per component (the one
+    that is ``anchor_fov`` in the most correspondences) is pinned to its
+    nominal position.
 
-    is a sparse linear least-squares problem that separates cleanly into
-    two independent solves (x and y), via ``scipy.sparse.linalg.lsqr``.
+    Limitation: with sparse sampling (:func:`sample_neighbor_correspondences`
+    gives mostly separate anchor + ~4-neighbour stars) each leaf has one
+    constraint, so its solved position equals its ``measured_xy`` and
+    ``residual_rms_um`` is 0. Real error averaging needs overlapping samples.
 
-    The correspondence graph is typically NOT one connected mesh -- this
-    module's own sparse anchor-sampling strategy (:func:`sample_neighbor_
-    correspondences`) produces ``N_ANCHORS`` separate ~4-neighbour stars
-    that rarely overlap. Each connected component has its own 1-D-per-axis
-    translational null space (uniformly shifting every position in it
-    satisfies every constraint in that component equally), removed by
-    pinning ONE FOV per component -- whichever appears as an ``anchor_fov``
-    in the most correspondences, i.e. a real sampled anchor with several
-    real measurements attached, not an arbitrary leaf -- to its own nominal
-    position.
-
-    Honest limitation: with this sparse, non-overlapping sampling, most
-    components are simple stars (one anchor + up to 4 leaves, each leaf
-    constrained by exactly one correspondence) -- the solved leaf position
-    is then numerically identical to that correspondence's own
-    ``measured_xy``, and ``residual_rms_um`` is 0.0 (nothing to disagree
-    with). The real benefit here is using each measured FOV's own direct
-    measurement instead of discarding it into a diluted global-affine
-    average -- not yet genuine cross-measurement error averaging, which
-    would need denser/overlapping sampling to provide redundant constraints
-    per FOV.
-
-    ``lsqr``'s own default convergence tolerances are too loose once this is
-    run on a dense, overlapping correspondence set (e.g. every FOV of a
-    several-hundred-FOV grid measured against most/all of its real
-    neighbours): scipy's defaults can declare convergence tens of times
-    looser than the real ~3um signal this method exists to resolve, while
-    ``atol=btol=1e-12`` on the same input converges properly (``istop`` 1 or
-    2) to a far tighter, physically plausible residual. Small, sparse-star
-    components never expose this -- a handful of unknowns converges to any
-    tolerance in a few iterations regardless. Do not loosen these below
-    their own defaults without re-confirming convergence the same way
-    (``istop`` close to 1/2, not 7 = iteration limit or 3/4 = ill-
-    conditioned). Raising ``PIN_WEIGHT`` far past its current value chases
-    the same convergence problem instead of fixing it.
+    Keep *lsqr_atol*/*lsqr_btol* at 1e-12: on a dense correspondence set,
+    scipy's default tolerances stop far short of the ~3 µm signal being
+    resolved. Check ``istop`` is 1 or 2 (not 7 = iteration limit, or 3/4 =
+    ill-conditioned) before loosening them. Raising ``PIN_WEIGHT`` does not fix
+    convergence.
 
     Parameters
     ----------
-    correspondences   : from :func:`sample_neighbor_correspondences`,
-                        already passed through
+    correspondences   : from :func:`sample_neighbor_correspondences`, after
                         :func:`filter_correspondence_outliers`
-    nominal_positions : ``{fov_id: (x, y)}`` -- the full experiment's
-                        nominal grid positions (needed to look up each
-                        correspondence's ANCHOR's own nominal position,
-                        which isn't stored on the correspondence itself --
-                        only the neighbour's is)
-    lsqr_atol, lsqr_btol : passed straight through to
-                        ``scipy.sparse.linalg.lsqr`` for both the x and y
-                        solves -- see the convergence note above before
-                        loosening these.
+    nominal_positions : ``{fov_id: (x, y)}`` for the whole grid (anchors'
+                        nominal positions are not stored on correspondences)
+    lsqr_atol, lsqr_btol : ``lsqr`` tolerances for both solves (see above)
 
     Returns
     -------
-    GlobalPositionCorrection -- see its own docstring. Merge ``.positions``
-    over a full nominal (or affine-corrected) positions dict as a fallback
-    for every FOV not directly measured.
+    GlobalPositionCorrection. Merge ``.positions`` over a full nominal (or
+    affine-corrected) positions dict for FOVs that were not measured.
     """
     from scipy.sparse import lil_matrix
     from scipy.sparse.linalg import lsqr
@@ -788,48 +715,29 @@ def greedy_local_positions(
     root_fov:              int = 0,
 ) -> LocalPositionCorrection:
     """
-    Place every FOV by walking outward from *root_fov*, at each step always
-    taking the highest-priority (most reliable direction) correspondence
-    that reaches a not-yet-placed FOV from an already-placed one -- Prim's
-    algorithm for a maximum-priority spanning tree, where "weight" is a
-    whole DIRECTION's own reliability (e.g. that direction's std of
-    ``measured - nominal`` deviation across many independent
-    correspondences), not any single measurement's own noise.
+    Place every FOV by walking outward from *root_fov*, each step taking the
+    correspondence from the most reliable direction that reaches an unplaced
+    FOV from a placed one (Prim's algorithm; the weight is the whole
+    direction's reliability, not one measurement's noise).
 
-    Contrast with :func:`fit_global_positions`: that function uses every
-    kept correspondence AT ONCE and lets disagreements average out via least
-    squares -- principled, but blind to "this whole direction is generally
-    noisier" (it only sees per-measurement disagreement, and with one
-    measurement per FOV -- the common sparse-sampling case -- there is
-    nothing to average against at all). This function instead uses exactly
-    ONE correspondence to place any given FOV -- whichever available one
-    belongs to the currently-most-reliable direction -- and simply never
-    uses any other correspondence that also reaches that FOV (a "cut" edge).
-    Well-suited to a DENSE, exhaustive correspondence set (every FOV
-    measured against most/all of its real neighbours) where a genuine,
-    informative choice between directions exists at almost every step;
-    degrades to plain BFS (first-reached wins) if *direction_reliability* is
-    ``None``.
+    Unlike :func:`fit_global_positions`, which averages all correspondences,
+    each FOV here is placed by exactly one correspondence and any other edge to
+    it is dropped. That uses "this direction is noisier" information the
+    least-squares fit can't see. Best on a dense correspondence set (most FOVs
+    measured against most neighbours). With *direction_reliability* ``None``
+    it is plain BFS (first reached wins).
 
     Parameters
     ----------
-    correspondences        : from :func:`sample_neighbor_correspondences`,
-                              ideally already passed through
-                              :func:`filter_correspondence_outliers`
-    nominal_positions       : ``{fov_id: (x, y)}`` -- the full grid's nominal
-                              positions; used to look up each
-                              correspondence's ANCHOR's own nominal position
-                              (needed to recover the real relative offset,
-                              same as :func:`fit_global_positions`), and as
-                              the fallback position for any FOV this walk
-                              never reaches
-        direction_reliability : ``{direction: score}``, LOWER = more reliable
-                              (e.g. that direction's own std of
-                              ``measured - nominal`` deviation, from a
-                              reliability scatter plot). ``None`` (default)
-                              treats every direction equally.
-    root_fov                : the FOV held fixed at its own nominal position
-                              (default 0)
+    correspondences       : from :func:`sample_neighbor_correspondences`,
+                            ideally after :func:`filter_correspondence_outliers`
+    nominal_positions     : ``{fov_id: (x, y)}`` for the whole grid: gives each
+                            anchor's nominal position, and the fallback for FOVs
+                            the walk never reaches
+    direction_reliability : ``{direction: score}``, LOWER = more reliable (e.g.
+                            that direction's std of ``measured - nominal``);
+                            ``None`` treats all directions equally
+    root_fov              : FOV held at its nominal position (default 0)
 
     Returns
     -------
