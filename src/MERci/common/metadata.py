@@ -354,12 +354,12 @@ def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
     Resolve one ``round_info.csv`` ``dir``/``data_dir`` cell to a path on
     this machine.
 
-    - POSIX-absolute: returned unchanged.
+    - Absolute on this OS: returned unchanged.
 
-    - Windows-absolute (drive letter, either slash direction; parsed with
-      ``PureWindowsPath`` so it works on any OS): the tail after its last
-      ``data`` segment, re-rooted under *data_dir*. ``Path`` on POSIX treats
-      such a string as relative, and a backslash one as a single component.
+    - Absolute on the other OS (a drive letter on Linux, or a ``/...`` path
+      on Windows; parsed with ``PureWindowsPath`` so either works on any
+      OS): the tail after its first ``data`` segment, re-rooted under
+      *data_dir*. Joined as-is it would give a wrong path and 0 FOVs.
 
     - Relative: resolved against ``data_dir.parent`` (SAMPLE_DIR).
     """
@@ -368,13 +368,13 @@ def _resolve_series_dir(dir_str: str, data_dir: Path) -> Path:
         return p
 
     wp = PureWindowsPath(dir_str)
-    if wp.drive:
+    if wp.drive or wp.root:
         parts = wp.parts
         if "data" in parts:
             tail = parts[parts.index("data") + 1:]
             return data_dir.joinpath(*tail)
         log.warning(
-            "round_info.csv dir %r looks like a Windows absolute path but "
+            "round_info.csv dir %r is an absolute path from another OS but "
             "has no 'data' segment to re-root under this machine's own "
             "data_dir (%s) -- falling back to the (likely still wrong) "
             "raw join.", dir_str, data_dir,
