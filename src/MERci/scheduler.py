@@ -29,6 +29,7 @@ from .analysis.round  import (
     create_mosaic_ffc, load_raw_frames_for_round,
 )
 from .analysis import ffc as ffc_mod
+from .acquisition.merlin_config import load_microscope_orientation
 from .acquisition.configs import (
     read_hal_flip_vertical,
     get_color_frame_indices,
@@ -57,6 +58,7 @@ def build_fov_task_kwargs(fpath: Path, config: ExperimentConfig, tracker: Progre
         thumbnail_percentile_clip = config.thumbnail_percentile_clip,
         histogram_bins            = config.histogram_bins,
         histogram_range           = config.histogram_range,
+        orientation               = load_microscope_orientation(config.microscope),
     )
 
 
@@ -120,6 +122,7 @@ def build_round_mosaics(
     log.info("Building mosaics for round %d …", round_id)
 
     flip_y        = resolve_round_flip_y(round_id, config, metadata)
+    orientation   = load_microscope_orientation(config.microscope)
     color_indices = resolve_round_color_frame_indices(round_id, config, metadata)
 
     # Fallback: one mosaic with frame 0 when no frame table was found
@@ -163,6 +166,7 @@ def build_round_mosaics(
                 padding=config.mosaic_padding,
                 flip_y=flip_y,
                 percentile_clip=config.mosaic_contrast_percentile_clip,
+                orientation=orientation,
             )
         else:
             thumbnails, positions = load_thumbnails_for_round(
