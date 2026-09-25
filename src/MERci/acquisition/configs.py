@@ -52,15 +52,14 @@ from .merlin_config import MICROSCOPE_PARAMETERS_DIR, load_microscope_parameters
 
 # ── Channel / colour mapping ─────────────────────────────────────────────────
 
-_COLOUR_TO_CHANNEL: Dict[str, Dict] = {
-    "MF2": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF3": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF4": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    "MF5": {np.nan: np.nan, 405: 4, 488: 3, 560: 2, 650: 1, 750: 0},
-    # MFX has only 4 channels (no 750) with a distinct ordering: 0:650, 1:560, 2:488, 3:405
-    "MFX": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
-    # ST2 shares MFX's 4-channel mapping (no 750)
-    "ST2": {np.nan: np.nan, 405: 3, 488: 2, 560: 1, 650: 0},
+# Real wavelengths only. A blank (laser-off) frame's colour is NaN and has no
+# channel: use _channel_for, which maps any NaN to a NaN channel.
+_MF_CHANNELS = {405: 4, 488: 3, 560: 2, 650: 1, 750: 0}
+# 4 channels (no 750), in a different order.
+_MFX_CHANNELS = {405: 3, 488: 2, 560: 1, 650: 0}
+_COLOUR_TO_CHANNEL: Dict[str, Dict[int, int]] = {
+    "MF2": _MF_CHANNELS, "MF3": _MF_CHANNELS, "MF4": _MF_CHANNELS, "MF5": _MF_CHANNELS,
+    "MFX": _MFX_CHANNELS, "ST2": _MFX_CHANNELS,
 }
 
 
@@ -72,13 +71,16 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
     Parameters
     ----------
     microscope : any key of ``_COLOUR_TO_CHANNEL`` (e.g. ``"MF3"``, ``"ST2"``)
+
+    Blank frames (NaN colour) are not in the mapping; look a frame's colour
+    up with :func:`_channel_for` instead of indexing directly.
     """
     if microscope not in _COLOUR_TO_CHANNEL:
         raise ValueError(
             f"Unknown microscope '{microscope}'. "
             f"Supported values: {list(_COLOUR_TO_CHANNEL)}"
         )
-    return _COLOUR_TO_CHANNEL[microscope]
+    return dict(_COLOUR_TO_CHANNEL[microscope])
 
 
 # ── Camera geometry ──────────────────────────────────────────────────────────
@@ -246,6 +248,12 @@ def _normalise_colour_key(color) -> Optional[int]:
     return int(round(float(color)))
 
 
+def _channel_for(ch_map: Mapping, color):
+    """Channel of *color* in *ch_map*, or NaN for a blank (NaN/None) colour."""
+    key = _normalise_colour_key(color)
+    return np.nan if key is None else ch_map[key]
+
+
 def power_dict_to_channel_list(
     power:         Mapping,
     microscope:    str   = "MF3",
@@ -271,13 +279,7 @@ def power_dict_to_channel_list(
     list of float
         One power per channel, index = channel number, length = channel count.
     """
-    ch_map = get_color_to_channel_dict(microscope)
-    # Real (non-blank) channels only: {int wavelength -> channel index}.
-    colour_to_channel = {
-        _normalise_colour_key(c): int(ch)
-        for c, ch in ch_map.items()
-        if _normalise_colour_key(c) is not None
-    }
+    colour_to_channel = get_color_to_channel_dict(microscope)
     n_channels = max(colour_to_channel.values()) + 1
     channel_power = [float(default_power)] * n_channels
     for color, value in power.items():
@@ -373,17 +375,17 @@ def get_frame_table(
     rows: List[Dict] = []
 
     for color in bead_seq:
-        rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
 
     if scan_mode == "interleaved":
         for z in z_pos:
             for color in color_seq:
-                rows.append({"color": color, "channel": ch_map[color], "z": z})
+                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
     else:  # "sequential"
         for i, color in enumerate(color_seq):
             z_sweep = z_pos if i % 2 == 0 else z_pos[::-1]
             for z in z_sweep:
-                rows.append({"color": color, "channel": ch_map[color], "z": z})
+                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
 
     if z_return_mode == "progressive":
         # Step the objective back toward the coverslip with blank (laser-off)
@@ -397,7 +399,7 @@ def get_frame_table(
         rows.append({"color": np.nan, "channel": np.nan, "z": bead_z})
 
     for color in end_seq:
-        rows.append({"color": color, "channel": ch_map[color], "z": bead_z})
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
 
     return pd.DataFrame(rows, columns=["color", "channel", "z"])
 
@@ -1011,12 +1013,8 @@ def reconstruct_frame_table(
             f"({shutter_path})"
         )
 
-    # channel → color (drop the NaN→NaN entry)
-    inv = {
-        int(ch): color
-        for color, ch in get_color_to_channel_dict(microscope).items()
-        if not pd.isna(ch)
-    }
+    # channel → color
+    inv = {ch: color for color, ch in get_color_to_channel_dict(microscope).items()}
 
     rows: List[Dict] = []
     for i in range(n_frames):
