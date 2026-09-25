@@ -1,33 +1,27 @@
 # MERci/analysis/elevation.py
 """
-Per-pixel tissue-elevation mapping: how deep (in z) real tissue signal
-extends, across the FOV grid -- a digital-elevation-model-style heatmap,
-plus a z-sweep GIF of the downsampled, flat-field-corrected DAPI signal.
+Per-pixel tissue elevation: how deep (in z) tissue signal extends across
+the FOV grid, as an elevation-map heatmap, plus z-sweep GIF/MP4s of the
+downsampled, flat-field-corrected DAPI signal.
 
-Promoted from ``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb``'s
-own investigation (see that notebook's own docstring/Review note for the
-full algorithm rationale, the camera-orientation fix, and why the FFC field
-is built from INTERIOR FOVs rather than boundary/exterior ones) and
-``notebooks/tests/calculate_ffc/01_compare_ffc_methods.ipynb`` (why "min"
-is the default per-FOV z-projection statistic). Now this repo's own
-production tissue-thickness measurement
-(``after_imaging/08_measure_tissue_thickness.ipynb``), replacing the
-earlier per-FOV Counter/true-pixel-count scalar approach
-(:mod:`MERci.analysis.fov`'s ``compute_channel_counters``/
-``tpc_profile_from_counters``, still used elsewhere).
+Production tissue-thickness measurement for
+``after_imaging/08_measure_tissue_thickness.ipynb`` (replacing the per-FOV
+Counter/true-pixel-count approach in :mod:`MERci.analysis.fov`, which other
+notebooks still use). Algorithm rationale, including why the FFC field
+comes from INTERIOR FOVs and why "min" is the default z-projection, is in
+``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb`` and
+``notebooks/tests/calculate_ffc/01_compare_ffc_methods.ipynb``.
 
-Pipeline (see ``08_measure_tissue_thickness.ipynb`` for the full notebook
-wiring, including which steps offer a SLURM array option):
+Pipeline (notebook 08 shows the wiring and SLURM options):
 
-1. :func:`identify_boundary_fovs`     -- exterior vs. interior FOVs + grid indices
-2. :func:`calculate_ffc`               -- FFC field from every interior FOV's
-                                          own full-z-stack projection (default: min)
-3. :func:`estimate_background_threshold` -- background/foreground intensity cutoff
-4. :func:`compute_fov_elevation` (per FOV -- typically via a SLURM array, see
-   ``MERci.acquisition.cluster_submit.build_fov_elevation_array_script``)
-5. :func:`create_elevation_heatmap`    -- crop + stitch into one grid heatmap
-6. :func:`create_gif`/:func:`create_movie` -- z-sweep GIF/MP4 of the same
-   per-FOV downsampled stacks, with a scale bar + z label
+1. :func:`identify_boundary_fovs`        -- exterior vs. interior FOVs + grid indices
+2. :func:`calculate_ffc`                 -- FFC field from the interior FOVs'
+                                            full-z projections (default: min)
+3. :func:`estimate_background_threshold` -- background/foreground cutoff
+4. :func:`compute_fov_elevation`         -- per FOV, usually as a SLURM array
+   (``MERci.acquisition.cluster_submit.build_fov_elevation_array_script``)
+5. :func:`create_elevation_heatmap`      -- crop + stitch into one heatmap
+6. :func:`create_gif`/:func:`create_movie` -- z-sweep with scale bar and z label
 """
 from __future__ import annotations
 
@@ -619,59 +613,40 @@ def create_gif(
     frame_cache_dir: Optional[Path] = None,
 ) -> Path:
     """
-    Assemble a z-sweep GIF of the same FFC-corrected, downsampled z-stacks
-    :func:`compute_fov_elevation` already produced (one ``.npy`` path per
-    FOV, shape ``(n_z, h, w)`` -- reused directly, no re-read of raw data).
-    Each frame is the whole grid (or a smaller window -- see
-    :func:`create_elevation_heatmap`) stitched at its native downsampled
-    resolution (no further resize), with a shared intensity scale across
-    every frame (so brightness changes reflect real signal fading, not
-    per-frame auto-contrast), a per-frame ``"z = <value> um"`` label, and a
-    physical scale bar (*scalebar_um*, default 1000 -> "1 mm").
+    Z-sweep GIF of the FFC-corrected, downsampled per-FOV stacks
+    :func:`compute_fov_elevation` produced (one ``(n_z, h, w)`` ``.npy`` per FOV;
+    raw data is not re-read). Each frame is the grid (or a window, as in
+    :func:`create_elevation_heatmap`) stitched at the downsampled resolution,
+    with one intensity scale for all frames (so fading is real signal), a
+    ``"z = <value> um"`` label and a scale bar.
 
-    Streams one z-plane at a time from each FOV's own memory-mapped
-    ``.npy`` (never loading a whole per-FOV stack, let alone every FOV's
-    stack, into memory at once) -- needed at full-grid scale, where every
-    FOV's whole stack together can run into the tens of GB.
+    Reads one z-plane at a time from memory-mapped ``.npy`` files, since all
+    stacks together can reach tens of GB.
 
-    Note: a GIF is inserted into PowerPoint as a picture, not a real video
-    (autoplay during a slideshow depends on the PowerPoint version/platform)
-    -- for a slide deck, prefer :func:`create_movie` instead.
+    For slides prefer :func:`create_movie`: PowerPoint treats a GIF as a
+    picture, and autoplay depends on the version.
 
     Parameters
     ----------
-    stack_paths        : ``{fov_id: path}`` to that FOV's ``(n_z, h, w)``
-                         float32 ``.npy`` z-stack -- e.g.
-                         :func:`compute_fov_elevation`'s own ``ds_stack``,
-                         saved via ``np.save`` (NOT ``np.savez`` -- memory-
-                         mapping needs a plain ``.npy``)
-    z_um_values        : z (µm) for each of the stack's ``n_z`` planes
-    grid_indices, config, downsample_factor, r0, c0, n_rows, n_cols : same
-                         as :func:`create_elevation_heatmap`
-    output_path        : where to save the finished GIF
-    z_stride           : take every Nth z-plane (default 1 = every frame)
+    stack_paths        : ``{fov_id: path}`` to a float32 ``(n_z, h, w)``
+                         ``.npy`` (saved with ``np.save``, not ``np.savez``,
+                         so it can be memory-mapped)
+    z_um_values        : z (µm) of each of the ``n_z`` planes
+    grid_indices, config, downsample_factor, r0, c0, n_rows, n_cols : as in
+                         :func:`create_elevation_heatmap`
+    output_path        : where to save the GIF
+    z_stride           : take every Nth z-plane (default 1)
     frame_duration_ms  : GIF frame duration
-    scalebar_um        : physical scale-bar length in µm (default 1000 =
-                         1 mm); label is ``"<value> mm"`` for >=1000 µm,
-                         else ``"<value> um"``
-    percentile_clip    : ``(lo_pct, hi_pct)`` shared display-intensity
-                         scale, estimated from one representative (middle)
-                         z-plane pooled across every FOV -- not the whole
-                         stack, to avoid reading everything twice at
-                         full-grid scale
-    frame_cache_dir    : if given, each rendered frame is saved there as
-                         ``z<index>.png`` and reloaded instead of re-rendered
-                         on a later call -- so a crash during the final GIF
-                         write (the slow full-grid stitching loop is
-                         complete by then; only the encode/save step
-                         remains) doesn't force every frame to be redone.
-                         Like the rest of this module's caches, it is keyed
-                         on z-plane index only -- clear the directory by
-                         hand after changing a display parameter
-                         (*downsample_factor*, *scalebar_um*,
-                         *percentile_clip*, grid window). Share the same
-                         directory with a :func:`create_movie` call over the
-                         same sweep to render each frame only once for both.
+    scalebar_um        : scale-bar length (µm, default 1000); labelled in mm
+                         from 1000 µm up
+    percentile_clip    : ``(lo_pct, hi_pct)`` of the shared intensity scale,
+                         taken from the middle z-plane of every FOV
+    frame_cache_dir    : if given, each rendered frame is saved as
+                         ``z<index>.png`` and reused on later calls (so a crash
+                         while encoding doesn't redo the rendering). Keyed on
+                         z index only: clear it after changing any display
+                         parameter or the grid window. Can be shared with a
+                         :func:`create_movie` call over the same sweep.
 
     Returns
     -------
@@ -827,46 +802,29 @@ def create_paired_movie(
     max_output_pixels: int = _DEFAULT_MAX_OUTPUT_PIXELS,
 ) -> Path:
     """
-    Side-by-side (rotated 90 deg CCW, panel *a* on the left) MP4 pairing two
-    independent z-sweeps -- e.g. two sibling acquisitions of the same sample
-    (see :func:`MERci.common.experiment_info.resolve_sample_identity`'s own
-    "split layout" note) -- frame by frame at the SAME physical depth: for
-    every value in *target_z_um_values*, each side independently renders its
-    own nearest available z-plane (same "closest z_um" convention as
-    :func:`create_z_mosaic`). Caller resolves *target_z_um_values* (typically
-    the overlap of both sides' own z ranges) so this function stays agnostic
-    to how that list was chosen -- a step-size/offset mismatch between the
-    two acquisitions' own z-stacks then never lets the two panels drift out
-    of sync, at the cost of each side showing its true nearest frame rather
-    than an exact depth match.
+    Side-by-side MP4 of two z-sweeps (rotated 90° CCW, panel *a* on the left),
+    e.g. two sibling acquisitions of one sample (see
+    :func:`MERci.common.experiment_info.resolve_sample_identity`), matched by
+    physical depth. For each value in *target_z_um_values* each side shows its
+    own nearest z-plane (as :func:`create_z_mosaic`), so different z steps or
+    offsets never let the panels drift apart. The caller picks the depths
+    (typically the overlap of both z ranges).
 
-    Each side's own display-intensity scale (vmin/vmax) is fixed once from
-    its own representative (middle-of-its-own-stack) frame -- same
-    shared-scale-across-frames convention as :func:`create_movie` -- so
-    brightness stays comparable frame to frame within that side; the two
-    sides are not forced to share one scale, since two different
-    acquisitions' raw intensities are not directly comparable anyway. Both
-    panels DO share one physical scale bar (same *scalebar_um* /
-    *downsample_factor* for both), so a different pixel_size_um between the
-    two acquisitions' own microscopes still draws the same PHYSICAL bar
-    length -- only its pixel length (and thus *config_a*/*config_b*'s own
-    crop size) can differ.
+    Each side keeps its own intensity scale, fixed from its middle frame (two
+    acquisitions' intensities aren't comparable). Both share one physical
+    scale bar, so it has the same length in µm even if pixel sizes differ.
 
     Parameters
     ----------
     stack_paths_a/b, z_um_values_a/b, grid_indices_a/b, config_a/b : per-side
-        versions of :func:`create_movie`'s own same-named parameters
-    target_z_um_values : depths (um) to render, one output frame each
-    frame_cache_dir_a/b : per-side frame cache (keyed on that side's own
-        nearest z-plane index), same reuse contract as
-        :func:`create_movie`'s own `frame_cache_dir`
-    max_output_pixels : downscale the combined (both panels, post-rotation)
-        frame to stay under this pixel count -- see
-        :data:`_DEFAULT_MAX_OUTPUT_PIXELS`'s own note on why; raise it if
-        the caller's own session has memory to spare and wants sharper
-        output, lower it if the encode is running somewhere more memory-
-        constrained than that default was verified against
-    (all other parameters : same as :func:`create_movie`)
+        versions of :func:`create_movie`'s parameters
+    target_z_um_values : depths (µm), one output frame each
+    frame_cache_dir_a/b : per-side frame cache (keyed on that side's nearest
+        z index), as :func:`create_movie`'s *frame_cache_dir*
+    max_output_pixels : downscale the combined frame below this pixel count
+        (see :data:`_DEFAULT_MAX_OUTPUT_PIXELS`); raise it for sharper output
+        if memory allows
+    (other parameters : as in :func:`create_movie`)
 
     Returns
     -------
