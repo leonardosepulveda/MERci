@@ -62,9 +62,9 @@ def measure_folder(path: Path) -> dict:
         n_files : int
             Number of files counted.
         created : datetime or None
-            The folder's own creation time (``st_ctime``, which on Windows is
-            genuinely creation time, not the Linux "metadata changed" meaning).
-            None if `path` itself is inaccessible.
+            The folder's own creation time (``st_birthtime``). None if `path`
+            is inaccessible or the OS/filesystem doesn't report one (Linux's
+            ``st_ctime`` is the last metadata change, not creation).
         earliest_file_modified, latest_file_modified : datetime or None
             Oldest/newest file `mtime` found in the tree -- computed for free
             in the same walk used for size, and a useful cross-check on
@@ -89,7 +89,8 @@ def measure_folder(path: Path) -> dict:
             latest = mtime
 
     try:
-        created = datetime.fromtimestamp(Path(path).stat().st_ctime)
+        birth = getattr(Path(path).stat(), "st_birthtime", None)
+        created = datetime.fromtimestamp(birth) if birth is not None else None
     except OSError:
         created = None
 
