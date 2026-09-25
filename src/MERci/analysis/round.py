@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from ..acquisition.merlin_config import apply_microscope_orientation
 from ..progress import thumbnail_filename
 from .ffc import apply_ffc
 
@@ -36,6 +37,7 @@ def create_mosaic(
     highlight_color: int = 255,
     highlight_width: int = 3,
     return_tile_bboxes: bool = False,
+    orientation: Optional[Dict[str, bool]] = None,
 ):
     """
     Assemble a mosaic image from per-FOV thumbnails placed at stage coordinates.
@@ -80,6 +82,12 @@ def create_mosaic(
                       ``Rectangle`` patch on top of an ``imshow`` of this
                       canvas) instead of a border baked into the raster,
                       without re-deriving the scale/offset math here.
+    orientation     : optional camera orientation flags
+                      (:func:`MERci.acquisition.merlin_config.load_microscope_orientation`),
+                      applied to each thumbnail before placement. Thumbnails
+                      are saved in raw camera orientation, so without this a
+                      tile's content is rotated/mirrored relative to its
+                      neighbours even though the tile sits at the right place.
 
     Returns
     -------
@@ -102,6 +110,8 @@ def create_mosaic(
     log.debug("Mosaic: %d FOVs, scale=%.4f px/unit", len(fov_ids), pixels_per_unit)
 
     def prepare(thumb):
+        if orientation:
+            thumb = apply_microscope_orientation(thumb, **orientation)
         if thumb.dtype != np.uint8:
             thumb = thumb.clip(0, 255).astype(np.uint8)
         if thumb.shape[:2] != (th, tw):
@@ -144,6 +154,7 @@ def create_mosaic_ffc(
     highlight_color: int = 255,
     highlight_width: int = 3,
     return_tile_bboxes: bool = False,
+    orientation: Optional[Dict[str, bool]] = None,
 ):
     """
     Flat-field-corrected sibling of :func:`create_mosaic`. Takes RAW per-FOV
@@ -178,7 +189,9 @@ def create_mosaic_ffc(
                       the whole assembled float canvas's non-background
                       pixels, not per tile
     labels, label_color, highlight_fov_ids, highlight_color, highlight_width,
-    return_tile_bboxes : same as :func:`create_mosaic`
+    return_tile_bboxes, orientation : same as :func:`create_mosaic`.
+                      *orientation* is applied after the FFC division, since
+                      *ffc_field* is in raw camera orientation.
 
     Returns
     -------
@@ -203,6 +216,8 @@ def create_mosaic_ffc(
         frame = frame.astype(np.float32)
         if ffc_field is not None:
             frame = apply_ffc(frame, ffc_field)
+        if orientation:
+            frame = apply_microscope_orientation(frame, **orientation)
         if crop_px > 0:
             frame = frame[crop_px:-crop_px, crop_px:-crop_px]
         if frame.shape[:2] != (th, tw):
