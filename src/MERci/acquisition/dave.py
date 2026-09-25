@@ -186,16 +186,10 @@ def count_positions(positions_path: Path) -> int:
 
 def fov_pad_width(total_fovs: int) -> int:
     """
-    Zero-pad width wide enough to represent every FOV index ``0 … total_fovs-1``
-    (e.g. 150 FOVs -> 3 digits, ``"000".."149"``; 1036 FOVs -> 4 digits,
-    ``"0000".."1035"``) -- derived from the actual FOV count read from the
-    positions file, never a fixed literal. HAL's own file-naming width scales
-    the same way with FOV count, so a hardcoded width (e.g. always 3 digits)
-    silently stops matching real files the moment an experiment's FOV count
-    crosses a digit boundary the hardcoded value didn't anticipate -- exactly
-    what happened for a 1036-FOV experiment whose round_info.csv was written
-    with a stale/assumed 3-digit width. No artificial floor: an experiment
-    with only a handful of FOVs genuinely needs only that many digits.
+    Zero-pad width for FOV indices ``0 … total_fovs-1`` (150 FOVs -> 3 digits,
+    1036 -> 4), matching how HAL names files. Always derive it from the real
+    FOV count: a fixed width stops matching once the count crosses a digit
+    boundary. No minimum width.
     """
     return len(str(max(total_fovs - 1, 0)))
 
@@ -665,11 +659,8 @@ def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str,
         n_frames = get_hal_frame_count(hal_path)
     except (FileNotFoundError, ValueError) as exc:
         n_frames = 0
-        # Previously silent: a movie written with <length>0</length> isn't just
-        # a cosmetic gap in estimate_dave_experiment's time/storage totals --
-        # it's a zero-frame movie in the REAL recipe Dave would run. Surface it
-        # immediately so a missing/misnamed hal_config is never mistaken for
-        # "0 s, 0 B this round" being a legitimate estimate.
+        # <length>0</length> is a zero-frame movie in the real recipe, not just
+        # a gap in the estimate, so say so.
         print(f"[create_dave_config] WARNING: could not read <frames> from "
               f"{hal_path} ({exc}) -- movie {movie_name!r} written with "
               f"<length>0</length>. Check that round_info.csv's hal_config "
@@ -679,26 +670,15 @@ def _add_movie(parent_loop: ET.Element, row: pd.Series, variable_name: str,
     name_el = ET.SubElement(movie, "name")
     name_el.set("increment", "Yes")
     name_el.text = movie_name
-    # Continuous FOV numbering across per-segment loops (multi-boundary layout):
-    # when round_info carries fov_start/fov_pad, emit them as the patched Dave's
-    # <name start=… pad=…> so boundary (and transit) movies share one name yet
-    # keep a single running, non-colliding index. Absent columns → stock Dave
-    # numbering (single-positions layout is unaffected).
+    # Patched Dave's <name start=… pad=…>: one running FOV index across
+    # per-segment loops (see create_dave_config).
     if "fov_start" in row.index and pd.notna(row.get("fov_start")):
         name_el.set("start", str(int(row["fov_start"])))
     if "fov_pad" in row.index and pd.notna(row.get("fov_pad")):
         name_el.set("pad", str(int(row["fov_pad"])))
-    # A "multi" (variable-z-per-FOV) round must NOT get a static <length>/
-    # <parameters> here: nodeToDict's field extraction (storm_control's
-    # movieNodeToDict) resolves each tag via plain ElementTree.find(),
-    # which returns the FIRST match in document order. Since these two
-    # elements are written before <variable_entry>, a static value here
-    # would always shadow whatever the position itself supplies once
-    # expanded (via the positions file's per-line hal_config column and
-    # the patched Dave in dave_variable_z_patch/) -- silently discarding
-    # the whole point of per-FOV tiering. Absent tissue_thickness column
-    # (every "single" round, i.e. all of today's experiments) -> the
-    # normal, unaffected behaviour.
+    # No static <length>/<parameters> for a "multi" (variable-z) round: Dave
+    # reads each tag with ElementTree.find() (first match wins), so a static
+    # value here would shadow the per-FOV one from the positions file.
     if row.get("tissue_thickness") != "multi":
         ET.SubElement(movie, "length").text     = str(n_frames)
         ET.SubElement(movie, "parameters").text = hal_stem
@@ -732,22 +712,11 @@ def _between_round_protocols(
             steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=True), resolver.readouts()]
         else:
             steps = [resolver.hybridize(kilroy_hyb_idx, adaptors=False)]
-        # Some Kilroy protocols (e.g. "Hybridize N") already end by
-        # setting/flowing the imaging buffer themselves -- appending the
-        # standalone image-buffer protocol on top would flow it twice.
-        # Detected by comparing the LAST VALVE THAT ACTUALLY FLOWED
-        # (protocol_last_flowed_valve, not just the last <valve>
-        # element) in the step immediately preceding it (readouts, or
-        # the hybridize step itself) against the standalone
-        # protocol's own last-flowed valve, rather than hard-coding
-        # which Dave step this can happen after. Using the literal
-        # last <valve> element instead of the last one that flowed
-        # is NOT equivalent: a Kilroy config can end a protocol with
-        # a bare valve reposition move with no <pump> after it (e.g.
-        # parking at the next hyb's port), which is not itself a
-        # flow -- using the literal last <valve> element there causes
-        # a real double-flow bug (see protocol_last_flowed_valve's
-        # docstring).
+        # Skip the image-buffer protocol when the preceding step already ends
+        # by flowing the same valve (e.g. "Hybridize N"), or it flows twice.
+        # Compare the last valve that actually FLOWED, not the last <valve>
+        # element: a protocol can end with a bare valve move (see
+        # protocol_last_flowed_valve).
         image_buffer = resolver.image_buffer()
         preceding_last_flow = protocol_last_flowed_valve(kilroy_config, steps[-1])
         buffer_last_flow    = protocol_last_flowed_valve(kilroy_config, image_buffer)
@@ -911,177 +880,102 @@ def create_dave_config(
     """
     Write an explicit-block Dave recipe XML from ``round_info``.
 
-    **Positions model.** Two layouts are supported:
+    **Positions.** By default every movie iterates the one *positions_file*
+    and each imaging round is one ``<loop>``. When ``round_info`` has a
+    ``positions_file`` column and *positions_dir* is given (the multi-boundary
+    layout from :func:`create_round_info_multitissue`), each segment
+    (boundary or transit) gets its own ``<loop>``, named
+    ``"<Cells Imaging|Hyb NN Imaging> - <segment>"``, in ``round_info`` row
+    order. Fluidics loops go after a round's last segment loop.
 
-    * *single-positions* (default) — every movie in a round iterates the one
-      ``positions_file``; each imaging round is a single ``<loop>``.
-    * *per-segment* — used when ``round_info`` has a ``positions_file`` column and
-      ``positions_dir`` is given (the multi-boundary layout from
-      ``create_round_info_multitissue``). Because a Dave loop iterates exactly one
-      positions file, each segment (boundary or transit) becomes its **own**
-      ``<loop>`` — named ``"<Cells Imaging|Hyb NN Imaging> - <segment>"`` — with
-      its own movie and HAL config, in ``round_info`` row order. Fluidics loops
-      still sit between rounds (after a round's last segment loop).
+    **One ``<loop_variable>`` per loop, always.** Dave's ``v2Generator``
+    looks each ``<loop>`` up by its own name in the loop variables, so every
+    loop needs a same-named ``<loop_variable>``, even when rounds share a
+    positions file. (A shared variable raises ``ValueError: 'Hyb NN Imaging'
+    is not in list`` in real Dave.)
 
-    **One ``<loop_variable>`` per loop, always — even when several rounds
-    point at the same positions file.** Dave's ``v2Generator``
-    (``handleLoop``) resolves a ``<loop>`` by looking up
-    ``self.loop_variable_names.index(loop.attrib["name"])`` — every loop MUST
-    have a ``<loop_variable>`` of the exact same name; there is no mechanism
-    for a ``<movie>``'s ``<variable_entry>`` to reference a *different*,
-    shared loop_variable declared under another name. A single shared
-    loop_variable referenced by name from each round's movie loads fine in
-    MERci's own reader but makes real Dave raise
-    ``ValueError: 'Hyb NN Imaging' is not in list``. So every round
-    (and, in per-segment mode, every round×segment) still gets its own
-    identically-named ``<loop_variable>``, duplicating the same ``file_path``
-    across as many declarations as there are rounds/segments that use it.
+    Rows with ``fov_start``/``fov_pad`` (from
+    :func:`create_round_info_multitissue`) get ``start``/``pad`` attributes
+    on the movie ``<name>``, so all boundary movies (and all transit movies)
+    share one name with one running FOV index. This needs the patched Dave
+    ``v2Generator`` (``dave_fov_offset_patch``); stock Dave ignores the
+    attributes and the names would collide.
 
-      When the rows carry ``fov_start``/``fov_pad`` (produced by
-      ``create_round_info_multitissue``), each movie ``<name>`` is emitted with
-      ``start``/``pad`` attributes so all boundary movies share one name with a
-      single running FOV index and all transit movies likewise — see that function.
-      This makes the recipe depend on the patched Dave ``v2Generator``
-      (``dave_fov_offset_patch``); stock Dave ignores the attributes and the shared
-      names would collide.
+    **Fluidics.** Each fluidics loop is named by the hyb index of the NEXT
+    imaging round ("Hyb 01 Fluidics" precedes "Hyb 01 Imaging"). The hyb index
+    counts bits rounds, so a leading cells round shifts neither loop names nor
+    Kilroy protocol numbers. Past ``MAX_KILROY_HYB`` (24 ports) the Kilroy
+    protocol wraps to port 2 (25 -> 2, 26 -> 3, ...; the port is reloaded
+    with fresh reagent), while loop labels and data folders keep the true
+    index. The last round has no fluidics unless *include_final_cleave*.
 
-    Fluidics loops are named by the hyb index of the NEXT imaging round (e.g.
-    "Hyb 01 Fluidics" precedes "Hyb 01 Imaging").  The hyb-protocol number
-    tracks that same bit/hyb index (the count of bits rounds reached so far),
-    not the imaging-round number, so a leading cells round does not shift the
-    Kilroy protocol names or the hyb numbering. Past hyb index 24 (see
-    ``MAX_KILROY_HYB``), the Kilroy protocol actually called wraps back to
-    "Hybridize 2"/"Hybridize Adaptors 2" (25 -> 2, 26 -> 3, ...) -- the
-    physical fluidics ports only go up to 24, so a longer protocol reuses an
-    already-used port, reloaded with fresh reagent. Only the Kilroy protocol
-    name wraps; the loop label and data folder for that round still use its
-    own true hyb index.
-    The last imaging round has no trailing fluidics unless
-    ``include_final_cleave=True``.
-
-    **Save location per round.** When ``round_info`` has a ``data_dir`` column, a
-    ``<change_directory>`` element sets HAL's save directory (from ``data_dir``)
-    immediately **before that round's own imaging loop** (purely a readability
-    choice -- the tag sits next to the loop it applies to, rather than earlier
-    during the preceding fluidics block). Emission is de-duplicated: unchanged
-    from the last one emitted is a no-op. In the multi-boundary layout a round
-    spans several directories, so the extra per-segment directories are still
-    set before their own segment loops. This spreads rounds across folders
-    (e.g. ``data/hybs/H01``, ``H02``, …). HAL **requires the directory to
-    exist** (it errors otherwise), and neither Dave nor HAL creates it, so with
-    ``create_data_dirs=True`` (default) this function creates every referenced
-    directory. (``change_directory`` maps to HAL's "Set Directory" message,
-    which is deprecated but still functional — it only emits a warning.)
+    **Save directory.** With a ``data_dir`` column, a ``<change_directory>``
+    goes right before each round's imaging loop (and before each extra
+    segment directory in the multi-boundary layout), skipped when unchanged.
+    HAL errors if the directory doesn't exist and nothing else creates it, so
+    *create_data_dirs* creates them. (``change_directory`` is HAL's deprecated
+    but working "Set Directory".)
 
     Parameters
     ----------
-    round_info            : DataFrame with columns ``imaging_round``,
-                            ``series``, ``hal_config``, and optionally:
+    round_info            : columns ``imaging_round``, ``series``,
+                            ``hal_config``, optionally ``imaging_type``,
+                            ``data_dir``, ``positions_file``/``segment``,
+                            ``fov_start``/``fov_pad``, and:
 
-                            * ``tissue_thickness`` (``"single"`` or
-                              ``"multi"``, absent = ``"single"``). A
-                              ``"multi"`` row's movie omits the static
-                              ``<length>``/``<parameters>`` normally written
-                              from ``hal_config`` -- those fields are instead
-                              supplied per FOV by the positions file's own
-                              per-line hal_config column, via the patched
-                              Dave in ``../misc/dave_multi_z/`` (see
-                              ``_add_movie``'s comment for why a static value
-                              here would otherwise silently shadow it).
-                              ``hal_config`` for a "multi" row should still
-                              name a real file (e.g. the full/deepest
-                              variant) -- it's simply not written into the
-                              movie template. When any row is "multi", the
-                              written recipe gets a leading XML comment
-                              flagging the positions-file requirement (see
-                              ``_write_dave_xml``'s ``leading_comment``).
-                            * ``z_lengths`` -- informational only (not read
-                              by this function): the round's possible frame
-                              counts, JSON-encoded ascending, e.g.
-                              ``"[10, 18, 25]"`` -- not a semicolon-joined
-                              string, so it round-trips with ``json.loads``
-                              directly.
-    positions_file        : path to ``positions_*.txt``; written into each
+                            * ``tissue_thickness`` (``"single"``, default, or
+                              ``"multi"``): a ``"multi"`` row's movie omits
+                              ``<length>``/``<parameters>``, which the positions
+                              file then supplies per FOV via the patched Dave in
+                              ``misc/dave_multi_z/`` (see ``_add_movie``). Its
+                              ``hal_config`` must still name a real file. Any
+                              ``"multi"`` row adds a leading XML comment stating
+                              the positions-file requirement.
+                            * ``z_lengths``: informational only, not read here
+                              (JSON list of the round's frame counts).
+    positions_file        : ``positions_*.txt`` written into each
                             ``<loop_variable>/<file_path>``
-    settings_dir          : directory containing the HAL config XML files
-                            (used to read ``<frames>`` counts)
+    settings_dir          : directory with the HAL config XMLs (for ``<frames>``)
     output_path           : where to write the recipe XML
-    use_adaptors          : if True, generate adaptor-based fluidics
-                            (``Cleave adaptors`` / ``Hyb adaptors N`` /
-                            ``Hyb readouts`` / ``Flow Image Buffer``);
-                            if False, use direct readout protocols
-                            (``Cleave direct`` / ``Hybridize N`` /
-                            ``Wash and Imaging Buffers``)
-    include_final_cleave  : if True, append a "Fluidics Final" block after the
-                            last imaging round containing only a single cleave
-                            step (``Cleave adaptors`` or ``Cleave direct``)
-    first_hyb_no_cleave   : if True (default), the fluidics block that precedes
-                            the FIRST bits imaging round omits the cleave step
-                            (used when a cells round is imaged first, so the
-                            first hybridisation flows onto a freshly prepared
-                            sample); all later fluidics blocks keep the cleave.
-                            Ignored when ``fluidics_protocols`` is given.
-    leading_fluidics      : if True, emit a fluidics block BEFORE ``round_info``'s
-                            first round, using the same protocol-resolution logic
-                            (Kilroy lookup, ``first_hyb_no_cleave``, hyb numbering)
-                            that would otherwise apply if a round ``round_ids[0] - 1``
-                            existed and just finished imaging. Use this to build a
-                            self-contained "hybs-only" recipe (``round_info`` holding
-                            only the bits rounds) that is independently runnable in
-                            Dave without a separate "cells" file having just run in
-                            the same session -- the first hyb's hybridization step
-                            would otherwise have nowhere to attach, since normally it
-                            is written as a side effect of the PRECEDING round's own
-                            loop iteration (which does not exist in this slice).
-                            No-op when ``round_info`` is empty.
+    use_adaptors          : True = adaptor fluidics (cleave adaptors, hyb
+                            adaptors N, readouts, image buffer); False = direct
+                            (cleave direct, hybridize N, wash and imaging buffers)
+    include_final_cleave  : append a "Fluidics Final" block with one cleave step
+                            after the last round
+    first_hyb_no_cleave   : omit the cleave before the FIRST bits round (a cells
+                            round was imaged first on a fresh sample). Ignored
+                            with *fluidics_protocols*.
+    leading_fluidics      : also emit a fluidics block before the first round,
+                            as if round ``round_ids[0] - 1`` had just been
+                            imaged. Makes a hybs-only recipe runnable on its own.
+                            No-op for an empty ``round_info``.
     num_focus_checks      : value for ``<num_focus_checks>``
-    fluidics_protocols    : if provided, use this fixed list of Kilroy protocol
-                            names for every between-round fluidics block,
-                            overriding ``use_adaptors``
-    kilroy_config         : path to the Kilroy config XML that will run this
-                            experiment.  When given, every fluidic protocol
-                            written into the recipe is resolved to (and required
-                            to exist as) a real ``<protocol>`` in that Kilroy
-                            config — the cleave / hybridize / readouts / image-
-                            buffer step names are taken from the Kilroy file
-                            rather than hard-coded, and a ``ValueError`` is
-                            raised if any required step has no matching protocol.
-                            When ``None`` (legacy), hard-coded protocol names are
-                            used and no Kilroy cross-check is performed.
-    create_data_dirs      : if True (default), create every directory named in the
-                            ``data_dir`` column (the targets of the emitted
-                            ``<change_directory>`` elements) so HAL's existence
-                            check passes.  Set False when generating the recipe on a
-                            machine other than the acquisition computer.
-    print_estimate        : if True (default), print an estimated run time and raw
-                            storage for the recipe (see
-                            :func:`estimate_dave_experiment`).  Requires
-                            ``kilroy_config`` for the fluidics portion.
-    per_round             : if True (default), the printed estimate includes a
-                            "Per round:" text breakdown (see
-                            :func:`format_experiment_estimate`).  Set False when
-                            the caller will build its own per-round table instead
-                            (see :func:`experiment_estimate_table`) -- avoids
-                            printing the same breakdown twice.
-    microscope            : microscope id (e.g. ``"MF3"``, ``"MFX"``, ``"ST2"``)
-                            used to pick the camera frame size for the storage
-                            estimate (from its microscope JSON; see
-                            ``configs.get_camera_frame_size``).  When ``None`` it is
-                            inferred from the ``series`` names in ``round_info``.
-    estimate_frame_shape  : explicit ``(width, height)`` in pixels for the storage
-                            estimate; overrides the microscope-derived size.  When
-                            ``None`` (default) the size comes from ``microscope``.
-    estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
-    start_time            : wall-clock time this recipe is expected to start running
-                            on the microscope; when given, the printed estimate also
-                            shows realistic start/end dates for each round's fluidics
-                            and imaging (see :func:`format_experiment_estimate`).
-                            ``None`` (default) omits those dates.
+    fluidics_protocols    : fixed Kilroy protocol list for every between-round
+                            block; overrides *use_adaptors*
+    kilroy_config         : Kilroy config XML that will run the experiment. When
+                            given, every protocol name is taken from it and must
+                            exist there (``ValueError`` otherwise). ``None`` uses
+                            hard-coded names without checking.
+    positions_dir         : folder holding the per-segment positions files
+    create_data_dirs      : create every ``data_dir`` folder (default True). Set
+                            False off the acquisition computer.
+    print_estimate        : print run time and raw storage
+                            (:func:`estimate_dave_experiment`); the fluidics part
+                            needs *kilroy_config*
+    per_round             : include the "Per round:" breakdown in that print
+                            (turn off when showing :func:`experiment_estimate_table`)
+    microscope            : scope id, for the frame size in the storage estimate;
+                            ``None`` infers it from ``series`` names
+    estimate_frame_shape  : explicit ``(width, height)`` for the estimate;
+                            overrides *microscope*
+    estimate_bytes_per_pixel : bytes per pixel for the estimate (2 = uint16)
+    start_time            : expected recipe start; adds per-round start/end
+                            dates to the printed estimate
 
     Returns
     -------
     ExperimentEstimate or None
-        The estimate when ``print_estimate`` is True, else None.
+        The estimate when *print_estimate* is True, else None.
     """
     round_ids = sorted(round_info["imaging_round"].unique())
 
@@ -1190,106 +1084,59 @@ def create_focus_test_dave_config(
     start_time:       Optional[datetime] = None,
 ) -> Tuple[int, Optional["ExperimentEstimate"]]:
     """
-    Write a lightweight Dave recipe that visits every FOV in *positions_file*
-    and checks focus lock only -- no fluidics -- to catch a bad focus lock
-    across the whole coverslip before committing to the full multi-hour
-    acquisition.
+    Write a Dave recipe that visits every FOV in *positions_file* and checks
+    focus lock only (no fluidics), to catch a bad lock across the coverslip
+    before the full acquisition.
 
-    **No movie by default (``n_test_frames=0``).** Each FOV's ``<movie>``
-    carries only ``<name>``/``<check_focus>`` -- no ``<length>``/
-    ``<parameters>``. Dave's ``v2Generator`` expands ``<movie>`` into a fixed
-    action list (DAMoveStage, ..., DACheckFocus, ..., DASetParameters, ...,
-    DATakeMovie), and each action silently omits itself when its required
-    fields are missing: ``DASetParameters`` needs ``parameters``,
-    ``DATakeMovie`` needs ``name`` and ``length > 0``. So omitting
-    ``<length>``/``<parameters>`` yields a branch with ONLY DAMoveStage +
-    DACheckFocus -- no image taken, no HAL parameters changed. Works with
-    stock Dave, no patch needed.
+    **Check-only by default (``n_test_frames=0``).** Each ``<movie>`` has only
+    ``<name>``/``<check_focus>``. Dave's ``v2Generator`` skips any action
+    missing its fields (``DASetParameters`` needs ``parameters``,
+    ``DATakeMovie`` needs ``length > 0``), so each FOV is just move stage +
+    check focus: no image, no HAL parameter change. Works with stock Dave.
 
-    **No persisted per-FOV pass/fail file is possible in this mode.** HAL's
-    focus-lock reply (``focus_status``) only reaches Dave live over TCP; Dave
-    shows a failure in its own transient, in-memory warnings list (confirmed
-    directly against ``storm_control/dave/dave.py``'s ``handleWarning`` --
-    it only calls ``self.ui.currentWarnings.addWarning``, a GUI widget,
-    nothing disk-backed) but never writes it to a file. The ONLY on-disk
-    record of per-frame focus-lock quality HAL produces is the ``.off``
-    sidecar (``good-offset`` column -- already read by
-    :mod:`MERci.analysis.stage_z` for ``stage-z``), and that file is only
-    opened once an actual movie's frames start arriving
-    (``storm_control/hal4000/focusLock/lockControl.py``'s
-    ``handleNewFrame``) -- so a zero-frame check-only FOV leaves no trace
-    file at all.
+    This mode leaves no per-FOV record on disk: Dave shows focus failures only
+    in its in-memory GUI warnings, and HAL's ``.off`` sidecar (``good-offset``,
+    read by :mod:`MERci.analysis.stage_z`) is only written once movie frames
+    arrive.
 
-    **Set ``n_test_frames > 0`` for a real per-FOV record.** This adds
-    ``<length>``/``<parameters>`` (from ``hal_config``, required in this
-    mode) and ``<overwrite>True</overwrite>`` to every movie, so HAL takes a
-    real (but short) movie per FOV -- ``n_test_frames`` is sent to HAL as the
-    actual frame count (``DATakeMovie``'s ``length`` field, not just a
-    Dave-side estimate), so this genuinely limits real acquisition time --
-    and writes its normal ``.off`` sidecar, whose ``good-offset`` column can
-    then be read back per FOV with
-    :func:`MERci.analysis.stage_z.focus_lock_summary_for_fov`. Trade-off:
-    real (small) disk usage/time per FOV, and the destination directory must
-    exist (``data_dir``/``create_data_dir``, same requirement
-    :func:`create_dave_config` has for every other movie).
+    **``n_test_frames > 0`` gives a per-FOV record.** Every movie gets
+    ``<length>`` (the real frame count HAL takes), ``<parameters>`` (from
+    *hal_config*, required) and ``<overwrite>True</overwrite>``. Each FOV then
+    writes a short movie and its ``.off`` sidecar, readable with
+    :func:`MERci.analysis.stage_z.focus_lock_summary_for_fov`. Costs a little
+    time and disk, and the data directory must exist.
 
     Parameters
     ----------
-    positions_file   : positions_*.txt to visit (same format as the main recipe)
+    positions_file   : positions_*.txt to visit
     output_path      : where to write the recipe XML
-    num_focus_checks : ``<num_focus_checks>`` for every FOV's ``<check_focus>``
-    focus_scan       : if True, ``<focus_scan/>`` is included (scan for focus
-                       if not already locked); if False, only checks the
-                       current lock state without scanning
-    n_test_frames    : ``0`` (default) = check-focus only, no movie, no file
-                       (see above). ``>0`` = also take a real movie of this
-                       many frames per FOV (requires ``hal_config``),
-                       producing a real per-FOV ``.off`` sidecar.
-    hal_config       : HAL config filename (with or without ``.xml``) to use
-                       for the movie's ``<parameters>`` when
-                       ``n_test_frames > 0`` -- required in that case,
-                       ignored when ``n_test_frames == 0`` (no image is
-                       taken, so no HAL parameters are needed)
-    settings_dir     : if given (and ``n_test_frames > 0``), used to verify
-                       *hal_config* actually exists before writing the
-                       recipe, via the same lookup :func:`create_dave_config`
-                       uses (checks the ``multi_z/`` sibling too)
-    data_dir         : if given (and ``n_test_frames > 0``), a
-                       ``<change_directory>`` is emitted before the loop so
-                       the short test movies land here rather than wherever
-                       HAL's directory was last set; ignored when
-                       ``n_test_frames == 0`` (nothing is written to disk)
-    create_data_dir  : if True (default), create *data_dir* when given (HAL
-                       requires the directory to exist)
-    movie_name       : base movie name (e.g. ``"hal-mf3-focustest"``);
-                       ``increment="Yes"`` numbers it per FOV exactly like a
-                       real acquisition movie
-    print_estimate   : if True (default), print an estimated run time/storage for
-                       this recipe via the same :func:`estimate_dave_experiment`
-                       mechanism :func:`create_dave_config` uses -- in check-only
-                       mode (``n_test_frames=0``) no image is ever taken, so imaging
-                       time comes only from the per-FOV move overhead (see
-                       ``estimate_dave_experiment``'s ``per_movie_overhead_s``),
-                       not from any exposure/readout time.
-    per_round        : if True (default), the printed estimate includes a
-                       "Per round:" text breakdown -- see
-                       :func:`create_dave_config`'s same parameter.
-    kilroy_config    : unused here (this recipe has no fluidics) -- accepted only
-                       so callers can pass the same value they use for
-                       :func:`create_dave_config` without conditionally omitting it
-    microscope       : microscope id, used to pick the camera frame size for the
-                       storage estimate (see :func:`create_dave_config`)
-    estimate_frame_shape     : explicit ``(width, height)`` in pixels; overrides
-                       the microscope-derived size
-    estimate_bytes_per_pixel : bytes per pixel for the storage estimate (2 = uint16)
-    start_time       : wall-clock time this recipe is expected to start running;
-                       see :func:`create_dave_config`'s same parameter
+    num_focus_checks : ``<num_focus_checks>`` per FOV
+    focus_scan       : include ``<focus_scan/>`` (scan if not locked); False
+                       only checks the current lock
+    n_test_frames    : 0 = check-only; > 0 = also a movie of this many frames
+    hal_config       : HAL config filename (with or without ``.xml``) for the
+                       movies; required when ``n_test_frames > 0``, else ignored
+    settings_dir     : with ``n_test_frames > 0``, check that *hal_config*
+                       exists (same lookup as :func:`create_dave_config`,
+                       including the ``multi_z/`` sibling)
+    data_dir         : with ``n_test_frames > 0``, emit a ``<change_directory>``
+                       to it before the loop
+    create_data_dir  : create *data_dir* when given (HAL requires it)
+    movie_name       : base movie name (e.g. ``"hal-mf3-focustest"``), numbered
+                       per FOV (``increment="Yes"``)
+    print_estimate   : print a run-time/storage estimate
+                       (:func:`estimate_dave_experiment`). In check-only mode
+                       the time is only the per-FOV move overhead.
+    per_round        : as in :func:`create_dave_config`
+    kilroy_config    : unused (no fluidics); accepted so callers can pass the
+                       same arguments as to :func:`create_dave_config`
+    microscope, estimate_frame_shape, estimate_bytes_per_pixel, start_time :
+                       as in :func:`create_dave_config`
 
     Returns
     -------
     (int, ExperimentEstimate or None)
-        Number of FOVs visited (from *positions_file*), and the estimate when
-        ``print_estimate`` is True (else None).
+        Number of FOVs visited, and the estimate when *print_estimate* is True.
     """
     if n_test_frames > 0 and not hal_config:
         raise ValueError(
