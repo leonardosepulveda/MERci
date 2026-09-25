@@ -43,6 +43,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 
+from .merlin_config import load_microscope_parameters
+
 
 # ── Channel / colour mapping ─────────────────────────────────────────────────
 
@@ -75,70 +77,14 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
     return _COLOUR_TO_CHANNEL[microscope]
 
 
-# ── Camera frame size ────────────────────────────────────────────────────────
-# Camera sensor size (square, pixels) per microscope. MFX and ST2 have 2304-px
-# cameras; the MF-series (MF2-MF5) have 2048-px cameras. Choosing the microscope
-# therefore fixes the frame size, which drives the storage estimate
-# (bytes = width * height * bytes_per_pixel * frames).
-_CAMERA_PIXELS: Dict[str, int] = {
-    "MF2": 2048, "MF3": 2048, "MF4": 2048, "MF5": 2048,
-    "MFX": 2304, "ST2": 2304,
-}
-_DEFAULT_CAMERA_PIXELS = 2048
-
-
-def get_camera_frame_size(microscope: Optional[str]) -> Tuple[int, int]:
-    """
-    Return the ``(width, height)`` camera frame size in pixels for *microscope*.
-
-    MFX and ST2 have 2304×2304 sensors; the MF-series (MF2–MF5) have 2048×2048.
-    An unknown or ``None`` microscope falls back to 2048×2048 (no error, so
-    estimates still run) — extend ``_CAMERA_PIXELS`` for new scopes.
-
-    Parameters
-    ----------
-    microscope : microscope id, case-insensitive (e.g. ``"MF3"``, ``"mfx"``); may
-                 be ``None``
-
-    Returns
-    -------
-    (width, height) : frame size in pixels (square sensor)
-    """
-    key = str(microscope).strip().upper() if microscope is not None else ""
-    n   = _CAMERA_PIXELS.get(key, _DEFAULT_CAMERA_PIXELS)
-    return (n, n)
-
-
-# Camera pixel size projected onto the sample (µm/pixel), per (microscope,
-# objective). Pixel size depends on both the camera's physical pixel pitch
-# (fixed per microscope, see _CAMERA_PIXELS above) and the objective's
-# magnification -- unlike frame size/channel map/acquisition type above,
-# which are camera/scope hardware properties independent of which objective
-# is mounted, this needs a second key. Historically every scope ran a single
-# 60X objective, so MFX/ST2 (2304-px sensors) image at 0.0878 µm/px and the
-# MF-series (MF2-MF5, 2048-px) at 0.108 µm/px at 60X. ST2 additionally
-# supports a 40X objective: 0.1317 µm/px = 0.0878 * (60/40) -- a SCALED
-# placeholder (magnification ratio applied to the 60X-calibrated value), not
-# yet a real calibration measurement; replace with a measured value once one
-# is available (see e.g. `misc/MF2_60XSil1.3_zcorrection.ipynb` for how a
-# real per-objective calibration is done). Together with the sensor size
-# this fixes the FOV footprint (fov_size_um = pixel_size_um * image_size_px),
-# used to lay out the scanning grid in before_imaging/02.
-_OBJECTIVE_PIXEL_SIZE_UM: Dict[Tuple[str, str], float] = {
-    ("MF2", "60X"): 0.108, ("MF3", "60X"): 0.108, ("MF4", "60X"): 0.108, ("MF5", "60X"): 0.108,
-    ("MFX", "60X"): 0.0878,
-    ("ST2", "60X"): 0.0878,
-    ("ST2", "40X"): 0.0878 * 60.0 / 40.0,   # 0.1317 -- scaled placeholder, see comment above
-}
-# Which objective each microscope uses when the caller doesn't name one --
-# keeps every existing single-objective-per-scope call site working
-# unchanged. Extend this + _OBJECTIVE_PIXEL_SIZE_UM together when a
-# microscope gains a new objective.
-_DEFAULT_OBJECTIVE: Dict[str, str] = {
-    "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X", "MFX": "60X", "ST2": "60X",
-}
-_DEFAULT_CAMERA_PIXEL_SIZE_UM = 0.108
-
+# ── Camera geometry ──────────────────────────────────────────────────────────
+# Frame size and sample-plane pixel size both come from the scope's MERlin
+# microscope-parameters JSON (``image_dimensions``, ``microns_per_pixel``; see
+# merlin_config.load_microscope_parameters), so MERci and MERlin always agree.
+# Pixel size depends on the objective as well as the camera, hence the
+# optional *objective*. Together they fix the FOV footprint
+# (fov_size_um = pixel_size_um * image_size_px) used to lay out the scanning
+# grid, and the frame size drives the storage estimate.
 
 class FOVGeometry(NamedTuple):
     """FOV geometry for a microscope+objective: sample-plane pixel size and sensor size."""
@@ -146,24 +92,27 @@ class FOVGeometry(NamedTuple):
     image_size_px: int     # camera sensor size in pixels (square)
 
 
-def get_camera_pixel_size_um(microscope: Optional[str], objective: Optional[str] = None) -> float:
+def get_camera_frame_size(microscope: str, objective: Optional[str] = None) -> Tuple[int, int]:
     """
-    Return the sample-plane pixel size (µm/pixel) for *microscope* + *objective*.
-
-    *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
-    entry in ``_DEFAULT_OBJECTIVE`` (today, every scope has exactly one) --
-    omit it to keep prior single-objective-per-scope behaviour unchanged.
-    MFX/ST2 → 0.0878 µm/px at 60X, MF-series (MF2–MF5) → 0.108 µm/px at 60X;
-    ST2 also has a 40X objective. Unknown microscope/objective falls back to
-    0.108 (no error, so estimates still run) — extend
-    ``_OBJECTIVE_PIXEL_SIZE_UM``/``_DEFAULT_OBJECTIVE`` for new scopes/objectives.
+    ``(width, height)`` camera frame size in pixels for *microscope*, from
+    its microscope-parameters JSON (``image_dimensions``). Raises
+    ``ValueError`` for an unknown microscope/objective.
     """
-    key = str(microscope).strip().upper() if microscope is not None else ""
-    obj = str(objective).strip().upper() if objective is not None else _DEFAULT_OBJECTIVE.get(key, "")
-    return _OBJECTIVE_PIXEL_SIZE_UM.get((key, obj), _DEFAULT_CAMERA_PIXEL_SIZE_UM)
+    width, height = load_microscope_parameters(microscope, objective)["image_dimensions"]
+    return (int(width), int(height))
 
 
-def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None) -> FOVGeometry:
+def get_camera_pixel_size_um(microscope: str, objective: Optional[str] = None) -> float:
+    """
+    Sample-plane pixel size (µm/pixel) for *microscope* + *objective*, from
+    its microscope-parameters JSON (``microns_per_pixel``). *objective*
+    (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's default
+    objective. Raises ``ValueError`` for an unknown microscope/objective.
+    """
+    return float(load_microscope_parameters(microscope, objective)["microns_per_pixel"])
+
+
+def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeometry:
     """
     Return the FOV geometry ``(pixel_size_um, image_size_px)`` for
     *microscope* + *objective*.
@@ -175,11 +124,11 @@ def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None)
 
     * MFX, ST2 (60X) → ``(0.0878 µm/px, 2304 px)``
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
-    * MF2–MF5 (60X)   → ``(0.108 µm/px, 2048 px)``
+    * MF2–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
 
-    *objective* defaults to *microscope*'s own default objective (see
-    ``_DEFAULT_OBJECTIVE``) — omit it to keep prior behaviour unchanged.
-    Unknown microscope/objective falls back to the MF-series 60X values.
+    *objective* defaults to *microscope*'s own default objective — omit it
+    to keep prior behaviour unchanged. Raises ``ValueError`` for an unknown
+    microscope/objective.
 
     Parameters
     ----------
@@ -192,7 +141,7 @@ def get_fov_geometry(microscope: Optional[str], objective: Optional[str] = None)
     FOVGeometry : named tuple ``(pixel_size_um, image_size_px)`` — unpacks as a
                   plain tuple, e.g. ``px_um, size_px = get_fov_geometry("ST2", "40X")``
     """
-    width, _ = get_camera_frame_size(microscope)   # square sensor → width == height
+    width, _ = get_camera_frame_size(microscope, objective)   # square sensor → width == height
     return FOVGeometry(pixel_size_um=get_camera_pixel_size_um(microscope, objective),
                        image_size_px=width)
 
