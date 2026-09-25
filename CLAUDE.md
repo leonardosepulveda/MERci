@@ -227,8 +227,8 @@ x,y, `#`-comments). Images: `.zarr`/`.dax`/`.tiff`, read via `read_image`.
 `{650→0, 560→1, 488→2, 405→3}` (4 channels, no 750). Extend
 `_COLOUR_TO_CHANNEL` in `acquisition/configs.py` for other scopes. Camera
 geometry: `MFX`/`ST2` = 2304×2304 @ 0.0878 µm/px; `MF2`–`MF5` = 2048×2048 @
-0.108 µm/px (`get_camera_frame_size`/`get_camera_pixel_size_um`/
-`get_fov_geometry`). Acquisition type (orthogonal to the above):
+0.108 (`MF2`) or 0.109 µm/px (`MF3`–`MF5`, from MERlin's microscope JSONs)
+(`get_camera_frame_size`/`get_camera_pixel_size_um`/`get_fov_geometry`). Acquisition type (orthogonal to the above):
 `MF2`/`MFX`/`ST2` = spinning-disk (`"disk"`); `MF3`/`MF4`/`MF5` =
 epifluorescence (`"epi"`) — `get_acquisition_type`.
 
