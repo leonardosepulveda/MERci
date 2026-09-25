@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from ..acquisition.merlin_config import apply_microscope_orientation
+from ..acquisition.configs import apply_microscope_orientation
 from ..progress import thumbnail_filename
 from .ffc import apply_ffc
 
@@ -83,7 +83,7 @@ def create_mosaic(
                       canvas) instead of a border baked into the raster,
                       without re-deriving the scale/offset math here.
     orientation     : optional camera orientation flags
-                      (:func:`MERci.acquisition.merlin_config.load_microscope_orientation`),
+                      (:func:`MERci.acquisition.configs.load_microscope_orientation`),
                       applied to each thumbnail before placement. Thumbnails
                       are saved in raw camera orientation, so without this a
                       tile's content is rotated/mirrored relative to its

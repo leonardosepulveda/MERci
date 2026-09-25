@@ -103,7 +103,8 @@ src/MERci/
     io.py                 read/write dax/zarr/tiff, frame-selective reads
     experiment_info.py    ExperimentInfo, resolve_sample_identity, collect_experiment_info
   acquisition/
-    configs.py            frame tables, HAL/shutter config generation, color/channel mapping
+    configs.py            frame tables, HAL/shutter config generation, color/channel mapping,
+                          camera geometry/orientation
     positions.py           FOV grid generation, scanning paths, multi-tissue boundaries
     mosaic.py              derive tissue boundaries from a Steve low-mag mosaic
     alignment.py           cross-microscope FOV transfer, bead-drift registration

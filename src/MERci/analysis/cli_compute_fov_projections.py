@@ -45,7 +45,7 @@ sys.path.insert(0, str(_MERCI_SRC))
 
 from MERci.analysis import _cli_common as cli  # noqa: E402
 from MERci.common.io import read_image_frames                             # noqa: E402
-from MERci.acquisition.merlin_config import apply_microscope_orientation  # noqa: E402
+from MERci.acquisition.configs import apply_microscope_orientation  # noqa: E402
 from MERci.analysis.elevation import project_stack                        # noqa: E402
 
 _VALID_STATISTICS = ("median", "max", "min", "mean")

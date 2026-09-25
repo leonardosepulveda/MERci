@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 
 from .alignment import phase_drift, remove_hot_pixels
-from .merlin_config import apply_microscope_orientation
+from .configs import apply_microscope_orientation
 from .positions import find_grid_neighbor
 
 log = logging.getLogger(__name__)

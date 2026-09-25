@@ -71,7 +71,7 @@ from .common.metadata import (
     FOCUSTEST_ROUND_ID, ExperimentMetadata, RoundInfo, SeriesInfo, first_existing_path,
 )
 from .acquisition.configs import iter_round_frame_tables
-from .acquisition.merlin_config import apply_microscope_orientation, load_microscope_orientation
+from .acquisition.configs import apply_microscope_orientation, load_microscope_orientation
 from .acquisition.positions import find_exterior_fovs, median_nn_distance
 from .analysis.ffc import apply_ffc, compute_ffc_field_for_color, load_ffc_field, save_ffc_field
 from .analysis.fov import create_thumbnail

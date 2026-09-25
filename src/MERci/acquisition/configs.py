@@ -7,6 +7,10 @@ frame, with columns ``color`` (laser wavelength in nm, or NaN for a blank
 frame), ``channel`` (hardware channel index, 0–4), and ``z`` (distance from
 the locked focus in µm).
 
+Also holds the per-microscope camera helpers (frame size, pixel size, and
+``load/apply_microscope_orientation``), all read from the scope's MERlin
+microscope JSON.
+
 Typical round structure
 -----------------------
   [bead_seq]   at z=bead_z           ← fiducial images (e.g. 488)
@@ -43,7 +47,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 
-from .merlin_config import load_microscope_parameters
+from .merlin_config import MICROSCOPE_PARAMETERS_DIR, load_microscope_parameters
 
 
 # ── Channel / colour mapping ─────────────────────────────────────────────────
@@ -144,6 +148,59 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
     width, _ = get_camera_frame_size(microscope, objective)   # square sensor → width == height
     return FOVGeometry(pixel_size_um=get_camera_pixel_size_um(microscope, objective),
                        image_size_px=width)
+
+
+def load_microscope_orientation(microscope: str, microscope_dir: Path = MICROSCOPE_PARAMETERS_DIR) -> Dict[str, bool]:
+    """
+    A microscope's ``flip_horizontal``/``flip_vertical``/``transpose`` flags
+    from its MERlin microscope-parameters JSON
+    (:func:`load_microscope_parameters`), ready to pass as ``**kwargs`` to
+    :func:`apply_microscope_orientation`.
+    """
+    params = load_microscope_parameters(microscope, microscope_dir=microscope_dir)
+    return {k: bool(params[k]) for k in ("flip_horizontal", "flip_vertical", "transpose")}
+
+
+def apply_microscope_orientation(
+    image:           np.ndarray,
+    *,
+    flip_horizontal: bool = True,
+    flip_vertical:   bool = False,
+    transpose:       bool = True,
+) -> np.ndarray:
+    """
+    Re-orient a raw camera frame to match MERlin's own camera->stage
+    convention, in MERlin's own order (confirmed directly against
+    ``merlin.core.dataset.Dataset.load_image``, not assumed):
+    **transpose, then flip_horizontal (axis=1), then flip_vertical (axis=0)**
+    -- each step applied only if its flag is ``True``.
+
+    Use this (with :func:`load_microscope_orientation`'s output) anywhere a
+    raw frame needs to be displayed/assembled in the same orientation MERlin
+    itself decodes it in -- e.g. a diagnostic mosaic laid out by stage
+    position, which otherwise appears rotated/transposed relative to the
+    real tissue layout.
+
+    Parameters
+    ----------
+    image           : 2-D array, any dtype
+    flip_horizontal : mirror along axis 1 (columns)
+    flip_vertical   : mirror along axis 0 (rows)
+    transpose       : swap axes 0 and 1
+
+    Returns
+    -------
+    Re-oriented array (a view where possible; do not rely on it sharing
+    memory with *image*).
+    """
+    out = np.asarray(image)
+    if transpose:
+        out = np.transpose(out)
+    if flip_horizontal:
+        out = np.flip(out, axis=1)
+    if flip_vertical:
+        out = np.flip(out, axis=0)
+    return out
 
 
 # Acquisition type (imaging modality) per microscope. This is independent of the
