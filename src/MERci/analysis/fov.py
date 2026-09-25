@@ -52,13 +52,24 @@ def _atomic_save(path: Path, save_fn) -> None:
     """
     Call ``save_fn(tmp_path)`` then rename ``tmp_path`` → ``path`` atomically.
     Prevents other processes from reading a partially-written output file.
+    On Windows the rename fails while another process has *path* open (e.g.
+    a viewer notebook reading it), so it is retried a few times.
     """
+    import time
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".tmp_{os.getpid()}_{path.name}")
     try:
         save_fn(tmp)
-        tmp.replace(path)   # atomic on POSIX; overwrites destination
+        for attempt in range(5):
+            try:
+                tmp.replace(path)   # atomic; overwrites destination
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
     except Exception:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
