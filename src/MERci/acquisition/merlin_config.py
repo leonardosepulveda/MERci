@@ -79,12 +79,13 @@ _MICROSCOPE_PARAMETERS_BY_SCOPE = {
     ("MF3", "60X"): "MERFISH3.json",
     ("MF4", "60X"): "MERFISH4.json",
     ("MF5", "60X"): "MERFISH5.json",
+    ("MFX", "60X"): "MFX_60X.json",
 }
 # Which objective each microscope uses when the caller doesn't name one --
-# mirrors acquisition.configs._DEFAULT_OBJECTIVE, keeping every existing
-# call site (single objective per scope, historically) working unchanged.
+# keeps every existing call site (single objective per scope, historically)
+# working unchanged.
 _DEFAULT_MICROSCOPE_PARAMETERS_OBJECTIVE = {
-    "ST2": "60X", "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X",
+    "ST2": "60X", "MF2": "60X", "MF3": "60X", "MF4": "60X", "MF5": "60X", "MFX": "60X",
 }
 
 
