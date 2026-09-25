@@ -156,7 +156,7 @@ def _load_power(data_dir: Path, microscope: str) -> tuple[Dict[int, float], floa
     power_path = data_dir / "configs" / "power" / "power_by_microscope.yaml"
     if not power_path.exists():
         raise FileNotFoundError(f"{power_path} not found.")
-    table = yaml.safe_load(power_path.read_text())
+    table = yaml.safe_load(power_path.read_text(encoding="utf-8"))
     if microscope not in table:
         raise KeyError(f"No power defaults for microscope {microscope!r} in {power_path}.")
     entry = table[microscope]
@@ -186,7 +186,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
     yaml_path = Path(yaml_path)
     if data_dir is None:
         data_dir = yaml_path.parents[1]   # .../data/pipelines/<id>_pipeline.yaml -> .../data
-    raw = yaml.safe_load(yaml_path.read_text())
+    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
     imaging          = raw["imaging"]
     fluidics         = raw["fluidics"]
