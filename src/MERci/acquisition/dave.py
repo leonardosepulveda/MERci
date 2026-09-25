@@ -48,7 +48,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 from xml.dom import minidom
 
@@ -202,7 +202,7 @@ def fov_pad_width(total_fovs: int) -> int:
 
 # ── Multi-drive group assignment ────────────────────────────────────────────────
 
-def normalize_drive_root(drive: Union[str, Path]) -> Path:
+def normalize_drive_root(drive: Union[str, Path]) -> PurePath:
     """
     Normalize a drive-letter/root string into an absolute path anchor.
 
@@ -216,7 +216,9 @@ def normalize_drive_root(drive: Union[str, Path]) -> Path:
     s = str(drive)
     if not s.endswith(("\\", "/")):
         s += "\\"
-    root = Path(s)
+    # A drive letter is a Windows path on any OS (round_info.csv is read by
+    # the Windows acquisition PC, even when generated on Linux).
+    root = PureWindowsPath(s) if PureWindowsPath(s).drive else Path(s)
     if not root.is_absolute():
         raise ValueError(
             f"drive {drive!r} does not resolve to an absolute path "
@@ -225,7 +227,7 @@ def normalize_drive_root(drive: Union[str, Path]) -> Path:
     return root
 
 
-def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
+def rebase_on_drive(sample_dir: Union[str, Path], drive_root: PurePath) -> PurePath:
     """
     Re-root ``sample_dir`` onto a different drive, preserving its subpath.
 
@@ -237,7 +239,8 @@ def rebase_on_drive(sample_dir: Union[str, Path], drive_root: Path) -> Path:
     just ``Y:\\``. ``drive_root`` is expected already normalized (see
     :func:`normalize_drive_root`).
     """
-    sample_dir = Path(sample_dir)
+    sample_dir = (PureWindowsPath(sample_dir) if PureWindowsPath(str(sample_dir)).drive
+                  else Path(sample_dir))
     return drive_root / sample_dir.relative_to(sample_dir.anchor)
 
 
@@ -355,14 +358,14 @@ def create_round_info(
     # Imaging Round 1: CELLS ONLY (no fluidics precedes it).
     cells_root = (
         rebase_on_drive(sample_dir, normalize_drive_root(cells_drive))
-        if cells_drive else sample_dir
+        if cells_drive else Path(sample_dir)
     )
     rows.append({
         "imaging_round": 1,
         "imaging_type":  "cells",
         "series":        f"hal-{mic}-cells_{{fov:0{pad}d}}",
         "hal_config":    cells_hal_config,
-        "data_dir":      str(Path(cells_root) / "data" / "cells"),
+        "data_dir":      str(cells_root / "data" / "cells"),
     })
 
     # Imaging Rounds 2 … N+1: bits #1 … #N.  The series number tracks the
@@ -376,14 +379,14 @@ def create_round_info(
         drive     = drive_for_bit.get(bit_idx)
         bits_root = (
             rebase_on_drive(sample_dir, normalize_drive_root(drive))
-            if drive else sample_dir
+            if drive else Path(sample_dir)
         )
         rows.append({
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:0{pad}d}}",
             "hal_config":    bits_hal_config,
-            "data_dir":      str(Path(bits_root) / "data" / "hybs" / f"H{bit_idx:02d}"),
+            "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
 
     return pd.DataFrame(
