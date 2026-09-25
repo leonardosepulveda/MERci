@@ -64,6 +64,7 @@ def _copy_robocopy(src: Path, dst: Path) -> bool:
         ],
         capture_output=True,
         text=True,
+        errors="replace",   # robocopy prints in the OEM code page; never fail on decoding
     )
     if result.returncode >= 8:
         log.error(
