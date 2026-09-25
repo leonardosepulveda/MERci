@@ -1,58 +1,39 @@
 # MERci/live_round_mosaic.py
 """
-Logic behind ``notebooks/during_imaging/round_mosaics.ipynb`` -- a live
-quick-look mosaic (one per real imaging color) built from a single frame per
-FOV near a target stage z, for whichever rounds are selected. Distinct from
-:func:`MERci.scheduler.build_round_mosaics`'s production mosaics (mid-z,
-optional FFC, built only once a round is 100% done): this one is meant to
-run continuously alongside an active acquisition and show partial progress.
+Logic behind ``notebooks/during_imaging/round_mosaics.ipynb``: a live
+quick-look mosaic (one per imaging color) from one frame per FOV near a
+target stage z, for the selected rounds. Unlike
+:func:`MERci.scheduler.build_round_mosaics` (mid-z, optional FFC, built once
+a round is complete), it runs during acquisition and shows partial progress.
 
-``LiveRoundMosaicBuilder`` holds the per-session state a live run needs
-(FFC fields, contrast ranges, tile-placement geometry, in-progress canvases)
-across repeated polls, so nothing gets recomputed or re-read once cached.
+``LiveRoundMosaicBuilder`` keeps per-session state (FFC fields, contrast
+ranges, tile layout, canvases) across polls so nothing is recomputed.
 
-**Tile-by-tile, not batch-then-display.** Each round/color gets a
-persistent canvas (:meth:`get_canvas`), placed once via
-:meth:`get_round_layout` at the exact pixel positions
-``analysis.round.create_mosaic``/``create_mosaic_ffc`` would use for EVERY
-FOV *planned* for that round (not just the ones imaged so far, so a tile's
-position never shifts as more FOVs arrive). :meth:`build_round_mosaic` first
-bulk-loads every FOV whose tile is already cached on disk (no per-tile
-redraw), shows that accumulated state once, then reads/corrects/places any
-remaining FOV one at a time with a throttled redraw after each -- so a round
-already mostly processed from a prior kernel session shows that state
-immediately instead of re-crawling through FOVs that were already done.
+**Tile by tile.** Each round/color has a persistent canvas
+(:meth:`get_canvas`) laid out by :meth:`get_round_layout` for every FOV
+*planned* for the round, at the positions ``analysis.round`` would use, so
+tiles never move as FOVs arrive. :meth:`build_round_mosaic` first loads all
+tiles already cached on disk and shows them once, then reads/corrects/places
+the rest one by one with a throttled redraw.
 
-**The redraw itself must stay cheap regardless of real mosaic size.** On a
-real ~1166-FOV, ~10600x6700 px canvas, matplotlib's own ``imshow``+draw of
-the full-resolution array measured at ~6s, and a full-resolution PNG disk
-write at ~3s -- confirmed directly, and enough to dominate wall-clock time
-if paid on every redraw. Fixed by decoupling the two costs: the on-screen
-preview is downsampled first (:func:`MERci.plots.round_mosaic_plots.show_round_mosaic`,
-under 0.1s regardless of canvas size) so it can redraw every
-``live_redraw_min_interval_sec``; the full-resolution PNG on disk is only
-rewritten at the coarser ``disk_save_min_interval_sec``.
+**Cheap redraws.** On a ~10600x6700 px canvas a full ``imshow`` takes ~6 s
+and a full PNG write ~3 s. The on-screen preview is downsampled first
+(:func:`MERci.plots.round_mosaic_plots.show_round_mosaic`, < 0.1 s) and
+redrawn every ``live_redraw_min_interval_sec``; the full PNG is rewritten
+only every ``disk_save_min_interval_sec``.
 
-**Camera orientation.** Every raw frame is re-oriented via
-``apply_microscope_orientation`` immediately after reading, before
-FFC/contrast-stretch/placement -- otherwise tile CONTENT can appear
-rotated/mirrored relative to its neighbours even though each tile lands at
-the geometrically correct stage position (see
-``notebooks/misc/correct_camera_rotation.ipynb``). A cached FFC field is
-itself estimated from un-oriented raw pixels (cheaper: orient the small
-resulting field once rather than every sample frame) -- mathematically
-equivalent either way, since averaging, isotropic Gaussian smoothing,
-percentile normalization, and clipping all commute exactly with a fixed
-transpose/flip.
+**Camera orientation.** Every raw frame is oriented with
+``apply_microscope_orientation`` right after reading, before
+FFC/stretch/placement; the thumbnails it writes are therefore oriented, like
+``fov.analyze_file``'s. A cached FFC field is estimated from raw pixels and
+oriented once (equivalent, since averaging, isotropic smoothing,
+percentiles and clipping commute with a transpose/flip).
 
-**A FOV's file existing is not the same as it being safe to read.** HAL
-creates a FOV's image store as soon as it starts writing that stack, well
-before every frame has actually landed on disk, so :meth:`round_imaged_fov_ids`'s
-``.exists()`` check (fast, no I/O, safe every poll) can legitimately call a
-FOV "imaged" while it's still being written. ``is_path_stable`` is checked
-right before the actual read (not for every already-imaged FOV up front,
-which would cost its own delay per FOV every poll) -- an unstable FOV is
-simply left pending and retried on the next poll.
+**Existing is not the same as readable.** HAL creates a FOV's image store
+when it starts writing, so :meth:`round_imaged_fov_ids`'s ``.exists()``
+check can call a FOV imaged while it is still being written.
+``is_path_stable`` is checked right before each read, and an unstable FOV
+is retried on the next poll.
 """
 from __future__ import annotations
 
@@ -548,19 +529,9 @@ class LiveRoundMosaicBuilder:
 
                 thumb_path = self.thumbnail_path_for(image_path, frame_idx)
 
-                # is_path_stable only confirms the store's on-disk size
-                # hasn't changed in the last stability_delay (default 0.1s)
-                # -- for a zarr store HAL grows one frame at a time, that's
-                # also true BETWEEN two frame writes whenever HAL's per-frame
-                # cadence is slower than stability_delay, so a genuinely
-                # still-growing store can read as "stable" mid-round and get
-                # read here before frame_idx actually exists yet (confirmed
-                # directly against a real experiment: an out-of-bounds error
-                # reading a not-yet-written frame; the analogous .dax failure
-                # is a truncated read). Same remedy as the is_path_stable
-                # check just above: leave this FOV pending and retry next
-                # poll, rather than letting one FOV's read crash the whole
-                # live loop.
+                # A store can look "stable" between two frame writes and still
+                # lack frame_idx (zarr: out-of-bounds; dax: truncated read).
+                # Leave the FOV pending and retry next poll instead of crashing.
                 try:
                     frame = read_image_frames(
                         image_path, [frame_idx],

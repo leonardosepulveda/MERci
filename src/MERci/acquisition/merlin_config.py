@@ -893,10 +893,9 @@ def build_merlin_analysis_parameters(
     skip_tasks:                Optional[Sequence[str]] = None,
 ) -> Path:
     """
-    Build MERlin's ``analysis_tasks`` recipe from a recipe (explicit ordered
-    list of atomic task-file names -- see the module comment above). Written as YAML or JSON depending on
-    *output_path*'s extension (``.yaml``/``.yml`` vs anything else),
-    matching MERlin's own ``merlin.py`` dispatch.
+    Build MERlin's ``analysis_tasks`` from a recipe (an ordered list of
+    atom names; see the section comment above). Written as YAML for a
+    ``.yaml``/``.yml`` *output_path*, else JSON, as ``merlin.py`` expects.
 
     Parameters
     ----------
@@ -919,24 +918,15 @@ def build_merlin_analysis_parameters(
         shared default recipe doesn't include.
     n_optimize_iterations : overrides the recipe file's own value if given
         (e.g. sourced from ``experiment_info.yaml``'s ``extra.n_opt``).
-    skip_tasks  : optional atom names to leave out of the written
-        ``analysis_tasks`` list while still using them for every structural
-        cross-reference above (``warp_task``/``segment_task``/etc. params,
-        and the ``smfish_signal``/``sum_signal`` "has a segment atom"
-        checks) -- e.g. the segmentation-chain atoms
-        (``cellpose_segment_sam``/``clean_cell_boundaries``/
-        ``combine_cleaned_boundaries``/``refine_cell_databases``/
-        ``export_cell_metadata``), already produced under the same
-        ``analysis_name``s by a prior segmentation-only run
-        (``build_segmentation_only_recipe_tasks``). MERlin resolves a
-        referenced task by looking up its already-saved parameters on disk
-        (``merlin.core.dataset.load_analysis_task``), not by requiring it
-        be declared in *this* run's own tasks list, so downstream tasks
-        (e.g. ``partition_barcodes``) still resolve them correctly; leaving
-        them out here only avoids re-declaring them with this recipe's own
-        (different) ``warp_task``, which would otherwise trip MERlin's
-        ``AnalysisAlreadyExistsException`` guard as soon as this run's
-        Snakefile is generated.
+    skip_tasks  : atom names left out of the written ``analysis_tasks`` but
+        still used for cross-references (``warp_task``/``segment_task``
+        params, the "has a segment atom" checks). E.g. the segmentation
+        chain already run by a segmentation-only recipe
+        (``build_segmentation_only_recipe_tasks``): MERlin loads referenced
+        tasks from their saved parameters on disk, so downstream tasks
+        still resolve them, and re-declaring them with this recipe's
+        different ``warp_task`` would raise
+        ``AnalysisAlreadyExistsException``.
 
     Returns
     -------
@@ -1088,29 +1078,19 @@ def derive_reference_first_channel_order(
     data_organization_path: Path, reference_channels: Sequence[str],
 ) -> List[str]:
     """
-    Read *data_organization_path*'s ``channelName`` column (one row per
-    data channel, in MERlin's data-channel-index order) and return every
-    channel name reordered so *reference_channels* come first (in the
-    order given), followed by every other channel in its original order.
+    All ``channelName`` values from *data_organization_path* (MERlin's
+    data-channel order), with *reference_channels* moved to the front (in the
+    given order) and the rest in their original order.
 
-    Feed the result to the full pipeline's ``fiducial_correlation_warp``
-    atom as an explicit ``channels_to_process`` override
-    (``overrides={"fiducial_correlation_warp": {"channels_to_process":
-    ...}}``), with *reference_channels* set to the segmentation-only
-    atom's own channel(s) (``derive_segmentation_channels``'s return
-    value). MERlin's ``FiducialCorrelationWarp`` always correlates
-    against ``channels_to_process[0]`` (``merlin/analysis/warp.py``'s
-    ``_run_analysis``), so lining up both atoms' first channel makes the
-    full pipeline's DAPI transform bit-for-bit identical to the
-    segmentation-only run's (both correlate DAPI against itself, always
-    the identity) instead of differing by DAPI's true registration drift
-    -- ``channels_to_process``, once set, must list every data channel
-    (requesting the transformation for a channel missing from it raises),
-    so the full ordered list has to come from somewhere; this reads it
-    from the data-organization CSV instead of requiring it hand-maintained
-    per experiment.
+    Pass it as the full pipeline's ``fiducial_correlation_warp``
+    ``channels_to_process`` override, with *reference_channels* = the
+    segmentation-only run's channel(s) (``derive_segmentation_channels``).
+    MERlin's ``FiducialCorrelationWarp`` correlates against
+    ``channels_to_process[0]``, so both runs then give DAPI the identity
+    transform instead of differing by DAPI's drift. The list must name every
+    data channel, hence reading it from the CSV.
 
-    Raises if any *reference_channels* name is missing from the CSV.
+    Raises if a *reference_channels* name is not in the CSV.
     """
     with open(data_organization_path, newline="") as fh:
         channel_names = [row["channelName"] for row in csv.DictReader(fh)]
