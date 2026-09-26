@@ -6,12 +6,11 @@ projections (median/max/min/mean, via
 :func:`MERci.analysis.elevation.project_stack`) -- one real frame read per
 z-plane, one task per FOV, every requested statistic computed from the
 same in-memory stack (no re-reading raw data per statistic). Built for
-``notebooks/tests/calculate_ffc/``'s investigation into which per-FOV
+a local (unshipped) FFC-method test notebook's investigation into which per-FOV
 projection statistic (and whether to Gaussian-smooth the resulting FFC
 field at all) best characterizes real vignetting without also absorbing
 real tissue signal -- min projection won that comparison (see that
 notebook's own Discussion), and is now also what
-``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb`` and
 ``after_imaging/08_measure_tissue_thickness.ipynb``'s production pipeline
 (:func:`MERci.analysis.elevation.calculate_ffc`) use this script for (with
 ``--statistics min`` only). ``mean`` is also available for

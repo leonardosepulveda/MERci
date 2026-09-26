@@ -6,9 +6,9 @@ matrices + FFC-corrected, downsampled z-stacks
 (:func:`MERci.analysis.elevation.compute_fov_elevation`) -- one real full
 z-stack read per FOV, one task per FOV. Built for
 ``after_imaging/08_measure_tissue_thickness.ipynb``'s production tissue-
-elevation pipeline (promoted from
-``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb``'s own
-investigation), where reading every real FOV's full z-stack serially would
+elevation pipeline (promoted from a local, unshipped elevation-heatmap
+test notebook's investigation), where reading every real FOV's full
+z-stack serially would
 take hours (see that notebook's own section 6 for the same concern on the
 FFC-field step).
 

@@ -32,7 +32,7 @@ mamba activate merci_env
 jupyter lab
 ```
 
-Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `before_imaging/` (pre-experiment setup, in `regular/` and `multi_z/` pipelines), `during_imaging/` (live QC), `after_imaging/` (online and post-acquisition analysis), `misc/` (ad-hoc utilities) and `tests/` (diagnostic and validation notebooks). Open notebooks from their own subfolder so that `SAMPLE_DIR` is auto-detected: each resolves `MERCI_DIR` by counting parent folders from its own location (2 levels for `after_imaging/`, `during_imaging/`, `misc/`, `tests/`; 3 for `before_imaging/<pipeline>/`) and `SAMPLE_DIR = MERCI_DIR.parent`.
+Then navigate to `MERci/notebooks/` in the JupyterLab file browser. The notebooks are grouped into `before_imaging/` (pre-experiment setup, in `regular/` and `multi_z/` pipelines), `during_imaging/` (live QC), `after_imaging/` (online and post-acquisition analysis), and `misc/` (ad-hoc utilities). Diagnostic and validation notebooks live in a repo-root `tests/` folder that is gitignored (local only, not shipped). Open notebooks from their own subfolder so that `SAMPLE_DIR` is auto-detected: each resolves `MERCI_DIR` by counting parent folders from its own location (2 levels for `after_imaging/`, `during_imaging/`, `misc/`; 3 for `before_imaging/<pipeline>/`) and `SAMPLE_DIR = MERCI_DIR.parent`.
 
 ### Updating an existing clone without overwriting your notebooks
 

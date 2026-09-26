@@ -56,9 +56,10 @@ def get_merci_figures_dir(sample_dir, category: str, notebook_name: str,
 
     ``category`` is the notebook's top-level folder under ``notebooks/``
     (``"before_imaging"``, ``"after_imaging"``, ``"during_imaging"``,
-    ``"misc"``, or ``"tests"``). ``subfolder`` is an organizational
+    ``"misc"``), or ``"tests"`` for the local-only test notebooks.
+    ``subfolder`` is an organizational
     subfolder *within* that category that groups otherwise-unrelated
-    notebooks together (e.g. ``"fov_stitching"`` under ``tests/``) --
+    notebooks together (e.g. ``"irregular_grid"`` under ``"tests"``) --
     deliberately NOT used for before_imaging's own ``regular``/``multi_z``
     pipeline subfolders, since only one pipeline's notebooks ever exist in
     a given experiment folder at a time.
