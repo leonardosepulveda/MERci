@@ -640,7 +640,7 @@ def determine_return_side(
     shape that breaks the same-side guarantee), falls back to actually
     trying both sides and keeping whichever gives the smaller
     ``max_step_um`` -- an empirical tie-break, not a second guess. Verified
-    (``notebooks/tests/irregular_grid/test_irregular_grid_boustrophedon_return_path.ipynb``)
+    (in the local, unshipped irregular-grid return-path test notebook)
     to never pick the worse of the two natural sides, on a real benchmark.
 
     Parameters
@@ -1510,7 +1510,7 @@ def build_boundary_path_optimized(
 # (so adjacent rows/columns share a phase and overlap), and the cross axis is
 # rebuilt per fixed-axis position to fit that row/column's own tissue
 # extent. Fewer wasted FOVs on irregular tissue, weaker cross-axis overlap.
-# Validated against the regular grid in notebooks/tests/irregular_grid/.
+# Validated against the regular grid in local (unshipped) test notebooks.
 #
 # Workflow:
 #   1. build_irregular_bands            - cross-axis positions per band

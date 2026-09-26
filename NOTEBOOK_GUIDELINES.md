@@ -90,9 +90,10 @@ notebook's own filename stem (e.g. `stage_z_drift`, defined once in the
 Parameters/Setup section) and `figure_name` is a short, descriptive slug for
 that specific figure (e.g. `stage_z_drift`, `stage_z_heatmap`). `category`
 is the notebook's top-level folder under `notebooks/` (`before_imaging`,
-`after_imaging`, `during_imaging`, `misc`, `tests`); `subfolder` is an
+`after_imaging`, `during_imaging`, `misc`), or `tests` for the repo-root
+local-only test notebooks; `subfolder` is an
 organizational subfolder *within* that category that groups otherwise-
-unrelated notebooks (e.g. `fov_stitching` under `tests/`) -- omit it for
+unrelated notebooks (e.g. `irregular_grid` under `tests`) -- omit it for
 before_imaging's own `regular`/`multi_z` pipeline subfolders, since only one
 pipeline's notebooks exist in a given experiment folder at a time. Routing
 every notebook through this one function (rather than each notebook
@@ -105,8 +106,9 @@ knowing that notebook's own internal cell structure.
 
 ## 7. Test notebooks: stay portable
 
-`notebooks/tests/<subfolder>/` notebooks investigate one specific question
-against real data, and their findings sometimes need to move to a
+Test notebooks (repo-root `tests/<subfolder>/`, gitignored -- not shipped)
+investigate one specific question against real data, and their findings
+sometimes need to move to a
 standalone location later (a different machine, a paper's supplementary
 material, a collaborator without access to the source experiment tree).
 Write them so that move is a copy, not a rewrite.
@@ -173,8 +175,8 @@ actually needs it:
 
 ## 9. Clear heavy outputs before committing
 
-Before committing a notebook whose outputs are large/plot-heavy (the usual
-case for `notebooks/tests/` exploration notebooks with embedded PNGs),
+Before committing a notebook whose outputs are large/plot-heavy (e.g.
+exploration notebooks with embedded PNGs),
 strip them rather than letting every re-save commit a full new multi-MB
 blob to git history:
 

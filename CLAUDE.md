@@ -33,10 +33,10 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 `pip install` needed — deps come from `merci_env`. Notebooks resolve
 `MERCI_DIR`/`SAMPLE_DIR` by counting parent dirs from their own location:
 
-- `after_imaging/`, `during_imaging/`, `misc/`, `tests/`: 2 levels
+- `after_imaging/`, `during_imaging/`, `misc/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
-- `before_imaging/{regular,multi_z}/`, `tests/<subfolder>/` (3 levels):
-  `.parent.parent.parent`
+- `before_imaging/{regular,multi_z}/` (3 levels): `.parent.parent.parent`
+- repo-root `tests/` (1 level, `.parent`) and `tests/<subfolder>/` (2 levels)
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
 
@@ -194,10 +194,16 @@ notebooks/
     z_profile_spot_intensity per-z (no projection) foci detection for one hyb round + FOV, incl. custom image paths
     dave_timing_accuracy     actual vs. Dave-estimated block timing, real-data ETA for remaining blocks
   misc/              Ad-hoc utilities — see each notebook's own markdown cells for what it does
-  tests/             Diagnostic/recovery notebooks for one specific real incident, kept as
-                     templates, and validation notebooks for a new feature (synthetic and/or
-                     real-data checks) written before it's wired into a production notebook
 ```
+
+**Test notebooks** live in a repo-root `tests/` folder (not under `notebooks/`),
+which is gitignored: local only, not shipped with the clone deployed into each
+experiment. It holds diagnostic/recovery notebooks for one specific real
+incident, kept as templates, and validation notebooks for a new feature
+(synthetic and/or real-data checks) written before it's wired into a production
+notebook. Tracked files must not point into it by path (describe the notebook
+instead). Investigations that outgrow a test notebook move to a standalone
+analysis folder outside this repo and come back as `prompt_history/` handoffs.
 
 ## Architecture
 
@@ -262,7 +268,7 @@ absolute paths.
 
 ## Test notebooks: stay portable
 
-`notebooks/tests/<subfolder>/` notebooks should read real data through a
+`tests/<subfolder>/` notebooks should read real data through a
 local copy in a `data/` subfolder of that notebook's own cache folder (see
 "Working / cache files" below), not directly from the live
 experiment tree in every cell -- see
@@ -287,12 +293,10 @@ Commit and push as you go — do not leave finished work uncommitted.
 - Don't batch unrelated changes into one commit; don't let edits pile up locally.
 - Standing authorization to commit and push without asking each time.
 - Never commit transient files (`*.tmp.*`, `__pycache__/`, `*.egg-info/` — gitignored).
-- A branch whose work is confined to `notebooks/tests/` is local-only: don't
-  push it, and don't merge it to master, unless the user explicitly asks
-  (a global git-workflow rule applying across this user's projects). A
-  change this same branch makes outside `notebooks/tests/` (e.g. a function
-  pulled out into `src/MERci/`) still follows the normal push/merge rules
-  above, on its own branch.
+- `tests/` is gitignored, so test-notebook work is never committed. A
+  change a test investigation makes outside `tests/` (e.g. a function
+  pulled out into `src/MERci/`) follows the normal push/merge rules above,
+  on its own branch.
 
 ## Working / cache files
 
@@ -307,7 +311,7 @@ free-form -- name them after the notebook or task. Distinct from
 `analysis/cache/<notebook_name>/` (a per-*experiment* cache under
 `SAMPLE_DIR/`, not this repo).
 
-A `notebooks/tests/` notebook's local data copy lives in the folder of the
+A `tests/` notebook's local data copy lives in the folder of the
 request that created that notebook, at
 `cache/{prompt_date}/<...>/<notebook_name>/data/`, and the notebook
 hardcodes that path -- later requests reuse it instead of copying the data

@@ -33,3 +33,6 @@ cache/
 
 # Scratch / throwaway test artifacts
 _scratch_*
+
+# Diagnostic / validation notebooks (local only, not shipped with MERci)
+/tests/

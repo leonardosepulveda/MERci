@@ -8,9 +8,9 @@ Production tissue-thickness measurement for
 ``after_imaging/08_measure_tissue_thickness.ipynb`` (replacing the per-FOV
 Counter/true-pixel-count approach in :mod:`MERci.analysis.fov`, which other
 notebooks still use). Algorithm rationale, including why the FFC field
-comes from INTERIOR FOVs and why "min" is the default z-projection, is in
-``notebooks/tests/tissue_thickness/01_elevation_heatmap.ipynb`` and
-``notebooks/tests/calculate_ffc/01_compare_ffc_methods.ipynb``.
+comes from INTERIOR FOVs and why "min" is the default z-projection, came
+from two local (unshipped) test notebooks: an elevation-heatmap one and an
+FFC-method comparison.
 
 Pipeline (notebook 08 shows the wiring and SLURM options):
 
@@ -156,8 +156,8 @@ def build_ffc_field_from_projections(
     into memory at once -- a real interior-FOV population can number in the
     hundreds).
 
-    Per ``notebooks/tests/calculate_ffc/01_compare_ffc_methods.ipynb``'s own
-    real comparison: smoothing (at that sample size) barely changes an
+    Per a real FFC-method comparison (local, unshipped test notebook):
+    smoothing (at that sample size) barely changes an
     already-clean min-projection field, and can mask a genuinely
     contaminated one -- it does not automatically make the field "more
     correct". ``smooth_sigma_px=0`` skips smoothing entirely.
@@ -196,9 +196,8 @@ def calculate_ffc(
                             field this call (see Returns for the pending case)
     projections_dir       : directory holding ``fov<id>_<method>.npy`` files
     method                 : which per-pixel z-projection statistic --
-                            ``"min"`` (default, recommended -- see
-                            ``notebooks/tests/calculate_ffc/01_compare_ffc_
-                            methods.ipynb``'s own real comparison), ``"max"``,
+                            ``"min"`` (default, recommended by a real
+                            FFC-method comparison), ``"max"``,
                             ``"median"``, or ``"mean"``
     smooth_sigma_px, normalize_percentile, ffc_min_value : see
                             :func:`build_ffc_field_from_projections`
