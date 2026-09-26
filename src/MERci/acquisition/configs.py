@@ -130,7 +130,8 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
 
     * MFX, ST2 (60X) → ``(0.0878 µm/px, 2304 px)``
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
-    * MF2–MF5 (60X)   → ``(0.109 µm/px, 2048 px)``
+    * MF3 (60X)       → ``(0.1074 µm/px, 2048 px)``
+    * MF2, MF4, MF5 (60X) → ``(0.109 µm/px, 2048 px)``
 
     *objective* defaults to *microscope*'s own default objective — omit it
     to keep prior behaviour unchanged. Raises ``ValueError`` for an unknown
