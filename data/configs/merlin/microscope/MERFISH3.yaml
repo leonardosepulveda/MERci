@@ -1,0 +1,15 @@
+# MERlin microscope parameters for MERFISH3.
+flip_horizontal: false
+flip_vertical: true
+transpose: true
+# Ruler-slide calibration, set 2026-09-25.
+microns_per_pixel: 0.1074
+image_dimensions: [2048, 2048]
+# Camera rotation vs the stage (deg): the rotation of the displacement
+# affine m_ij = A d_ij, fitted on neighbouring-FOV bead registrations
+# (d_ij: nominal stage displacement; m_ij: displacement measured from the
+# oriented images). Same as MERlin LeastSquaresGlobalAlignment's
+# affine_rotation_deg. Valid only with this file's orientation flags.
+# Measured 2026-09-26 (LT074 stitching redesign): BC555_sample_05/epi
+# -0.944, BC553_sample_02/epi -0.954. Re-measure after a camera remount.
+camera_rotation_deg: -0.95

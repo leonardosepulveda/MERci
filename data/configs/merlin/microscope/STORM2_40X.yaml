@@ -1,0 +1,6 @@
+# MERlin microscope parameters for STORM2_40X.
+flip_horizontal: true
+flip_vertical: false
+transpose: true
+microns_per_pixel: 0.1317
+image_dimensions: [2304, 2304]

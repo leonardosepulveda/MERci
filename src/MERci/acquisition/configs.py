@@ -9,7 +9,7 @@ the locked focus in µm).
 
 Also holds the per-microscope camera helpers (frame size, pixel size, and
 ``load/apply_microscope_orientation``), all read from the scope's MERlin
-microscope JSON.
+microscope YAML.
 
 Typical round structure
 -----------------------
@@ -85,7 +85,7 @@ def get_color_to_channel_dict(microscope: str = "MF3") -> Dict:
 
 # ── Camera geometry ──────────────────────────────────────────────────────────
 # Frame size and sample-plane pixel size both come from the scope's MERlin
-# microscope-parameters JSON (``image_dimensions``, ``microns_per_pixel``; see
+# microscope-parameters YAML (``image_dimensions``, ``microns_per_pixel``; see
 # merlin_config.load_microscope_parameters), so MERci and MERlin always agree.
 # Pixel size depends on the objective as well as the camera, hence the
 # optional *objective*. Together they fix the FOV footprint
@@ -101,7 +101,7 @@ class FOVGeometry(NamedTuple):
 def get_camera_frame_size(microscope: str, objective: Optional[str] = None) -> Tuple[int, int]:
     """
     ``(width, height)`` camera frame size in pixels for *microscope*, from
-    its microscope-parameters JSON (``image_dimensions``). Raises
+    its microscope-parameters YAML (``image_dimensions``). Raises
     ``ValueError`` for an unknown microscope/objective.
     """
     width, height = load_microscope_parameters(microscope, objective)["image_dimensions"]
@@ -111,7 +111,7 @@ def get_camera_frame_size(microscope: str, objective: Optional[str] = None) -> T
 def get_camera_pixel_size_um(microscope: str, objective: Optional[str] = None) -> float:
     """
     Sample-plane pixel size (µm/pixel) for *microscope* + *objective*, from
-    its microscope-parameters JSON (``microns_per_pixel``). *objective*
+    its microscope-parameters YAML (``microns_per_pixel``). *objective*
     (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's default
     objective. Raises ``ValueError`` for an unknown microscope/objective.
     """
@@ -156,7 +156,7 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
 def load_microscope_orientation(microscope: str, microscope_dir: Path = MICROSCOPE_PARAMETERS_DIR) -> Dict[str, bool]:
     """
     A microscope's ``flip_horizontal``/``flip_vertical``/``transpose`` flags
-    from its MERlin microscope-parameters JSON
+    from its MERlin microscope-parameters YAML
     (:func:`load_microscope_parameters`), ready to pass as ``**kwargs`` to
     :func:`apply_microscope_orientation`.
     """

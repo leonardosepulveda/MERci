@@ -39,9 +39,9 @@ class ExperimentConfig:
     Acquisition parameters
     ----------------------
     microscope            : microscope identifier, e.g. ``"MF3"``, ``"MF5"``
-    pixel_size_um         : camera pixel size in µm; None → the microscope's MERlin JSON
+    pixel_size_um         : camera pixel size in µm; None → the microscope's MERlin YAML
     image_size_px         : number of pixels along one side of a raw frame; None → the
-                            microscope's MERlin JSON
+                            microscope's MERlin YAML
     non_overlap_fraction  : fraction of the FOV covered per stage step
                             (step_size_um = pixel_size_um × image_size_px
                                            × non_overlap_fraction)
@@ -81,8 +81,8 @@ class ExperimentConfig:
     image_dtype:            str            = "uint16"
     frame_width:            Optional[int]  = None
     frame_height:           Optional[int]  = None
-    pixel_size_um:          Optional[float] = None   # None → the microscope's MERlin JSON value
-    image_size_px:          Optional[int]  = None   # None → the microscope's MERlin JSON value
+    pixel_size_um:          Optional[float] = None   # None → the microscope's MERlin YAML value
+    image_size_px:          Optional[int]  = None   # None → the microscope's MERlin YAML value
     non_overlap_fraction:   float          = 0.9
 
     # ── Timing (seconds) ──────────────────────────────────────────────────────
