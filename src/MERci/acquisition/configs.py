@@ -128,7 +128,8 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
     scanning grid from the microscope (+ optional objective) alone instead
     of hard-coding both numbers:
 
-    * MFX, ST2 (60X) → ``(0.0878 µm/px, 2304 px)``
+    * ST2 (60X)       → ``(0.0878 µm/px, 2304 px)``
+    * MFX (60X)       → ``(0.0878 µm/px, 2048 px)``
     * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
     * MF3 (60X)       → ``(0.1074 µm/px, 2048 px)``
     * MF2, MF4, MF5 (60X) → ``(0.109 µm/px, 2048 px)``

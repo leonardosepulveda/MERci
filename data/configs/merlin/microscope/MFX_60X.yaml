@@ -5,4 +5,5 @@ transpose: true
 # Provisional. The stage-consistent value is 0.0893; a ruler-slide
 # calibration is pending (~2026-10-10).
 microns_per_pixel: 0.0878
-image_dimensions: [2304, 2304]
+# Raw MFX frames are 2048 x 2048 (HAL .xml x_pixels/y_pixels; LT056_sample_04).
+image_dimensions: [2048, 2048]
