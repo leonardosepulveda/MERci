@@ -1,0 +1,8 @@
+# MERlin microscope parameters for STORM2_60X.
+flip_horizontal: true
+flip_vertical: false
+transpose: true
+# Provisional. The stage-consistent value is 0.0893; a ruler-slide
+# calibration is pending (~2026-10-10).
+microns_per_pixel: 0.0878
+image_dimensions: [2304, 2304]

@@ -41,9 +41,9 @@ _DIRECTIONS = ("right", "left", "up", "down")
 
 # Every (transpose, flip_horizontal, flip_vertical) combination, the search
 # space of detect_image_orientation (an audit/fallback only: each scope's
-# MERlin microscope JSON holds its verified orientation). If the audit ever
-# disagrees with the JSON, suspect a bug (e.g. in crop_overlap) and inspect
-# the raw overlap crops before doubting the JSON.
+# MERlin microscope YAML holds its verified orientation). If the audit ever
+# disagrees with the YAML, suspect a bug (e.g. in crop_overlap) and inspect
+# the raw overlap crops before doubting the YAML.
 _ORIENTATION_COMBINATIONS = [
     (transpose, flip_horizontal, flip_vertical)
     for transpose in (False, True)
@@ -93,7 +93,7 @@ def crop_overlap(
     ``1 - ExperimentConfig.non_overlap_fraction``).
 
     Row convention for "up"/"down": for a correctly-oriented frame (per its
-    MERlin microscope-parameters JSON), row index 0 is the physical -y
+    MERlin microscope-parameters YAML), row index 0 is the physical -y
     (down) edge, not +y (up) -- so "up" crops the anchor's LAST n rows
     against the neighbour's FIRST n rows. Getting this backwards can cancel
     out with a missing ``flip_vertical`` and look correct by coincidence, so
@@ -147,7 +147,7 @@ def register_neighbor_pair(
                   stage x/y the way ``crop_overlap`` assumes (row=y, col=x,
                   no flip). Camera/mounting-specific -- read the correct
                   values from this microscope's own MERlin microscope-
-                  parameters JSON rather than assuming all-``False``; see
+                  parameters YAML rather than assuming all-``False``; see
                   :func:`detect_image_orientation` for a fallback/audit
                   search when that file is unavailable or suspect.
 
@@ -215,7 +215,7 @@ def sample_neighbor_correspondences(
     orient_transpose, orient_flip_horizontal, orient_flip_vertical : passed
                   through to :func:`register_neighbor_pair` -- read these
                   from this microscope's own MERlin microscope-parameters
-                  JSON (``data/configs/merlin/microscope/*.json``) before
+                  YAML (``data/configs/merlin/microscope/*.yaml``) before
                   trusting any correspondence this function returns; see
                   :func:`detect_image_orientation` for a fallback/audit.
     seed        : RNG seed for anchor sampling (deterministic by default;
@@ -286,7 +286,7 @@ def detect_image_orientation(
     combinations on a few trial anchors and return the one with the SMALLEST
     median registered-shift magnitude.
 
-    The microscope's MERlin JSON (``data/configs/merlin/microscope/*.json``) is
+    The microscope's MERlin YAML (``data/configs/merlin/microscope/*.yaml``) is
     the primary source; use this to cross-check it or when it is missing. It
     searches all 8 combinations because a best-of-a-subset can still leave a
     visible mis-stitch. The criterion works because real camera rotation is

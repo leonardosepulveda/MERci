@@ -235,7 +235,7 @@ x,y, `#`-comments). Images: `.zarr`/`.dax`/`.tiff`, read via `read_image`.
 `{650→0, 560→1, 488→2, 405→3}` (4 channels, no 750). Extend
 `_COLOUR_TO_CHANNEL` in `acquisition/configs.py` for other scopes. Camera
 properties (frame size, pixel size, orientation) come only from each scope's
-MERlin microscope JSON (`data/configs/merlin/microscope/`, via
+MERlin microscope YAML (`data/configs/merlin/microscope/`, via
 `merlin_config.load_microscope_parameters`). There are no in-code defaults,
 and an unknown scope raises. Never hard-code them in a notebook. Acquisition
 type (orthogonal to the above):

@@ -33,7 +33,7 @@ load_sequential_gene_names       — {bit: gene_name} for lib_name's non-barcode
 load_readout_name_overrides      — {bit: probe_name} per-experiment override for
     readoutName (e.g. an NDB-series adaptor bit), no pipeline-level default
 resolve_microscope_parameters_filename — microscope id -> params filename (dispatch only)
-load_microscope_parameters       — a microscope's parameters JSON, the single source
+load_microscope_parameters       — a microscope's parameters YAML, the single source
     of every camera property (orientation, pixel size, frame size); no defaults
 build_merlin_analysis_parameters — assemble MERlin's task-parameters
     JSON/YAML from atomic per-task YAML files (data/configs/merlin/analysis/
@@ -68,13 +68,13 @@ _CODEBOOK_BY_LIB = {
 }
 
 _MICROSCOPE_PARAMETERS_BY_SCOPE = {
-    ("ST2", "60X"): "STORM2_60X.json",
-    ("ST2", "40X"): "STORM2_40X.json",
-    ("MF2", "60X"): "MERFISH2.json",
-    ("MF3", "60X"): "MERFISH3.json",
-    ("MF4", "60X"): "MERFISH4.json",
-    ("MF5", "60X"): "MERFISH5.json",
-    ("MFX", "60X"): "MFX_60X.json",
+    ("ST2", "60X"): "STORM2_60X.yaml",
+    ("ST2", "40X"): "STORM2_40X.yaml",
+    ("MF2", "60X"): "MERFISH2.yaml",
+    ("MF3", "60X"): "MERFISH3.yaml",
+    ("MF4", "60X"): "MERFISH4.yaml",
+    ("MF5", "60X"): "MERFISH5.yaml",
+    ("MFX", "60X"): "MFX_60X.yaml",
 }
 # Which objective each microscope uses when the caller doesn't name one --
 # keeps every existing call site (single objective per scope, historically)
@@ -182,7 +182,7 @@ def load_readout_name_overrides(experiment_override_path: Optional[Path] = None)
 
 def resolve_microscope_parameters_filename(microscope: str, objective: Optional[str] = None) -> str:
     """
-    Return the microscope-parameters JSON filename for *microscope* +
+    Return the microscope-parameters YAML filename for *microscope* +
     *objective*, raising if unknown.
 
     *objective* (e.g. ``"60X"``, ``"40X"``) defaults to that microscope's
@@ -205,7 +205,7 @@ def resolve_microscope_parameters_filename(microscope: str, objective: Optional[
 # ── Microscope parameters ───────────────────────────────────────────────────
 
 MICROSCOPE_PARAMETERS_DIR = Path(__file__).resolve().parents[3] / "data" / "configs" / "merlin" / "microscope"
-# Every camera property MERci takes from a microscope-parameters JSON. Each
+# Every camera property MERci takes from a microscope-parameters YAML. Each
 # file must state all of them: MERci has no defaults of its own.
 _CAMERA_FIELDS = ("flip_horizontal", "flip_vertical", "transpose", "microns_per_pixel", "image_dimensions")
 
@@ -216,7 +216,7 @@ def load_microscope_parameters(
     microscope_dir:  Path          = MICROSCOPE_PARAMETERS_DIR,
 ) -> Dict[str, Any]:
     """
-    The MERlin microscope-parameters JSON for *microscope* + *objective*
+    The MERlin microscope-parameters YAML for *microscope* + *objective*
     (resolved via :func:`resolve_microscope_parameters_filename`), the single
     source of every camera property: orientation, pixel size, frame size.
 
@@ -224,7 +224,7 @@ def load_microscope_parameters(
     missing any of ``_CAMERA_FIELDS``.
     """
     path = Path(microscope_dir) / resolve_microscope_parameters_filename(microscope, objective)
-    params = json.loads(path.read_text(encoding="utf-8"))
+    params = yaml.safe_load(path.read_text(encoding="utf-8"))
     missing = [k for k in _CAMERA_FIELDS if k not in params]
     if missing:
         raise ValueError(f"{path.name} is missing {missing}")
