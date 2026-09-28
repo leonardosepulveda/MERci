@@ -7,9 +7,11 @@
 flip_horizontal: false
 flip_vertical: true
 transpose: true
-# Provisional. The stage-consistent value is 0.0893; a ruler-slide
-# calibration is pending (~2026-10-10).
-microns_per_pixel: 0.0878
+# Provisional (set 2026-09-28, was 0.0878): stage-consistent value from
+# neighbouring-FOV displacement, 2015.9 px per 180 um step (LT074 stitching
+# redesign, LT056_sample_04 MFX and LT066_sample_01 ST2 agree). A
+# ruler-slide calibration is pending (~2026-10-10).
+microns_per_pixel: 0.0893
 # Raw MFX frames are 2048 x 2048 (HAL .xml x_pixels/y_pixels; LT056_sample_04).
 image_dimensions: [2048, 2048]
 # Camera rotation vs the stage (deg): the rotation of the displacement
