@@ -1,9 +1,22 @@
 # MERlin microscope parameters for MFX_60X.
-flip_horizontal: true
-flip_vertical: false
+# Orientation checked 2026-09-26 (LT074 stitching redesign) on
+# LT056_sample_04 slice4: only transpose + flip_vertical registers
+# neighbouring FOVs (band Pearson median 0.905; 300/303 edges > 0.5). The
+# old transpose + flip_horizontal (also in HAL's .xml) is 180 deg off
+# (0.036). MFX positions are never fed to MERlin negated.
+flip_horizontal: false
+flip_vertical: true
 transpose: true
 # Provisional. The stage-consistent value is 0.0893; a ruler-slide
 # calibration is pending (~2026-10-10).
 microns_per_pixel: 0.0878
 # Raw MFX frames are 2048 x 2048 (HAL .xml x_pixels/y_pixels; LT056_sample_04).
 image_dimensions: [2048, 2048]
+# Camera rotation vs the stage (deg): the rotation of the displacement
+# affine m_ij = A d_ij, fitted on neighbouring-FOV bead registrations
+# (d_ij: nominal stage displacement; m_ij: displacement measured from the
+# oriented images). Same as MERlin LeastSquaresGlobalAlignment's
+# affine_rotation_deg. Valid only with this file's orientation flags.
+# Measured 2026-09-26 (LT074 stitching redesign): LT056_sample_04 beads
+# +0.011 (one dataset). Re-measure after a camera remount.
+camera_rotation_deg: 0.01
