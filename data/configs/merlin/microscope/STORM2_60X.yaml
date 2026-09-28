@@ -6,3 +6,12 @@ transpose: true
 # calibration is pending (~2026-10-10).
 microns_per_pixel: 0.0878
 image_dimensions: [2304, 2304]
+# Camera rotation vs the stage (deg): the rotation of the displacement
+# affine m_ij = A d_ij, fitted on neighbouring-FOV bead registrations
+# (d_ij: nominal stage displacement; m_ij: displacement measured from the
+# oriented images). Same as MERlin LeastSquaresGlobalAlignment's
+# affine_rotation_deg. Valid only with this file's orientation flags.
+# Measured 2026-09-26 (LT074 stitching redesign): LT066_sample_01 beads
+# -0.272, BC553_sample_02/disk beads -0.291; DAPI/antibody max projections
+# on 3 ST2 samples -0.29 to -0.30. Re-measure after a camera remount.
+camera_rotation_deg: -0.285
