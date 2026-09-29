@@ -300,8 +300,13 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "FiducialCorrelationWarp": ("mem", "time"),
     "DeconvolutionPreprocess": ("mem", "time"),
     "CellPoseSegmentSAM":      ("mem",),
-    # Estimate 1.5-1.8 GB vs. measured peak <= 0.4 GB (Sept 2026 runs).
-    "RegisterFovNeighbors":    ("mem",),
+    # mem: estimate 1.5-1.8 GB vs. measured peak <= 0.4 GB (Sept 2026 runs).
+    # time: 4-min floor, max projection measured (MERlin 9ad7a3e).
+    "RegisterFovNeighbors":    ("mem", "time"),
+    # Calibrated against the split, current-code runs (MERlin 9ad7a3e).
+    "LeastSquaresGlobalAlignment": ("mem", "time"),
+    # 500 MB + 12 bytes per mosaic pixel (MERlin 9ad7a3e).
+    "CombineMosaicTiles":      ("mem",),
 }
 
 # Tasks that also opt into estimation but whose formula is not yet
@@ -312,11 +317,6 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
 _UNVALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "Decode":         ("mem", "time"),
     "CAREPreprocess": ("mem", "time"),
-    # 1-min floor: 89/384 BC555 disk FOVs timed out. Max-projection
-    # scaling (27 min for BC553 disk) is unmeasured.
-    "RegisterFovNeighbors":        ("time",),
-    # Estimated ~0.8 GB; OOM at that limit, and peaks up to ~8 GB measured.
-    "LeastSquaresGlobalAlignment": ("mem",),
 }
 
 
