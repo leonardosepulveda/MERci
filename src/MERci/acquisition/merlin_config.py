@@ -312,7 +312,8 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
 _UNVALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "Decode":         ("mem", "time"),
     "CAREPreprocess": ("mem", "time"),
-    # Estimated 1-3 min; disk FOVs timed out at that limit.
+    # 1-min floor: 89/384 BC555 disk FOVs timed out. Max-projection
+    # scaling (27 min for BC553 disk) is unmeasured.
     "RegisterFovNeighbors":        ("time",),
     # Estimated ~0.8 GB; OOM at that limit, and peaks up to ~8 GB measured.
     "LeastSquaresGlobalAlignment": ("mem",),
