@@ -10,7 +10,7 @@ frame carries the fiducial (bead) reference.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -18,7 +18,7 @@ import pandas as pd
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def create_data_organization(
-    bits_frame_table:  pd.DataFrame,
+    bits_frame_table:  Union[pd.DataFrame, Dict[int, pd.DataFrame]],
     cells_frame_table: pd.DataFrame,
     round_bit_color:   List[Tuple[int, int, int]],
     readouts:          pd.DataFrame,
@@ -35,7 +35,13 @@ def create_data_organization(
 
     Parameters
     ----------
-    bits_frame_table  : frame table for bits rounds (from ``metadata/frame-table-*.csv``)
+    bits_frame_table  : frame table for bits rounds (from ``metadata/frame-table-*.csv``):
+                        one DataFrame shared by every round, or
+                        ``{round_1indexed: DataFrame}`` when rounds were imaged
+                        with different recipes (see
+                        ``dave.round_frame_tables``, which reads them from
+                        ``round_info.csv``). A round missing from the dict
+                        raises.
     cells_frame_table : frame table for the cells round
     round_bit_color   : list of ``(round_1indexed, bit_number, color_nm)`` tuples.
                         ``bit_number`` is only a row identifier here — MERlin's
@@ -94,7 +100,7 @@ def create_data_organization(
     bits_regexp      = _series_to_regexp(bits_series)
     cells_image_type = _series_to_image_type(cells_series)
     cells_regexp     = _series_to_regexp(cells_series)
-    fid_frame_bits   = _fiducial_frame(bits_frame_table)
+    per_round_tables = isinstance(bits_frame_table, dict)
     fid_frame_cells  = _fiducial_frame(cells_frame_table)
 
     readout_name_map = dict(
@@ -118,6 +124,13 @@ def create_data_organization(
     rows: list[dict] = []
 
     for round_1idx, bit, color_nm in round_bit_color:
+        if per_round_tables:
+            if round_1idx not in bits_frame_table:
+                raise KeyError(f"No frame table for round {round_1idx} "
+                               f"(rounds with one: {sorted(bits_frame_table)}).")
+            ft_bits = bits_frame_table[round_1idx]
+        else:
+            ft_bits = bits_frame_table
         readout_name = (readout_name_overrides or {}).get(bit, readout_name_map.get(bit))
         if readout_name is None:
             raise KeyError(
@@ -132,12 +145,12 @@ def create_data_organization(
             "bitNumber":           bit,
             "imagingRound":        round_1idx,
             "color":               color_nm,
-            "frame":               _frames_for_color(bits_frame_table, color_nm),
-            "zPos":                _zpos_for_color(bits_frame_table, color_nm),
+            "frame":               _frames_for_color(ft_bits, color_nm),
+            "zPos":                _zpos_for_color(ft_bits, color_nm),
             "fiducialImageType":   bits_image_type,
             "fiducialRegExp":      bits_regexp,
             "fiducialImagingRound": round_1idx,
-            "fiducialFrame":       fid_frame_bits,
+            "fiducialFrame":       _fiducial_frame(ft_bits),
             "fiducialColor":       488,
         })
 

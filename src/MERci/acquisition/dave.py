@@ -55,7 +55,9 @@ from xml.dom import minidom
 import pandas as pd
 
 from ..common.io import load_positions
-from .configs import get_camera_frame_size, read_hal_exposure_time, read_hal_frame_count
+from .configs import (
+    find_frame_table_for_hal_config, get_camera_frame_size, read_hal_exposure_time, read_hal_frame_count,
+)
 from .kilroy import (
     KilroyProtocolResolver,
     load_kilroy_protocols,
@@ -161,6 +163,79 @@ def resolve_hal_config_path(settings_dir: Path, hal_stem: str) -> Path:
     if multi_z.exists():
         return multi_z
     return direct
+
+
+def resolve_round_frame_table(row, settings_dir: Path, metadata_dir: Path) -> Path:
+    """
+    The frame table one ``round_info.csv`` row was acquired with: its
+    ``frame_table`` column if set (a file name under *metadata_dir*, or an
+    absolute path), else the table its ``hal_config`` points to
+    (:func:`~MERci.acquisition.configs.find_frame_table_for_hal_config`).
+    Raises ``FileNotFoundError`` if neither resolves.
+    """
+    frame_table = row.get("frame_table")
+    if isinstance(frame_table, str) and frame_table.strip():
+        path = Path(frame_table.strip())
+        path = path if path.is_absolute() else Path(metadata_dir) / path
+        if not path.exists():
+            raise FileNotFoundError(f"round_info frame_table {frame_table!r} not found at {path}.")
+        return path
+    hal_config = row.get("hal_config")
+    if isinstance(hal_config, str) and hal_config.strip():
+        hal_path = resolve_hal_config_path(settings_dir, hal_config.strip().removesuffix(".xml"))
+        path = find_frame_table_for_hal_config(hal_path, metadata_dir)
+        if path is not None:
+            return path
+    raise FileNotFoundError(
+        f"No frame table for round_info row (imaging_round={row.get('imaging_round')}, "
+        f"hal_config={hal_config!r}): set its frame_table column, or check that the HAL "
+        f"config's shutter file has a matching frame-table-*.csv in {metadata_dir}."
+    )
+
+
+def add_frame_table_column(round_info: pd.DataFrame, settings_dir: Path, metadata_dir: Path) -> pd.DataFrame:
+    """
+    Copy of *round_info* with a ``frame_table`` column (file name under
+    *metadata_dir*) filled in from each row's ``hal_config`` where it is
+    empty (see :func:`resolve_round_frame_table`). A row whose table can't
+    be found is left empty; readers then fall back to ``hal_config``.
+    """
+    out = round_info.copy()
+    if "frame_table" not in out.columns:
+        out["frame_table"] = ""
+    for i, row in out.iterrows():
+        try:
+            out.at[i, "frame_table"] = resolve_round_frame_table(row, settings_dir, metadata_dir).name
+        except FileNotFoundError:
+            log.warning("add_frame_table_column: no frame table for imaging_round %s (%s)",
+                        row.get("imaging_round"), row.get("hal_config"))
+    return out
+
+
+def round_frame_tables(round_info: pd.DataFrame, settings_dir: Path, metadata_dir: Path
+                       ) -> Tuple[Path, Dict[int, Path]]:
+    """
+    ``(cells_frame_table, {hyb_round: bits_frame_table})`` for
+    ``create_data_organization``. ``hyb_round`` is round_bit_color's round
+    (1..N): the N-th distinct bits ``imaging_round`` in order. Multi-boundary
+    layouts repeat an imaging round per segment; its first row is used.
+    Bits/cells rows are told apart by ``imaging_type``, or by "cells" in
+    ``series`` for a round_info without that column.
+    """
+    if "imaging_type" in round_info.columns:
+        kind = round_info["imaging_type"].astype(str).str.lower()
+        is_cells, is_bits = kind == "cells", kind == "bits"
+    else:
+        is_cells = round_info["series"].str.contains("cells")
+        is_bits = ~is_cells
+    cells_rows = round_info[is_cells]
+    bits_rows = round_info[is_bits].drop_duplicates("imaging_round").sort_values("imaging_round")
+    if cells_rows.empty:
+        raise ValueError("round_info has no cells row.")
+    cells = resolve_round_frame_table(cells_rows.iloc[0], settings_dir, metadata_dir)
+    bits = {hyb: resolve_round_frame_table(row, settings_dir, metadata_dir)
+            for hyb, (_, row) in enumerate(bits_rows.iterrows(), start=1)}
+    return cells, bits
 
 
 def count_positions(positions_path: Path) -> int:
