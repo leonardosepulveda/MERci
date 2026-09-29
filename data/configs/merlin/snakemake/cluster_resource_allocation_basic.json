@@ -152,12 +152,9 @@
         "mem": 2000
     },
     "RegisterFovNeighbors": {
-        "mem": 1000,
-        "time": "1:00:00"
+        "mem": 1000
     },
-    "LeastSquaresGlobalAlignment": {
-        "mem": 16000
-    },
+    "LeastSquaresGlobalAlignment": {},
     "RegistrationDiagnostics": {
         "mem": 8000
     },
@@ -167,7 +164,5 @@
     "GenerateMosaicTile": {
         "mem": 4000
     },
-    "CombineMosaicTiles": {
-        "mem": 24000
-    }
+    "CombineMosaicTiles": {}
 }
