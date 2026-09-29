@@ -5,7 +5,9 @@ tasks:
 - deconvolution_preprocess
 - optimize_iteration
 - decode
+- register_fov_neighbors
 - global_align_least_squares
+- registration_diagnostics
 - create_ffc
 - generate_mosaic
 - combine_mosaic_tiles

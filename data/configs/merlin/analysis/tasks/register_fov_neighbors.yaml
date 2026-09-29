@@ -1,0 +1,11 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# Per-fov pairwise registration against each 4-connected neighbour, the
+# parallel half of LeastSquaresGlobalAlignment (which loads it by name, so
+# it must come before global_align_least_squares in a recipe). MERlin's
+# defaults register on the fiducial (bead) frame of data channel 0. For
+# weak beads, set max_projection_data_channel (e.g. DAPI) in the
+# pipeline's overrides; the warp's reference_channel then follows it (see
+# build_merlin_analysis_parameters).
+task: RegisterFovNeighbors
+module: merlin.analysis.globalalign

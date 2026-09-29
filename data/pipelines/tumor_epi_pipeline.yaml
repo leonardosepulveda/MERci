@@ -93,12 +93,15 @@ merlin:
     # metadata/sequential_genes.csv override) actually has entries,
     # regardless of this flag.
     tasks:
+      fiducial_template:           false
       fiducial_correlation_warp:   true
       deconvolution_preprocess:    true
       optimize_iteration:          true
       decode:                      true
+      register_fov_neighbors:      true
       global_align_least_squares:  true
       global_align_simple:         false
+      registration_diagnostics:    true
       create_ffc:                  true
       generate_mosaic:             true
       combine_mosaic_tiles:        true

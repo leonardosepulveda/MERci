@@ -862,6 +862,8 @@ def _task(task: str, module: str, parameters: Optional[dict] = None,
 _WARP, _ALIGN, _SEGMENT, _OPTIMIZE = "<warp>", "<align>", "<segment>", "<optimize>"
 _CROSS_REFS: Dict[str, Dict[str, str]] = {
     "deconvolution_preprocess":    {"warp_task": _WARP},
+    "global_align_least_squares":  {"neighbor_registration_task": "RegisterFovNeighbors"},
+    "registration_diagnostics":    {"warp_task": _WARP, "global_alignment_task": _ALIGN},
     "decode":                      {"preprocess_task": "DeconvolutionPreprocess",
                                     "optimize_task": _OPTIMIZE, "global_align_task": _ALIGN},
     "generate_adaptive_threshold": {"decode_task": "Decode", "run_after_task": "Decode"},
@@ -927,6 +929,15 @@ def build_merlin_analysis_parameters(
         shared default recipe doesn't include.
     n_optimize_iterations : overrides the recipe file's own value if given
         (e.g. sourced from ``experiment_info.yaml``'s ``extra.n_opt``).
+
+    Registration/stitching wiring: ``global_align_least_squares`` needs
+    ``register_fov_neighbors`` earlier in the list (MERlin loads it by name
+    at construction). With a ``fiducial_template`` atom present, the warp
+    gets ``fiducial_template_task``. When ``register_fov_neighbors`` stitches
+    on a max projection (``max_projection_data_channel`` override), the warp
+    gets that channel as its ``reference_channel``, so every round is
+    registered into the same round the fov positions were measured in.
+
     skip_tasks  : atom names left out of the written ``analysis_tasks`` but
         still used for cross-references (``warp_task``/``segment_task``
         params, the "has a segment atom" checks). E.g. the segmentation
@@ -959,6 +970,11 @@ def build_merlin_analysis_parameters(
     if "sum_signal" in task_names and "cellpose_segment_3d" not in task_names and "cellpose_segment_sam" not in task_names:
         raise ValueError("sum_signal requires a segmentation atom (cellpose_segment_3d/cellpose_segment_sam) "
                           "in the recipe -- SumSignal needs a segment_task.")
+    if "global_align_least_squares" in task_names and (
+            "register_fov_neighbors" not in task_names
+            or task_names.index("register_fov_neighbors") > task_names.index("global_align_least_squares")):
+        raise ValueError("global_align_least_squares requires register_fov_neighbors earlier in the recipe "
+                          "-- LeastSquaresGlobalAlignment loads RegisterFovNeighbors by name.")
 
     align_atom = next((n for n in task_names if n in _ALIGN_ATOM_NAMES), None)
     segment_atom = next((n for n in task_names if n in _SEGMENT_ATOM_NAMES), None)
@@ -971,6 +987,7 @@ def build_merlin_analysis_parameters(
     # (unrestricted) FiducialCorrelationWarp instance.
     warp_atom_dict = _load_task_atom(warp_atom, tasks_dir) if warp_atom else None
     warp_task_name = (warp_atom_dict.get("analysis_name") or warp_atom_dict["task"]) if warp_atom_dict else None
+    stitch_channel = overrides.get("register_fov_neighbors", {}).get("max_projection_data_channel")
 
     tasks = []
     for name in task_names:
@@ -998,6 +1015,11 @@ def build_merlin_analysis_parameters(
             refs = {"warp_task": _WARP, "global_align_task": _ALIGN}
         elif name == "smfish_signal" and segment_atom:
             refs["segment_task"] = "RefineCellDatabases"
+        elif name == warp_atom:
+            if "fiducial_template" in task_names:
+                refs["fiducial_template_task"] = "FiducialTemplate"
+            if stitch_channel is not None:
+                refs["reference_channel"] = stitch_channel
         resolve = {_WARP: warp_task_name, _ALIGN: align_task_name,
                    _SEGMENT: segment_task_name, _OPTIMIZE: f"Optimize{n_opt:02d}"}
         params.update({k: resolve.get(v, v) for k, v in refs.items()})
