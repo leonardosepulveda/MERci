@@ -87,7 +87,8 @@ fluidics:
 # in with placeholder RS0967/RS0994 entries that were never actually
 # used; corrected 2026-09-11 (confirmed with the user).
 dataorganization:
-  round_bit_color_csv: configs/round_bit_color_map/tumor_disk.csv
+  round_bit_color_csv: configs/round_bit_color_map/tumor_disk_v1.csv   # v2: tumor_disk_v2.csv (H01 CENPA/EMERIN, H02 yH2AX)
+  readout_catalog: ndb   # bits are NDB adaptor numbers (bit 865 -> NDB_865)
 
 # Everything MERlin-specific. lib_name is still C3 (same sample/project as
 # tumor_epi's epi pass), but the MERlin recipe below has no barcode-decode
