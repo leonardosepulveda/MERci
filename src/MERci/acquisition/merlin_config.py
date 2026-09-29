@@ -123,6 +123,7 @@ def load_sequential_gene_names(
     lib_name: str,
     experiment_override_path: Optional[Path] = None,
     kind: str = "sequential",
+    imaged_bits: Optional[Sequence[int]] = None,
 ) -> Dict[int, str]:
     """
     ``{bit: gene_name}`` for *lib_name*'s non-barcode bits of the given
@@ -138,6 +139,11 @@ def load_sequential_gene_names(
     If *experiment_override_path* is given and exists, its rows are merged
     in on top (per-bit override) -- e.g. metadata/sequential_genes.csv for
     an experiment using a gene not yet in any codebook's companion file.
+
+    If *imaged_bits* is given (e.g. round_bit_color_map.csv's ``bit``
+    column), only those bits are kept -- a companion bit this experiment
+    never imaged would otherwise name a channel MERlin doesn't have (and
+    can repeat a target the override placed on another bit).
     """
     gene_names: Dict[int, str] = {}
     seq_path = Path(codebooks_dir) / resolve_sequential_codebook_filename(lib_name, kind)
@@ -151,6 +157,9 @@ def load_sequential_gene_names(
             for row in csv.DictReader(fh):
                 gene_names[int(row["bit"])] = row["gene_name"]
 
+    if imaged_bits is not None:
+        keep = {int(b) for b in imaged_bits}
+        gene_names = {b: g for b, g in gene_names.items() if b in keep}
     return gene_names
 
 
