@@ -49,6 +49,7 @@ dataorganization:
   # Antibody panel, one CSV per version:
   #   v1 (e.g. BC555_sample_05): H01 yH2AX@650, CENPA@560
   #   v2 (e.g. BC553_sample_02): H01 CENPA@650, EMERIN@560; H02 yH2AX@650
+  # Switch together with merlin.sequential_kind (immuno_v1 / immuno_v2).
   round_bit_color_csv: configs/round_bit_color_map/tumor_disk_v1.csv
   # Bits are NDB adaptor numbers (bit 865 -> NDB_865, data/ndb_adaptors.csv).
   readout_catalog: ndb
@@ -56,8 +57,9 @@ dataorganization:
 merlin:
   project: bc     # "bc" | "lt" | "mf"
   lib_name: C3    # same library as tumor_epi
-  # Target names per bit: C3v1_codebook_immuno.csv (keyed by NDB number).
-  sequential_kind: immuno
+  # Target name per bit (NDB number): C3v1_codebook_<sequential_kind>.csv.
+  # immuno_v1 goes with tumor_disk_v1.csv, immuno_v2 with tumor_disk_v2.csv.
+  sequential_kind: immuno_v1
 
   analysis:
     n_optimize_iterations: 10   # no decoding here; still read by the cluster-resource file
