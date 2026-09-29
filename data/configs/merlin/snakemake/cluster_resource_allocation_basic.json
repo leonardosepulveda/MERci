@@ -145,7 +145,29 @@
     "SmfishSignal": {
         "mem": 32000
     },
-    "SumSignals": {
+    "SumSignal": {
         "mem": 3000
+    },
+    "FiducialTemplate": {
+        "mem": 2000
+    },
+    "RegisterFovNeighbors": {
+        "mem": 1000,
+        "time": "0:15:00"
+    },
+    "LeastSquaresGlobalAlignment": {
+        "mem": 16000
+    },
+    "RegistrationDiagnostics": {
+        "mem": 8000
+    },
+    "CreateFfc": {
+        "mem": 2000
+    },
+    "GenerateMosaicTile": {
+        "mem": 4000
+    },
+    "CombineMosaicTiles": {
+        "mem": 24000
     }
 }
