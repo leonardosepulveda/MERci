@@ -713,9 +713,9 @@ def create_slurm_submit_script(
                      omits the flag.
     allow_missing_channels : passes ``--allow-missing-channels`` to
                      ``merlin`` -- tolerates a data channel with zero raw
-                     files present instead of raising, e.g. running a
-                     segmentation-only analysis before the decode rounds
-                     are imaged. Requires a MERlin checkout with this flag.
+                     files present instead of raising, e.g. running
+                     before every round is imaged. Requires a MERlin
+                     checkout with this flag.
                      ``False`` (default) omits it.
     recalculate_filemap : passes ``--recalculate-filemap`` to ``merlin`` --
                      rebuilds the cached raw-file map instead of reusing
@@ -815,29 +815,6 @@ date +'Finished at %R.'
 # global_align_task/segment_task/warp_task reference.
 _ALIGN_ATOM_NAMES = ("global_align_simple", "global_align_least_squares")
 _SEGMENT_ATOM_NAMES = ("cellpose_segment_3d", "cellpose_segment_sam")
-_WARP_ATOM_NAMES = ("fiducial_correlation_warp", "fiducial_correlation_warp_segmentation")
-
-# Which of a segmentation atom's own parameters name the channel(s) it
-# segments on -- used by derive_segmentation_channels to restrict a
-# segmentation-only FiducialCorrelationWarp instance's channels_to_process
-# to exactly those, instead of a hardcoded pair. Add an entry here (e.g.
-# ("seed_channel_name", "watershed_channel_name") for a future
-# WatershedSegment atom) when a new segmentation atom is added.
-_SEGMENT_ATOM_CHANNEL_PARAMS = {
-    "cellpose_segment_3d": ("channel_1_name", "channel_2_name"),
-    "cellpose_segment_sam": ("channel_1_name", "channel_2_name"),
-}
-
-# The segmentation-only recipe's own task list (see build_segmentation_only_
-# recipe_tasks): the align/segment-method choice plus the cleanup/export
-# chain that follows it, dropping every decode-chain task entirely. The
-# segmentation-only warp instance itself is NOT here -- callers prepend
-# "fiducial_correlation_warp_segmentation" explicitly instead of reusing
-# whichever warp atom the source recipe happens to have.
-_SEGMENTATION_CHAIN_ATOM_NAMES = _ALIGN_ATOM_NAMES + _SEGMENT_ATOM_NAMES + (
-    "clean_cell_boundaries", "combine_cleaned_boundaries",
-    "refine_cell_databases", "export_cell_metadata",
-)
 
 
 def _load_task_atom(name: str, tasks_dir: Path) -> dict:
@@ -901,7 +878,6 @@ def build_merlin_analysis_parameters(
     overrides:                Optional[Dict[str, Dict[str, Any]]] = None,
     extra_tasks:              Optional[List[str]] = None,
     n_optimize_iterations:    Optional[int] = None,
-    skip_tasks:                Optional[Sequence[str]] = None,
 ) -> Path:
     """
     Build MERlin's ``analysis_tasks`` from a recipe (an ordered list of
@@ -938,16 +914,6 @@ def build_merlin_analysis_parameters(
     gets that channel as its ``reference_channel``, so every round is
     registered into the same round the fov positions were measured in.
 
-    skip_tasks  : atom names left out of the written ``analysis_tasks`` but
-        still used for cross-references (``warp_task``/``segment_task``
-        params, the "has a segment atom" checks). E.g. the segmentation
-        chain already run by a segmentation-only recipe
-        (``build_segmentation_only_recipe_tasks``): MERlin loads referenced
-        tasks from their saved parameters on disk, so downstream tasks
-        still resolve them, and re-declaring them with this recipe's
-        different ``warp_task`` would raise
-        ``AnalysisAlreadyExistsException``.
-
     Returns
     -------
     Path : *output_path*, unchanged
@@ -957,7 +923,6 @@ def build_merlin_analysis_parameters(
     n_opt = n_optimize_iterations if n_optimize_iterations is not None else recipe.get("n_optimize_iterations", 1)
     task_names = list(recipe.get("tasks", [])) + list(extra_tasks or [])
     overrides = overrides or {}
-    skip_tasks = set(skip_tasks or ())
     tasks_dir = Path(tasks_dir)
 
     if "smfish_signal" in task_names and not overrides.get("smfish_signal", {}).get("channel_names"):
@@ -978,21 +943,14 @@ def build_merlin_analysis_parameters(
 
     align_atom = next((n for n in task_names if n in _ALIGN_ATOM_NAMES), None)
     segment_atom = next((n for n in task_names if n in _SEGMENT_ATOM_NAMES), None)
-    warp_atom = next((n for n in task_names if n in _WARP_ATOM_NAMES), None)
     align_task_name = _load_task_atom(align_atom, tasks_dir)["task"] if align_atom else None
     segment_task_name = _load_task_atom(segment_atom, tasks_dir)["task"] if segment_atom else None
-    # analysis_name falls back to the atom's own task name when unset,
-    # matching MERlin's own default -- only fiducial_correlation_warp_
-    # segmentation sets one explicitly, to distinguish it from the regular
-    # (unrestricted) FiducialCorrelationWarp instance.
-    warp_atom_dict = _load_task_atom(warp_atom, tasks_dir) if warp_atom else None
-    warp_task_name = (warp_atom_dict.get("analysis_name") or warp_atom_dict["task"]) if warp_atom_dict else None
+    warp_task_name = (_load_task_atom("fiducial_correlation_warp", tasks_dir)["task"]
+                      if "fiducial_correlation_warp" in task_names else None)
     stitch_channel = overrides.get("register_fov_neighbors", {}).get("max_projection_data_channel")
 
     tasks = []
     for name in task_names:
-        if name in skip_tasks:
-            continue
         atom = _load_task_atom(name, tasks_dir)
 
         if name == "optimize_iteration":
@@ -1015,7 +973,7 @@ def build_merlin_analysis_parameters(
             refs = {"warp_task": _WARP, "global_align_task": _ALIGN}
         elif name == "smfish_signal" and segment_atom:
             refs["segment_task"] = "RefineCellDatabases"
-        elif name == warp_atom:
+        elif name == "fiducial_correlation_warp":
             if "fiducial_template" in task_names:
                 refs["fiducial_template_task"] = "FiducialTemplate"
             if stitch_channel is not None:
@@ -1047,92 +1005,6 @@ def build_merlin_analysis_parameters(
         else:
             json.dump({"analysis_tasks": tasks}, fh, indent=4)
     return output_path
-
-
-def build_segmentation_only_recipe_tasks(task_names: List[str]) -> List[str]:
-    """
-    Derive a segmentation-only recipe's task list from a full recipe's own
-    ``tasks`` list -- lets segmentation run on the cells/DAPI round with
-    ``merlin --allow-missing-channels`` before the decode rounds are
-    imaged, reusing the same task ``analysis_name``s so a later full-
-    pipeline run (with ``--recalculate-filemap``) sees the segmentation
-    chain already complete. Prepends the channel-restricted
-    ``fiducial_correlation_warp_segmentation`` atom (in place of the source
-    recipe's own unrestricted ``fiducial_correlation_warp``), followed by
-    whichever align/segment-method/cleanup atoms (see
-    ``_SEGMENTATION_CHAIN_ATOM_NAMES``) *task_names* actually contains, in
-    their original order. Every decode-chain task (``deconvolution_
-    preprocess``, ``optimize_iteration``, ``decode``, ...) is dropped.
-
-    Feed the returned list to :func:`build_merlin_analysis_parameters` as a
-    recipe's own ``tasks`` -- pass ``overrides`` with
-    ``channels_to_process`` for the new warp atom (see
-    :func:`derive_segmentation_channels`).
-    """
-    return ["fiducial_correlation_warp_segmentation"] + [
-        name for name in task_names if name in _SEGMENTATION_CHAIN_ATOM_NAMES
-    ]
-
-
-def derive_segmentation_channels(
-    task_names: List[str], tasks_dir: Path,
-    overrides: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> Optional[List[str]]:
-    """
-    Read whichever segmentation atom (see ``_SEGMENT_ATOM_NAMES``) is
-    present in *task_names* and return the non-null channel name(s) it's
-    actually configured for (its own ``channel_1_name``/``channel_2_name``,
-    merged with any ``overrides`` for that atom) -- the channel list a
-    segmentation-only ``FiducialCorrelationWarp``'s ``channels_to_process``
-    should restrict to, instead of a hardcoded pair (e.g. a DAPI-only
-    pipeline's segment atom yields ``["DAPI"]``, not ``["DAPI", "PolyT"]``).
-
-    Returns ``None`` if *task_names* has no segmentation atom at all (e.g.
-    a recipe with no segmentation chain) -- there's then nothing to
-    restrict to.
-    """
-    segment_atom = next((n for n in task_names if n in _SEGMENT_ATOM_NAMES), None)
-    if segment_atom is None:
-        return None
-    if segment_atom not in _SEGMENT_ATOM_CHANNEL_PARAMS:
-        raise ValueError(
-            f"No channel-parameter mapping for segmentation atom {segment_atom!r} -- "
-            "add an entry to _SEGMENT_ATOM_CHANNEL_PARAMS."
-        )
-    atom = _load_task_atom(segment_atom, tasks_dir)
-    params = {**atom.get("parameters", {}), **(overrides or {}).get(segment_atom, {})}
-    channels = [params[key] for key in _SEGMENT_ATOM_CHANNEL_PARAMS[segment_atom] if params.get(key)]
-    return channels or None
-
-
-def derive_reference_first_channel_order(
-    data_organization_path: Path, reference_channels: Sequence[str],
-) -> List[str]:
-    """
-    All ``channelName`` values from *data_organization_path* (MERlin's
-    data-channel order), with *reference_channels* moved to the front (in the
-    given order) and the rest in their original order.
-
-    Pass it as the full pipeline's ``fiducial_correlation_warp``
-    ``channels_to_process`` override, with *reference_channels* = the
-    segmentation-only run's channel(s) (``derive_segmentation_channels``).
-    MERlin's ``FiducialCorrelationWarp`` correlates against
-    ``channels_to_process[0]``, so both runs then give DAPI the identity
-    transform instead of differing by DAPI's drift. The list must name every
-    data channel, hence reading it from the CSV.
-
-    Raises if a *reference_channels* name is not in the CSV.
-    """
-    with open(data_organization_path, newline="") as fh:
-        channel_names = [row["channelName"] for row in csv.DictReader(fh)]
-    missing = [c for c in reference_channels if c not in channel_names]
-    if missing:
-        raise ValueError(
-            f"reference_channels {missing} not found in {data_organization_path}'s "
-            "channelName column."
-        )
-    rest = [c for c in channel_names if c not in reference_channels]
-    return list(reference_channels) + rest
 
 
 def __getattr__(name):
