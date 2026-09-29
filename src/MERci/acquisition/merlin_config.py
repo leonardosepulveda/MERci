@@ -813,6 +813,28 @@ date +'Finished at %R.'
 # same structural role -- build_merlin_analysis_parameters uses whichever one
 # is actually present in the recipe's task list to fill every OTHER task's
 # global_align_task/segment_task/warp_task reference.
+# Task groups, in the order build_merlin_analysis_parameters writes them;
+# each group's label becomes a "# --- label ---" header in the YAML. The
+# order is dependency-safe: MERlin needs a task declared before any task
+# that loads it by name. A new atom must be added to one group.
+_TASK_GROUPS = (
+    ("Registration between rounds", ("fiducial_template", "fiducial_correlation_warp")),
+    ("Stitching",                    ("register_fov_neighbors", "global_align_least_squares",
+                                      "global_align_simple")),
+    ("Registration QC",              ("registration_diagnostics",)),
+    ("Preprocessing",                ("deconvolution_preprocess",)),
+    ("Decoding",                     ("optimize_iteration", "decode", "generate_adaptive_threshold",
+                                      "adaptive_filter_barcodes", "export_barcodes",
+                                      "plot_performance", "slurm_report")),
+    ("Mosaic",                       ("create_ffc", "generate_mosaic", "combine_mosaic_tiles")),
+    ("Segmentation",                 ("cellpose_segment_3d", "cellpose_segment_sam",
+                                      "clean_cell_boundaries", "combine_cleaned_boundaries",
+                                      "refine_cell_databases", "export_cell_metadata")),
+    ("Barcode-to-cell assignment",   ("partition_barcodes", "export_partitioned_barcodes")),
+    ("Sequential signal per cell",   ("smfish_signal", "sum_signal", "export_sum_signals")),
+)
+_ATOM_GROUP = {atom: i for i, (_, atoms) in enumerate(_TASK_GROUPS) for atom in atoms}
+
 _ALIGN_ATOM_NAMES = ("global_align_simple", "global_align_least_squares")
 _SEGMENT_ATOM_NAMES = ("cellpose_segment_3d", "cellpose_segment_sam")
 
@@ -906,6 +928,10 @@ def build_merlin_analysis_parameters(
     n_optimize_iterations : overrides the recipe file's own value if given
         (e.g. sourced from ``experiment_info.yaml``'s ``extra.n_opt``).
 
+    Tasks are written grouped (``_TASK_GROUPS``: registration, stitching,
+    ..., keeping the recipe's order within a group), with a comment header
+    per group in YAML output.
+
     Registration/stitching wiring: ``global_align_least_squares`` needs
     ``register_fov_neighbors`` earlier in the list (MERlin loads it by name
     at construction). With a ``fiducial_template`` atom present, the warp
@@ -922,6 +948,10 @@ def build_merlin_analysis_parameters(
         recipe = yaml.safe_load(fh) or {}
     n_opt = n_optimize_iterations if n_optimize_iterations is not None else recipe.get("n_optimize_iterations", 1)
     task_names = list(recipe.get("tasks", [])) + list(extra_tasks or [])
+    unknown = [n for n in task_names if n not in _ATOM_GROUP]
+    if unknown:
+        raise ValueError(f"No task group for atom(s) {unknown} -- add them to _TASK_GROUPS.")
+    task_names.sort(key=_ATOM_GROUP.__getitem__)   # stable: keeps recipe order within a group
     overrides = overrides or {}
     tasks_dir = Path(tasks_dir)
 
@@ -950,6 +980,7 @@ def build_merlin_analysis_parameters(
     stitch_channel = overrides.get("register_fov_neighbors", {}).get("max_projection_data_channel")
 
     tasks = []
+    task_groups = []   # group label of each entry in tasks, for the YAML headers
     for name in task_names:
         atom = _load_task_atom(name, tasks_dir)
 
@@ -965,6 +996,7 @@ def build_merlin_analysis_parameters(
                     params["previous_iteration"] = f"Optimize{i - 1:02d}"
                 params.update(overrides.get(name, {}))
                 tasks.append(_task("OptimizeIteration", atom["module"], params, f"Optimize{i:02d}"))
+                task_groups.append(_TASK_GROUPS[_ATOM_GROUP[name]][0])
             continue
 
         params = dict(atom.get("parameters", {}))
@@ -984,6 +1016,7 @@ def build_merlin_analysis_parameters(
 
         params.update(overrides.get(name, {}))
         tasks.append(_task(atom["task"], atom["module"], params if params else None, atom.get("analysis_name")))
+        task_groups.append(_TASK_GROUPS[_ATOM_GROUP[name]][0])
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -991,15 +1024,19 @@ def build_merlin_analysis_parameters(
         if output_path.suffix.lower() in (".yaml", ".yml"):
             dumped = yaml.safe_dump({"analysis_tasks": tasks}, sort_keys=False)
             # Blank line between top-level tasks (lines starting "- " with no
-            # indent) for readability -- doesn't touch nested lists (e.g.
+            # indent) for readability, plus a header comment where a new
+            # group starts -- doesn't touch nested lists (e.g.
             # ExportBarcodes' "columns"), which are indented.
             out_lines = []
-            first_task = True
+            task_index = 0
             for line in dumped.splitlines():
                 if line.startswith("- "):
-                    if not first_task:
+                    group = task_groups[task_index]
+                    if task_index > 0:
                         out_lines.append("")
-                    first_task = False
+                    if task_index == 0 or group != task_groups[task_index - 1]:
+                        out_lines.append(f"# --- {group} ---")
+                    task_index += 1
                 out_lines.append(line)
             fh.write("\n".join(out_lines) + "\n")
         else:

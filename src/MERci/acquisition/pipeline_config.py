@@ -114,6 +114,10 @@ class PipelineConfig:
 
     # ── Round/bit/color (notebook 03) -- backend-agnostic ────────────────
     round_bit_color:  List[tuple]   # [(round, bit, color), ...]
+    # How a bit number names its readout probe (notebook 05): "rs" = row of
+    # data/readouts.csv (Bit number -> Probe name); "ndb" = the bit IS the
+    # adaptor number, readoutName NDB_<bit> from data/ndb_adaptors.csv.
+    readout_catalog:  str
 
     # ── Fluidics (notebook 04) ───────────────────────────────────────────
     use_adaptors:           bool
@@ -196,6 +200,11 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
     def _recipe(d: dict) -> ImagingRoundRecipe:
         return ImagingRoundRecipe(**d)
 
+    readout_catalog = dataorganization.get("readout_catalog", "rs")
+    if readout_catalog not in ("rs", "ndb"):
+        raise ValueError(f"{yaml_path}: dataorganization.readout_catalog must be 'rs' or 'ndb', "
+                         f"not {readout_catalog!r}.")
+
     power, power_default = _load_power(data_dir, raw["microscope"])
     round_bit_color = _load_round_bit_color(yaml_path, data_dir, dataorganization["round_bit_color_csv"])
 
@@ -251,6 +260,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         transit_n_blank  = imaging["transit_n_blank"],
 
         round_bit_color  = round_bit_color,
+        readout_catalog  = readout_catalog,
 
         use_adaptors           = fluidics["use_adaptors"],
         include_final_cleave   = fluidics["include_final_cleave"],

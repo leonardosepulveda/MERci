@@ -9,8 +9,10 @@ keys (`warp_task`/`preprocess_task`/`optimize_task`/`previous_iteration`/
 actually present in the recipe being assembled -- hardcoding one here
 would be silently overwritten (or conflict) at assembly time, so don't.
 
-`../recipes/*.yaml` hold the explicit ordered task-name lists that
+`../recipes/*.yaml` hold the task-name lists that
 `build_merlin_analysis_parameters()` assembles these atoms into one
-MERlin analysis-tasks JSON. Each atom's own file documents its own
+MERlin analysis-tasks file. It writes them grouped (registration,
+stitching, decoding, segmentation, ...; `_TASK_GROUPS` in
+`merlin_config.py`), so a new atom must also be added to one group there. Each atom's own file documents its own
 parameters (defaults, any per-parameter notes); this README only covers
 the convention shared by all of them.

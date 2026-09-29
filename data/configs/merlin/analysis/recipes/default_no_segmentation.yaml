@@ -1,18 +1,18 @@
-# Ordered atomic-task list -- see ../tasks/README.md for the shared convention (see build_merlin_analysis_parameters() for assembly).
+# Atomic-task list, in group order -- see ../tasks/README.md for the shared convention (see build_merlin_analysis_parameters() for assembly).
 n_optimize_iterations: 10
 tasks:
 - fiducial_correlation_warp
-- deconvolution_preprocess
-- optimize_iteration
-- decode
 - register_fov_neighbors
 - global_align_least_squares
 - registration_diagnostics
-- create_ffc
-- generate_mosaic
-- combine_mosaic_tiles
+- deconvolution_preprocess
+- optimize_iteration
+- decode
 - generate_adaptive_threshold
 - adaptive_filter_barcodes
 - export_barcodes
 - plot_performance
 - slurm_report
+- create_ffc
+- generate_mosaic
+- combine_mosaic_tiles
