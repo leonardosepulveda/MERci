@@ -1,28 +1,20 @@
-# Pipeline-level configuration for tumor/epi (epifluorescence tumor
-# acquisitions). Loaded via MERci.acquisition.pipeline_config.load_pipeline_config.
-#
-# Values here are the same for every experiment run through this pipeline --
-# per-experiment values (tissue-segmentation thresholds, positions
-# boundaries, sequential_genes.csv contents, etc.) are NOT here; they stay
-# hand-edited per notebook run. See prompt_history/2026_08_28_1655_*,
-# 2026_08_28_1712_* and 2026_08_28_1811_* for how this list was derived.
+# Tumor, epifluorescence (MF3): combinatorial MERFISH barcode plus
+# sequential bits. Loaded by MERci.acquisition.pipeline_config.
+# load_pipeline_config. Per-experiment values (thresholds, boundaries,
+# sequential_genes.csv, ...) are set in the notebooks, not here.
 
 id: tumor_epi
 label: "Tumor -- Epifluorescence"
-analysis_backend: merlin   # drives notebook 05 (data_organization) / 07 (merlin scripts)
+analysis_backend: merlin   # notebooks 05/07 use the MERlin variants
 
 microscope: MF3
 objective: "60X"
 
 imaging:
   file_type: ".zarr"
-  exposure_time: 0.25   # seconds
-  # Per-channel laser power is NOT set here -- it's locked to the microscope
-  # choice above, not an independent pipeline dial. See
-  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
+  exposure_time: 0.25   # seconds; laser power comes from data/configs/power/, per microscope
 
-  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
-  cells_round:
+  cells_round:          # round 1: DAPI (segmentation) + beads
     z_min: 1
     z_max: 25
     z_step: 1
@@ -33,8 +25,7 @@ imaging:
     z_return_mode: progressive
     return_step: 5
 
-  # z-stack recipe for the "bits" round (barcode-imaging rounds).
-  bits_round:
+  bits_round:           # every barcode/sequential round
     z_min: 1
     z_max: 25
     z_step: 1
@@ -45,85 +36,69 @@ imaging:
     z_return_mode: progressive
     return_step: 5
 
-  focus_test_z: 0.5       # single z position (um above bead_z) for the focus-test sequence
-  transit_n_blank: 2      # blank frames per transit FOV
+  focus_test_z: 0.5     # z (um above bead_z) of the focus-test sequence
+  transit_n_blank: 2    # blank frames per transit FOV
 
 fluidics:
-  use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts
-  include_final_cleave: false   # True = add a final cleave step after the last imaging round
-  first_hyb_no_cleave: false    # True = first hyb (after the cells round) omits the cleave step
+  use_adaptors: true            # adaptor-based fluidics
+  include_final_cleave: false   # no cleave after the last imaging round
+  first_hyb_no_cleave: false    # first hyb after the cells round is cleaved as usual
 
-# Everything MERlin-specific: the codebook/schema identity (notebook 06's
-# "fields MERci can't know" -- PROJECT/LIB_NAME are properties of which
-# pipeline you're running, so they belong here, not hand-typed per
-# experiment), and the analysis-task selection (notebook 07).
-
-# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
-# the list. Backend-agnostic (round_info.csv needs it either way), so it's
-# not under `merlin:` below.
 dataorganization:
-  round_bit_color_csv: configs/round_bit_color_map/tumor_epi.csv
+  round_bit_color_csv: configs/round_bit_color_map/tumor_epi.csv   # bits index data/readouts.csv
 
 merlin:
-  project: bc     # "bc" | "lt" | "mf" -- selects which master-CSV schema
-  lib_name: C3    # codebook/probe-library name (MERci/data/configs/merlin/codebooks/)
-
-  # This pipeline's non-barcode (sequential) bits' gene names come from
-  # lib_name's own "sequential" companion codebook
-  # (data/configs/merlin/codebooks/C3v1_codebook_sequential.csv) --
-  # "sequential" is the default, named explicitly here since a sibling
-  # disk-scope pipeline of the same sample uses "immuno" instead (its own
-  # antibody-panel companion) -- see
-  # merlin_config.resolve_sequential_codebook_filename's own docstring.
+  project: bc     # "bc" | "lt" | "mf"
+  lib_name: C3    # codebook (data/configs/merlin/codebooks/)
+  # Sequential bits' gene names: C3v1_codebook_sequential.csv.
   sequential_kind: sequential
 
   analysis:
-    # MERlin optimize-iteration count -- a parameter of the optimize_iteration
-    # task below, independent of bit count.
     n_optimize_iterations: 10
 
-    # Every atomic MERlin task (data/configs/merlin/analysis/tasks/*.yaml),
-    # enabled/disabled for this pipeline. This is the FULL menu -- trim to
-    # what this pipeline actually needs.
-    #
-    # NOTE: smfish_signal/sum_signal/export_sum_signals below are this
-    # pipeline's default; notebook 07 additionally still auto-adds
-    # smfish_signal (with the real channel names) whenever this pipeline's
-    # codebook_sequential companion (or a per-experiment
-    # metadata/sequential_genes.csv override) actually has entries,
-    # regardless of this flag.
+    # Full task menu (data/configs/merlin/analysis/tasks/), in the order the
+    # analysis YAML writes them.
     tasks:
+      # Registration between rounds
       fiducial_template:           false
       fiducial_correlation_warp:   true
-      deconvolution_preprocess:    true
-      optimize_iteration:          true
-      decode:                      true
+      # Stitching
       register_fov_neighbors:      true
       global_align_least_squares:  true
       global_align_simple:         false
+      # Registration QC (report only)
       registration_diagnostics:    true
-      create_ffc:                  true
-      generate_mosaic:             true
-      combine_mosaic_tiles:        true
+      # Preprocessing
+      deconvolution_preprocess:    true
+      # Decoding
+      optimize_iteration:          true
+      decode:                      true
       generate_adaptive_threshold: true
       adaptive_filter_barcodes:    true
       export_barcodes:             true
       plot_performance:            true
       slurm_report:                true
+      # Mosaic
+      create_ffc:                  true
+      generate_mosaic:             true
+      combine_mosaic_tiles:        true
+      # Segmentation
       cellpose_segment_3d:         false
       cellpose_segment_sam:        true
       clean_cell_boundaries:       true
       combine_cleaned_boundaries:  true
       refine_cell_databases:       true
+      export_cell_metadata:        true
+      # Barcode-to-cell assignment
       partition_barcodes:          true
       export_partitioned_barcodes: true
-      export_cell_metadata:        true
-      smfish_signal:               true   # see NOTE above -- auto-added per experiment
-      sum_signal:                  true   # requires cellpose_segment_3d or cellpose_segment_sam
+      # Sequential signal per cell (notebook 07 sets smfish_signal's
+      # channels from the imaged sequential bits)
+      smfish_signal:               true
+      sum_signal:                  true    # needs a segmentation task
       export_sum_signals:          true
 
-    # {task_name: {param: value}} -- merged over that task's own YAML
-    # parameters. sum_signal has no sane shared default channel list.
+    # {task: {param: value}}, merged over the task's own YAML.
     overrides:
       sum_signal:
         channel_names: ["DAPI"]

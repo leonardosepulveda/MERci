@@ -1,29 +1,21 @@
-# Pipeline-level configuration for lineage_tracing/lineage (the fishtank-
-# based, lineage-barcode sibling acquisition of lineage_tracing_merfish --
-# same sample, decoded with fishtank instead of MERlin). Loaded via
-# MERci.acquisition.pipeline_config.load_pipeline_config.
-#
-# Values here are the same for every experiment run through this pipeline --
-# per-experiment values (tissue-segmentation thresholds, positions
-# boundaries, the color_usage round-tag mapping, FISHTANK_CLUSTER_DIR, etc.)
-# are NOT here; they stay hand-edited per notebook run.
+# Lineage tracing, lineage-barcode pass (ST2), decoded with fishtank; the
+# sibling acquisition of lineage_tracing_merfish. Loaded by
+# MERci.acquisition.pipeline_config.load_pipeline_config. Per-experiment
+# values (thresholds, boundaries, color_usage round tags,
+# FISHTANK_CLUSTER_DIR, ...) are set in the notebooks, not here.
 
 id: lineage_tracing_lineage
 label: "Lineage Tracing -- Lineage (fishtank)"
-analysis_backend: fishtank   # drives notebook 05 (color_usage) / 07 (fishtank scripts)
+analysis_backend: fishtank   # notebooks 05/07 use the fishtank variants
 
 microscope: ST2
 objective: "60X"
 
 imaging:
   file_type: ".zarr"
-  exposure_time: 0.15   # seconds
-  # Per-channel laser power is NOT set here -- it's locked to the microscope
-  # choice above, not an independent pipeline dial. See
-  # data/configs/power/power_by_microscope.yaml, keyed by `microscope`.
+  exposure_time: 0.15   # seconds; laser power comes from data/configs/power/, per microscope
 
-  # z-stack recipe for the "cells" round (round 1: nuclear/segmentation stain).
-  cells_round:
+  cells_round:          # round 1: DAPI (segmentation) + 560 + beads
     z_min: 0.5
     z_max: 50
     z_step: 0.5
@@ -34,8 +26,7 @@ imaging:
     z_return_mode: progressive
     return_step: 5
 
-  # z-stack recipe for the "bits" round (lineage-barcode imaging rounds).
-  bits_round:
+  bits_round:           # every lineage-barcode round
     z_min: 0.5
     z_max: 50
     z_step: 0.5
@@ -46,29 +37,22 @@ imaging:
     z_return_mode: progressive
     return_step: 5
 
-  focus_test_z: 3       # single z position (um above bead_z) for the focus-test sequence
-  transit_n_blank: 2      # blank frames per transit FOV
+  focus_test_z: 3       # z (um above bead_z) of the focus-test sequence
+  transit_n_blank: 2    # blank frames per transit FOV
 
-# (round, bit, color) mapping -- notebook 03 loads this instead of hardcoding
-# the list. Backend-agnostic (round_info.csv needs it either way): governs
-# the imaging recipe, not the fishtank decode itself -- fishtank's own
-# color_usage round-tag mapping (notebook 05) is a separate, manually-entered
-# per-experiment table, not derived from this file.
+# Imaging recipe only; fishtank's color_usage round tags are entered in
+# notebook 05.
 dataorganization:
   round_bit_color_csv: configs/round_bit_color_map/lineage_tracing_lineage.csv
 
 fluidics:
-  use_adaptors: true            # True = adaptor-based fluidics; False = direct readouts
-  include_final_cleave: false   # True = add a final cleave step after the last imaging round
-  first_hyb_no_cleave: true     # True = first hyb (after the cells round) omits the cleave step
+  use_adaptors: true            # adaptor-based fluidics
+  include_final_cleave: false   # no cleave after the last imaging round
+  first_hyb_no_cleave: true     # first hyb after the cells round has no cleave
 
-# Everything fishtank-specific: the color_usage color list (notebook 05) and
-# the decode-strategy target menu (notebook 05/07) -- lineage_lib_version
-# selects MERci/data/configs/fishtank/reference/{version}/, and each target's
-# reference_file/whitelist are bare filenames under that per-experiment
-# {FISHTANK_CLUSTER_DIR}/reference/ (not known at pipeline.yaml-authoring
-# time) -- `{lib_version}` is substituted with lineage_lib_version below by
-# load_pipeline_config.
+# fishtank: color_usage colors (notebook 05) and decode targets (05/07).
+# lineage_lib_version selects data/configs/fishtank/reference/<version>/;
+# `{lib_version}` in the file names below is replaced with it.
 fishtank:
   lineage_lib_version: v2
 
