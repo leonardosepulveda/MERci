@@ -300,6 +300,8 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "FiducialCorrelationWarp": ("mem", "time"),
     "DeconvolutionPreprocess": ("mem", "time"),
     "CellPoseSegmentSAM":      ("mem",),
+    # Estimate 1.5-1.8 GB vs. measured peak <= 0.4 GB (Sept 2026 runs).
+    "RegisterFovNeighbors":    ("mem",),
 }
 
 # Tasks that also opt into estimation but whose formula is not yet
@@ -310,6 +312,10 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
 _UNVALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "Decode":         ("mem", "time"),
     "CAREPreprocess": ("mem", "time"),
+    # Estimated 1-3 min; disk FOVs timed out at that limit.
+    "RegisterFovNeighbors":        ("time",),
+    # Estimated ~0.8 GB; OOM at that limit, and peaks up to ~8 GB measured.
+    "LeastSquaresGlobalAlignment": ("mem",),
 }
 
 
