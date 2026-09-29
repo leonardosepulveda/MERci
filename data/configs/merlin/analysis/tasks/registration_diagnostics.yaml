@@ -1,0 +1,8 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# Report only (nothing reads it): on n_fovs fovs, checks whether the beads
+# can register rounds and stitch fovs, or whether the camera pattern
+# dominates, and recommends settings for both tasks. MERlin's defaults
+# stitch-check on the DAPI max projection.
+task: RegistrationDiagnostics
+module: merlin.analysis.registrationdiagnostics

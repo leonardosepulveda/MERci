@@ -1,0 +1,8 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# Camera fixed-pattern template per imaging round (median bead frame over
+# n_fovs fovs, MERlin default 15). When present, FiducialCorrelationWarp
+# subtracts it before registering rounds. For weak beads only: on dense
+# bead fields the median is a blur of beads, not a camera pattern.
+task: FiducialTemplate
+module: merlin.analysis.warp

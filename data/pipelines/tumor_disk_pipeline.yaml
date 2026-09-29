@@ -124,12 +124,15 @@ merlin:
     # (unlike tumor_epi, where they're auto-derived per experiment) --
     # this pipeline always measures the same 2 fixed targets.
     tasks:
+      fiducial_template:           true    # weak disk beads: camera template for round registration (LT074)
       fiducial_correlation_warp:   true
       deconvolution_preprocess:    true
       optimize_iteration:          false
       decode:                      false
+      register_fov_neighbors:      true
       global_align_least_squares:  true
       global_align_simple:         false
+      registration_diagnostics:    true
       create_ffc:                  true
       generate_mosaic:             true
       combine_mosaic_tiles:        true
@@ -159,6 +162,10 @@ merlin:
     # SumSignal as a side effect -- a known MERlin-side limitation, not
     # fixable from this config.
     overrides:
+      # Weak disk beads can't stitch (LT074): stitch on the DAPI max
+      # projection. The warp's reference_channel follows it automatically.
+      register_fov_neighbors:
+        max_projection_data_channel: DAPI
       smfish_signal:
         channel_names: ["CENPA"]
       sum_signal:
