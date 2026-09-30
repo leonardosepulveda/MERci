@@ -41,8 +41,8 @@ class ImagingRoundRecipe:
 
 @dataclass
 class MerlinConfig:
-    """Everything MERlin-specific for one pipeline (notebooks 05/07, merlin
-    backend only). ``round_bit_color`` is NOT here -- it's backend-agnostic
+    """Everything MERlin-specific for one pipeline (after_imaging
+    14_create_merlin_files, merlin backend only). ``round_bit_color`` is NOT here -- it's backend-agnostic
     (round_info.csv needs it regardless of analysis backend), so it lives on
     ``PipelineConfig`` directly -- see that class's own docstring."""
     project:                str
@@ -64,10 +64,10 @@ class MerlinConfig:
 
 @dataclass
 class FishtankTarget:
-    """One decode-strategy row for a fishtank pipeline's notebook 05
-    (`decoding_strategy_*.csv`). ``reference_file``/``whitelist`` are bare
+    """One decode-strategy row for a fishtank pipeline's
+    after_imaging/14_create_fishtank_files (`decoding_strategy_*.csv`). ``reference_file``/``whitelist`` are bare
     filenames under ``{FISHTANK_CLUSTER_DIR}/reference/`` (a per-experiment
-    cluster path, not known at pipeline.yaml-authoring time) -- notebook 05
+    cluster path, not known at pipeline.yaml-authoring time) -- that notebook
     joins them at run time. ``{lib_version}`` in either filename is already
     substituted with ``FishtankConfig.lineage_lib_version`` by
     ``load_pipeline_config``."""
@@ -79,8 +79,8 @@ class FishtankTarget:
 
 @dataclass
 class FishtankConfig:
-    """Everything fishtank-specific for one pipeline (notebooks 05/07,
-    fishtank backend only)."""
+    """Everything fishtank-specific for one pipeline (after_imaging
+    14_create_fishtank_files, fishtank backend only)."""
     lineage_lib_version:  str
     color_usage_colors:    List[str]
     targets:                List[FishtankTarget] = field(default_factory=list)
@@ -93,8 +93,8 @@ class PipelineConfig:
     ``round_bit_color`` is required for every pipeline regardless of
     ``analysis_backend`` -- notebook 03 (round_info.csv) needs it either way.
     Exactly one of ``merlin``/``fishtank`` is populated, matching
-    ``analysis_backend`` -- notebooks 05/07 are the only ones that read
-    either.
+    ``analysis_backend`` -- after_imaging/14_create_{merlin,fishtank}_files
+    are the only notebooks that read either.
     """
     id:                str
     label:             str
@@ -114,7 +114,7 @@ class PipelineConfig:
 
     # ── Round/bit/color (notebook 03) -- backend-agnostic ────────────────
     round_bit_color:  List[tuple]   # [(round, bit, color), ...]
-    # How a bit number names its readout probe (notebook 05): "rs" = row of
+    # How a bit number names its readout probe (14_create_merlin_files): "rs" = row of
     # data/readouts.csv (Bit number -> Probe name); "ndb" = the bit IS the
     # adaptor number, readoutName NDB_<bit> from data/ndb_adaptors.csv.
     readout_catalog:  str
@@ -124,7 +124,7 @@ class PipelineConfig:
     include_final_cleave:   bool
     first_hyb_no_cleave:    bool
 
-    # ── Backend-specific (notebooks 05/07) -- exactly one populated ──────
+    # ── Backend-specific (after_imaging/14) -- exactly one populated ─────
     merlin:    Optional[MerlinConfig]   = None
     fishtank:  Optional[FishtankConfig] = None
 
