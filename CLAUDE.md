@@ -63,9 +63,11 @@ copies (microscope, imaging recipe, fluidics, codebook/task menu or fishtank
 targets) now lives entirely in that pipeline's own
 `data/pipelines/<id>_pipeline.yaml` (`acquisition/pipeline_config.py`); every
 notebook's second cell sets `PIPELINE_ID` and loads it into
-`PIPELINE_CONFIG`. Steps 05/07 have two files each (`analysis_backend:
-merlin` vs `fishtank`) living side by side — `pipeline_export.py` copies only
-the matching pair. See `regular/README.md`.
+`PIPELINE_CONFIG`. Only steps 01-04 live here; the analysis inputs are
+`after_imaging/13_create_experiment_info` + `14_create_{merlin,fishtank}_files`
+(`analysis_backend: merlin` vs `fishtank`, side by side —
+`pipeline_export.py` copies only the matching one, and none of 13/14 for
+`multi_z`). See `regular/README.md`.
 
 **`before_imaging/multi_z/`** — a separate pipeline (no `pipeline.yaml` yet)
 for a variable-z-per-FOV acquisition: images a full-depth DAPI (cells) round
@@ -152,19 +154,15 @@ notebooks/
   before_imaging/    Pre-experiment, run in order. Two pipelines:
                      regular/ (tumor_epi, tumor_disk, lineage_tracing_merfish,
                      lineage_tracing_lineage -- one shared notebook set, see its own
-                     README.md), multi_z/ (own 9-notebook sequence, see its own README.md)
+                     README.md; its analysis-input steps are after_imaging/13-14),
+                     multi_z/ (own 9-notebook sequence, see its own README.md)
     00  select_pipeline (opt.)               pick a pipeline, export it + after/during_imaging
                                               to SAMPLE_DIR/notebooks/ (sibling of MERci/)
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
     02a create_boundary_from_mosaic (opt.)   derive tissue boundary from a Steve mosaic
     02b create_positions_from_boundaries     FOV scanning positions
     03  create_round_info                    round-bit-color map, round_info.csv
-    04  create_dave_config                   Dave experiment-recipe XML, incl. per-round bit/color XML comments
-    05  create_data_organization             MERlin data-org CSV (analysis_backend: merlin)
-        create_color_usage                   fishtank color_usage/decoding_strategy (analysis_backend: fishtank)
-    06  create_experiment_info               metadata/experiment_info.yaml
-    07  create_merlin_scripts                SAMPLE_DIR/merlin/ (analysis_backend: merlin)
-        create_fishtank_scripts              SAMPLE_DIR/fishtank/ (analysis_backend: fishtank)
+    04  create_dave_config                   Dave experiment-recipe XMLs; hybs recipe annotated with per-round bit/color XML comments
   after_imaging/     Online analysis, run during the experiment
     01  fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
     02  round_scheduler            round-level scheduler (mosaics, optional transfer)
@@ -185,6 +183,10 @@ notebooks/
                                               "<round>_old[_N]" test-reimage folder (see
                                               MERci.common.metadata.discover_ad_hoc_round_dirs);
                                               cached as parquet
+    13  create_experiment_info     regular/ pipelines only: metadata/experiment_info.yaml
+    14  create_merlin_files        regular/, analysis_backend: merlin -- MERlin data-org CSV + SAMPLE_DIR/merlin/
+        create_fishtank_files      regular/, analysis_backend: fishtank -- color_usage/decoding_strategy +
+                                              SAMPLE_DIR/fishtank/
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
@@ -207,12 +209,12 @@ analysis folder outside this repo and come back as `prompt_history/` handoffs.
 
 ## Architecture
 
-**Pre-experiment workflow**: run the 8 `regular/` notebooks (or the 9
-`multi_z/` ones, plus `after_imaging/08_measure_tissue_thickness.ipynb`
-mid-sequence) above in order for the acquisition being prepared. Each writes
-inputs the next one reads (HAL/shutter → positions → round_info → Dave
-config → data-organization/color-usage → experiment_info → merlin/fishtank
-scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)
+**Pre-experiment workflow**: run the 5 `regular/` notebooks, then
+`after_imaging/13`-`14` (or the 9 `multi_z/` ones, plus
+`after_imaging/08_measure_tissue_thickness.ipynb` mid-sequence) above in
+order for the acquisition being prepared. Each writes inputs the next one
+reads (HAL/shutter → positions → round_info → Dave config → experiment_info
+→ merlin data-org + run files / fishtank color-usage + scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)
 shared across HAL config, shutter file, and frame table for one round.
 
 **Online-analysis**: `ExperimentConfig` holds paths/tunables.

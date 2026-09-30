@@ -71,8 +71,9 @@ SAMPLE_DIR/
 
 Run one pipeline's `before_imaging/` notebooks in order before starting the
 microscope. Each writes inputs the next one reads (HAL/shutter configs →
-positions → round_info → Dave recipe → data organization or color usage →
-experiment_info → MERlin or fishtank scripts).
+positions → round_info → Dave recipe). For `regular/` pipelines, the analysis
+inputs (experiment_info, then the MERlin or fishtank files) are generated
+later by `after_imaging/13`-`14`.
 
 - `before_imaging/regular/`: the shared notebook set for `tumor_epi`,
   `tumor_disk`, `lineage_tracing_merfish` and `lineage_tracing_lineage`.
@@ -95,6 +96,7 @@ During the experiment, run the analysis notebooks in separate JupyterLab tabs to
 - `notebooks/after_imaging/01_fov_scheduler.ipynb` — FOV-level scheduler: thumbnails, per-frame stats, histograms
 - `notebooks/after_imaging/02_round_scheduler.ipynb` — round-level scheduler: spatial mosaics, optional data transfer
 - `notebooks/after_imaging/03`–`12` — mosaics, intensity stats, batch review, cluster submission, tissue thickness, completeness checks and more (see `CLAUDE.md`'s notebook index)
+- `notebooks/after_imaging/13_create_experiment_info.ipynb`, then `14_create_merlin_files.ipynb` or `14_create_fishtank_files.ipynb` — `regular/` pipelines' analysis inputs: `experiment_info.yaml`, then the MERlin data organization + run files, or fishtank's color usage/decoding strategy + run scripts
 - `notebooks/during_imaging/` — live QC watched in real time (stage-z drift, imaged FOVs, quick-look mosaics, spot-intensity QC, Dave timing)
 
 Standalone utility notebooks are also provided under `notebooks/misc/`:
