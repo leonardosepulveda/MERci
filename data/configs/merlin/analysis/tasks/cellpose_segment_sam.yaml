@@ -10,10 +10,7 @@
 #
 # Parameters below are grouped by where they're consumed: passed directly
 # to cellpose, vs. passed to other MERlin subfunctions (channel I/O,
-# downsample/upsample, mask post-processing, caching). `diameter` and
-# `anisotropy` are flagged separately -- both are declared with a default
-# but never actually referenced in MERlin's _run_analysis, so they're
-# dead/no-op regardless of value in the current MERlin code.
+# downsample/upsample, mask post-processing, caching).
 task: CellPoseSegmentSAM
 module: merlin.analysis.segment
 parameters:
@@ -27,6 +24,8 @@ parameters:
   tile_norm_blocksize: 0         # MERlin default: 0
   flow3D_smooth: 1               # MERlin default: 0 -- kept at the previously tuned value; only used when do_3D: true
   stitch_threshold: 0.25         # MERlin default: 0.25; only used when do_3D: false (MERlin's own manual stitcher -- keep non-zero, see cache/ note)
+  diameter: null                 # MERlin default: null (cellpose-SAM segments at the image's own scale); a number is in full-resolution pixels, divided by downsample_factor before reaching cellpose
+  anisotropy: null               # MERlin default: null; only used when do_3D: true. null = computed per FOV as z step / (microns_per_pixel * downsample_factor); a number overrides that
 
   # -- Passed to other MERlin subfunctions (not cellpose) --
   channel_1_name: DAPI
@@ -35,7 +34,3 @@ parameters:
   dump_segmented_images: false   # if true, also dumps the (resized) input channel image(s) for debugging
   expand_mask: 2                 # MERlin default: 0 -- kept at the previously tuned value; post-hoc mask dilation, applied after stitching
   use_old_segmentation: false    # MERlin default: false (always re-segment); if true, reloads a cached mask when one already exists
-
-  # -- Declared but dead/no-op in current MERlin code (never reach cellpose) --
-  diameter: null                 # MERlin default: null; not used by cellpose>=4.0's SAM model, not referenced in _run_analysis
-  anisotropy: 1                  # MERlin default: 1; not referenced in either eval() call regardless of value
