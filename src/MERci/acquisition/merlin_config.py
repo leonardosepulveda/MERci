@@ -294,12 +294,13 @@ def create_codebook_csv(
 # are commented out in the generated YAML (blank if the template has no
 # value for that field) so MERlin computes them; uncomment a field to pin an
 # explicit override instead. Any other field on the same task (e.g.
-# CellPoseSegmentSAM's GPU partition/gres, or its `time`, which it does not
-# estimate) is left active, unchanged.
+# CellPoseSegmentSAM's GPU partition/gres, which MERlin does not estimate)
+# is left active, unchanged.
 _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "FiducialCorrelationWarp": ("mem", "time"),
     "DeconvolutionPreprocess": ("mem", "time"),
-    "CellPoseSegmentSAM":      ("mem",),
+    # time: measured stages x2 (MERlin 4b30815).
+    "CellPoseSegmentSAM":      ("mem", "time"),
     # mem: estimate 1.5-1.8 GB vs. measured peak <= 0.4 GB (Sept 2026 runs).
     # time: 4-min floor, max projection measured (MERlin 9ad7a3e).
     "RegisterFovNeighbors":    ("mem", "time"),
