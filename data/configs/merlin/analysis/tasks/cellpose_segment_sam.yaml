@@ -25,7 +25,7 @@ parameters:
   flow3D_smooth: 1               # MERlin default: 0 -- kept at the previously tuned value; only used when do_3D: true
   stitch_threshold: 0.25         # MERlin default: 0.25; only used when do_3D: false (MERlin's own manual stitcher -- keep non-zero, see cache/ note)
   diameter: null                 # MERlin default: null (cellpose-SAM segments at the image's own scale); a number is in full-resolution pixels, divided by downsample_factor before reaching cellpose
-  anisotropy: null               # MERlin default: null; only used when do_3D: true. null = computed per FOV as z step / (microns_per_pixel * downsample_factor); a number overrides that
+  anisotropy: auto               # MERlin default: auto; only used when do_3D: true. auto = computed per FOV as z step / (microns_per_pixel * downsample_factor); a number overrides that (1 = no correction); null is a deprecated alias of auto
 
   # -- Passed to other MERlin subfunctions (not cellpose) --
   channel_1_name: DAPI
