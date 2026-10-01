@@ -1,6 +1,6 @@
 # MERci/analysis/batch_sample_review.py
 """
-Logic behind ``notebooks/after_imaging/05_batch_sample_review.ipynb`` --
+Logic behind ``notebooks/after_imaging/batch_sample_review.ipynb`` --
 reviewing a batch of finished (or in-progress) experiments together: backfill
 any acquisition-time analysis a sample's FOV scheduler missed, then load
 every sample's stats into one combined DataFrame for cross-sample plotting

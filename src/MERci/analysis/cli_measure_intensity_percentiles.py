@@ -2,7 +2,7 @@
 # MERci/analysis/cli_measure_intensity_percentiles.py
 """
 Standalone SLURM-array-task entry point for per-frame intensity-percentile
-tables (see ``after_imaging/12_measure_intensity_percentiles.ipynb``).
+tables (see ``after_imaging/measure_stats/measure_intensity_percentiles.ipynb``).
 
 Not part of the public MERci import surface -- meant to be invoked
 directly as a script, one call per array task (one task per image file,

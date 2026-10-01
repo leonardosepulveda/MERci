@@ -1,5 +1,5 @@
 # MERci/plots/view_intensity_stats_plots.py
-"""Plotting for ``notebooks/after_imaging/04_view_intensity_stats.ipynb`` (see
+"""Plotting for ``notebooks/after_imaging/measure_stats/view_intensity_stats.ipynb`` (see
 :mod:`MERci.analysis.view_intensity_stats` for the data-loading side)."""
 from __future__ import annotations
 

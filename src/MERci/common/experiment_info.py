@@ -96,7 +96,7 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
     returned ``sample_name``, except ``positions_*.txt``/``fov_layout_*.png``,
     which use :func:`positions_file_tag`. Use this wherever the true
     experiment id is needed, e.g. cluster paths (``DATA_HOME``/``MERLIN_HOME``/
-    ``FOLDER_NAME`` in after_imaging/13, ``resolve_cluster_sample_dir`` in 14).
+    ``FOLDER_NAME`` in create_experiment_info, ``resolve_cluster_sample_dir`` in create_merlin_files).
 
     Parameters
     ----------
@@ -125,7 +125,7 @@ def resolve_sample_identity(merci_dir: Path) -> tuple[str, str]:
 
 def resolve_data_home(merci_dir: Path) -> str:
     """
-    Infer ``DATA_HOME`` (after_imaging/13's cluster root directory holding the
+    Infer ``DATA_HOME`` (create_experiment_info's cluster root directory holding the
     raw data) from where this MERci clone actually lives on disk, instead of
     a hardcoded path.
 

@@ -19,7 +19,7 @@ the cluster (see CLAUDE.md's deployment model).
 
 Reads the manifest line at index ``$SLURM_ARRAY_TASK_ID`` (0-based; each line
 is one pending image file path, written by
-``07_cluster_submit_analysis.ipynb``) and runs ``analyze_file`` against it,
+``cluster_submit_analysis.ipynb``) and runs ``analyze_file`` against it,
 using the exact same ExperimentConfig-derived paths/kwargs
 (``MERci.scheduler.build_fov_task_kwargs``) that ``FOVScheduler`` uses when
 running locally, so cluster- and microscope-side analysis are never able to

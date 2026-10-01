@@ -11,7 +11,7 @@ projection statistic (and whether to Gaussian-smooth the resulting FFC
 field at all) best characterizes real vignetting without also absorbing
 real tissue signal -- min projection won that comparison (see that
 notebook's own Discussion), and is now also what
-``after_imaging/08_measure_tissue_thickness.ipynb``'s production pipeline
+``after_imaging/measure_thickness/measure_tissue_thickness.ipynb``'s production pipeline
 (:func:`MERci.analysis.elevation.calculate_ffc`) use this script for (with
 ``--statistics min`` only). ``mean`` is also available for
 ``calculate_ffc``'s ``method="mean"`` option.

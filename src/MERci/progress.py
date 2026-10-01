@@ -20,7 +20,7 @@ Round-level transferred:
     <analysis_dir>/done/round_<r:03d>.round_transferred
 
 SLURM submission bookkeeping (cluster-side, see cli_analyze_fov.py /
-cli_build_round_mosaic.py / 07_cluster_submit_analysis.ipynb):
+cli_build_round_mosaic.py / cluster_submit_analysis.ipynb):
     <analysis_dir>/done/round_<r:03d>.fov_submitted            (FOV array job)
     <analysis_dir>/done/round_<r:03d>.round_mosaic_submitted    (mosaic job)
 These hold the submitted SLURM job id as their (small) text content, not just

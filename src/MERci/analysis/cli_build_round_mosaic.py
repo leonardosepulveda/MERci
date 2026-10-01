@@ -5,7 +5,7 @@ Standalone SLURM-task entry point for building one round's mosaic(s).
 
 Not part of the public MERci import surface -- invoked directly as a script,
 one call per round (optionally as one task of a small SLURM array, see
-``07_cluster_submit_analysis.ipynb``):
+``cluster_submit_analysis.ipynb``):
 
     python /path/to/SAMPLE_DIR/MERci/src/MERci/analysis/cli_build_round_mosaic.py \\
         --sample-dir /path/to/SAMPLE_DIR \\

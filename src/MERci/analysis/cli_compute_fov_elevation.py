@@ -5,7 +5,7 @@ Standalone SLURM-array-task entry point for per-FOV tissue-elevation
 matrices + FFC-corrected, downsampled z-stacks
 (:func:`MERci.analysis.elevation.compute_fov_elevation`) -- one real full
 z-stack read per FOV, one task per FOV. Built for
-``after_imaging/08_measure_tissue_thickness.ipynb``'s production tissue-
+``after_imaging/measure_thickness/measure_tissue_thickness.ipynb``'s production tissue-
 elevation pipeline (promoted from a local, unshipped elevation-heatmap
 test notebook's investigation), where reading every real FOV's full
 z-stack serially would

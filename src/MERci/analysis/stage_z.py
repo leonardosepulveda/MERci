@@ -341,7 +341,7 @@ def positions_to_grid_indices(fov_ids: List[int], meta) -> Dict[int, Tuple[int, 
     Stage ``(x, y)`` positions -> integer ``(x_idx, y_idx)`` grid indices --
     round to the nearest integer micron, then rank each axis's unique
     values, which is robust to float imprecision on a regular grid. Same
-    approach as ``after_imaging/04_view_intensity_stats.ipynb``'s /
+    approach as ``after_imaging/measure_stats/view_intensity_stats.ipynb``'s /
     ``misc/measure_tissue_thickness_test.ipynb``'s own heatmaps use.
     """
     xs = np.array([round(meta.fovs[f].position[0]) for f in fov_ids])

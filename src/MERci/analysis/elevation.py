@@ -5,14 +5,14 @@ the FOV grid, as an elevation-map heatmap, plus z-sweep GIF/MP4s of the
 downsampled, flat-field-corrected DAPI signal.
 
 Production tissue-thickness measurement for
-``after_imaging/08_measure_tissue_thickness.ipynb`` (replacing the per-FOV
+``after_imaging/measure_thickness/measure_tissue_thickness.ipynb`` (replacing the per-FOV
 Counter/true-pixel-count approach in :mod:`MERci.analysis.fov`, which other
 notebooks still use). Algorithm rationale, including why the FFC field
 comes from INTERIOR FOVs and why "min" is the default z-projection, came
 from two local (unshipped) test notebooks: an elevation-heatmap one and an
 FFC-method comparison.
 
-Pipeline (notebook 08 shows the wiring and SLURM options):
+Pipeline (``measure_tissue_thickness.ipynb`` shows the wiring and SLURM options):
 
 1. :func:`identify_boundary_fovs`        -- exterior vs. interior FOVs + grid indices
 2. :func:`calculate_ffc`                 -- FFC field from the interior FOVs'

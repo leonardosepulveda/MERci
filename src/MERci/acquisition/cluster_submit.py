@@ -3,7 +3,7 @@
 Build and submit SLURM array jobs that run MERci's own FOV/round QC analysis
 (``analyze_file`` / ``build_round_mosaics``) on a cluster, reading data that
 has already landed on cluster storage (see
-``07_cluster_submit_analysis.ipynb``).
+``cluster_submit_analysis.ipynb``).
 
 Follows the same sbatch conventions as ``acquisition/fishtank_config.py``'s
 ``_sbatch_header`` (this is FOV-parallel array work, like fishtank's
@@ -329,7 +329,7 @@ def build_fov_completeness_array_script(
     job_name:           str = "merci_completeness",
 ) -> Path:
     """``cli_check_fov_completeness.py`` per pending FOV, checking all of
-    *round_ids* (``after_imaging/10_check_fov_completeness.ipynb``)."""
+    *round_ids* (``after_imaging/check_fov_completeness.ipynb``)."""
     return _job_script(
         _CLI_FOV_COMPLETENESS,
         [f"--round-info-csv {round_info_csv}", f"--positions-txt {positions_txt}",
@@ -356,7 +356,7 @@ def build_intensity_percentiles_array_script(
 ) -> Path:
     """
     ``cli_measure_intensity_percentiles.py`` per image file
-    (``after_imaging/12_measure_intensity_percentiles.ipynb``). Defaults are
+    (``after_imaging/measure_stats/measure_intensity_percentiles.ipynb``). Defaults are
     sized from a real run on 215-frame 2304x2304 FOVs: about 50 s and 260 MB
     per file.
     """
@@ -429,7 +429,7 @@ def is_job_active(job_id: int) -> bool:
     return state is not None and state.upper() in _ACTIVE_STATES
 
 
-# ── Notebook-level driving functions (07_cluster_submit_analysis.ipynb) ──────
+# ── Notebook-level driving functions (cluster_submit_analysis.ipynb) ──────
 
 def submit_pending_fov_analysis(
     config, meta, tracker, sample_dir: Path, manifests_dir: Path,
@@ -520,7 +520,7 @@ def run_submission_pass(
     """
     One pass of :func:`submit_pending_fov_analysis` +
     :func:`submit_pending_round_mosaics`, plus a fresh :meth:`tracker.summary`
-    -- what ``07_cluster_submit_analysis.ipynb``'s manual and continuous-loop
+    -- what ``cluster_submit_analysis.ipynb``'s manual and continuous-loop
     cells both call. Returns ``{"fov_submitted", "mosaic_submitted", "summary"}``.
     """
     fov_submitted = submit_pending_fov_analysis(

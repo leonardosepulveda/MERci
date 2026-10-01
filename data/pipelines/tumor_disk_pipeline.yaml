@@ -6,7 +6,7 @@
 
 id: tumor_disk
 label: "Tumor -- Spinning-disk confocal"
-analysis_backend: merlin   # notebooks 05/07 use the MERlin variants
+analysis_backend: merlin   # after_imaging/create_submit_files/ uses create_merlin_files
 
 microscope: ST2            # no 750 nm channel
 objective: "60X"
@@ -111,7 +111,7 @@ merlin:
       # The warp's reference_channel follows it.
       register_fov_neighbors:
         max_projection_data_channel: DAPI
-      # Notebook 07 replaces this with every imaged target.
+      # create_merlin_files replaces this with every imaged target.
       smfish_signal:
         channel_names: ["CENPA"]
       # SumSignal measures every sequential channel, whatever this lists.
