@@ -948,6 +948,9 @@ def build_merlin_analysis_parameters(
     gets that channel as its ``reference_channel``, so every round is
     registered into the same round the fov positions were measured in.
 
+    A recipe with no ``optimize_iteration``/``decode`` atom gets
+    ``save_pixel_histogram: false`` on ``deconvolution_preprocess``.
+
     Returns
     -------
     Path : *output_path*, unchanged
@@ -1018,6 +1021,11 @@ def build_merlin_analysis_parameters(
                 refs["fiducial_template_task"] = "FiducialTemplate"
             if stitch_channel is not None:
                 refs["reference_channel"] = stitch_channel
+        elif name == "deconvolution_preprocess" and not {"optimize_iteration", "decode"} & set(task_names):
+            # The histogram only seeds Optimize's scale factors, and MERlin
+            # builds it per codebook bit -- a decode-free dataorg (smFISH/
+            # immuno) has none of those bits and every fov crashes.
+            params["save_pixel_histogram"] = False
         resolve = {_WARP: warp_task_name, _ALIGN: align_task_name,
                    _SEGMENT: segment_task_name, _OPTIMIZE: f"Optimize{n_opt:02d}"}
         params.update({k: resolve.get(v, v) for k, v in refs.items()})
