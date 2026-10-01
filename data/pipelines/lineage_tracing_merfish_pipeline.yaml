@@ -5,7 +5,7 @@
 
 id: lineage_tracing_merfish
 label: "Lineage Tracing -- MERFISH"
-analysis_backend: merlin   # notebooks 05/07 use the MERlin variants
+analysis_backend: merlin   # after_imaging/create_submit_files/ uses create_merlin_files
 
 microscope: ST2            # no 750 nm channel
 objective: "60X"

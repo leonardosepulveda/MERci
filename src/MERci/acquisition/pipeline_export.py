@@ -23,10 +23,12 @@ Every notebook's first cell resolves ``MERCI_DIR`` by counting parent
 directories up from its own location (see the "Deployment model" section of
 CLAUDE.md) -- inside ``MERci/notebooks/`` that count depends on how deeply
 the notebook is nested (2-4 levels, per variant). Once exported, every copy
-sits at the same depth -- ``SAMPLE_DIR/notebooks/<stage>/<name>.ipynb`` --
-with ``MERci`` now a *sibling* of ``notebooks/`` instead of an ancestor, so a
-single fixed ``MERCI_DIR`` line works for every exported notebook regardless
-of its original nesting; see ``_rewrite_merci_dir_line``.
+sits at ``SAMPLE_DIR/notebooks/<stage>/<name>.ipynb`` -- or one level deeper
+for after_imaging's own subfolders, which are kept --
+with ``MERci`` now a *sibling* of ``notebooks/`` instead of an ancestor, so
+one ``MERCI_DIR`` line (plus one ``.parent`` per subfolder level) works for
+every exported notebook regardless of its original nesting; see
+``_rewrite_merci_dir_line``.
 """
 from __future__ import annotations
 
@@ -50,14 +52,14 @@ PIPELINES: Dict[str, str] = {
     "multi_z":                         "before_imaging/multi_z",
 }
 
-# after_imaging/ holds both backends' 14_create_*_files side by side --
-# exactly one is copied per export, picked by the chosen pipeline's
-# analysis_backend (see export_pipeline_notebooks). These and
-# 13_create_experiment_info serve the before_imaging/regular/ pipelines only;
+# after_imaging/create_submit_files/ holds both backends' create_*_files side
+# by side -- exactly one is copied per export, picked by the chosen
+# pipeline's analysis_backend (see export_pipeline_notebooks). These and
+# create_experiment_info serve the before_imaging/regular/ pipelines only;
 # multi_z (no pipeline.yaml) has its own copies under before_imaging/multi_z/.
-_MERLIN_ONLY_NAMES   = {"14_create_merlin_files.ipynb"}
-_FISHTANK_ONLY_NAMES = {"14_create_fishtank_files.ipynb"}
-_REGULAR_ONLY_NAMES  = {"13_create_experiment_info.ipynb"} | _MERLIN_ONLY_NAMES | _FISHTANK_ONLY_NAMES
+_MERLIN_ONLY_NAMES   = {"create_merlin_files.ipynb"}
+_FISHTANK_ONLY_NAMES = {"create_fishtank_files.ipynb"}
+_REGULAR_ONLY_NAMES  = {"create_experiment_info.ipynb"} | _MERLIN_ONLY_NAMES | _FISHTANK_ONLY_NAMES
 
 
 class PipelineInfo(NamedTuple):
@@ -103,18 +105,20 @@ def describe_pipelines(merci_dir: Path) -> Dict[str, PipelineInfo]:
 _MERCI_DIR_RE = re.compile(
     r"MERCI_DIR(\s*)=(\s*)Path\(os\.getcwd\(\)\)(?:\.parent)+.*"
 )
-_MERCI_DIR_REPLACEMENT = (
-    'MERCI_DIR  = Path(os.getcwd()).parent.parent / "MERci"  '
-    "# MERci/ (sibling of this notebooks/ folder -- see notebooks/README.md)"
-)
+def _merci_dir_replacement(depth: int) -> str:
+    return (
+        f'MERCI_DIR  = Path(os.getcwd()).parent.parent{".parent" * depth} / "MERci"  '
+        "# MERci/ (sibling of this notebooks/ folder -- see notebooks/README.md)"
+    )
 
 
-def _rewrite_merci_dir_line(notebook: dict) -> bool:
+def _rewrite_merci_dir_line(notebook: dict, depth: int = 0) -> bool:
     """Rewrite MERCI_DIR's parent-counting line to the fixed sibling-MERci
-    formula, in every code cell of `notebook` (in place). Returns whether a
+    formula, in every code cell of `notebook` (in place); `depth` is how many
+    subfolders below `notebooks/<stage>/` the copy sits. Returns whether a
     match was found -- every exported notebook is expected to have exactly
     one."""
-    return _subn_code_cells(notebook, _MERCI_DIR_RE, _MERCI_DIR_REPLACEMENT)
+    return _subn_code_cells(notebook, _MERCI_DIR_RE, _merci_dir_replacement(depth))
 
 
 def _subn_code_cells(notebook: dict, pattern: "re.Pattern", replacement: str) -> bool:
@@ -149,22 +153,23 @@ _PIPELINE_CONFIG_RE = re.compile(
     r'MERCI_DIR\s*/\s*"data"\s*/\s*"pipelines"\s*/\s*f"\{PIPELINE_ID\}_pipeline\.yaml"'
     r'\)'
 )
-_PIPELINE_CONFIG_REPLACEMENT = (
-    'PIPELINE_CONFIG = load_pipeline_config('
-    'Path(os.getcwd()).parent / "pipeline.yaml", data_dir=MERCI_DIR / "data")  '
-    "# edit pipeline.yaml here, not in MERci/\n"
-    'PIPELINE_ID     = PIPELINE_CONFIG.id  '
-    "# derived from pipeline.yaml's own `id:` field, not hand-typed"
-)
+def _pipeline_config_replacement(depth: int) -> str:
+    return (
+        'PIPELINE_CONFIG = load_pipeline_config('
+        f'Path(os.getcwd()).parent{".parent" * depth} / "pipeline.yaml", data_dir=MERCI_DIR / "data")  '
+        "# edit pipeline.yaml here, not in MERci/\n"
+        'PIPELINE_ID     = PIPELINE_CONFIG.id  '
+        "# derived from pipeline.yaml's own `id:` field, not hand-typed"
+    )
 
 
-def _rewrite_pipeline_config_line(notebook: dict) -> bool:
+def _rewrite_pipeline_config_line(notebook: dict, depth: int = 0) -> bool:
     """Rewrite `PIPELINE_ID = "..."` + `PIPELINE_CONFIG = load_pipeline_config(
     MERCI_DIR / ...)` to load the pipeline.yaml exported alongside this
     notebooks/ folder instead (still passing MERCI_DIR/data as data_dir, for
     the shared power table) and derive PIPELINE_ID from it, in every code
     cell of `notebook` (in place). Returns whether a match was found."""
-    return _subn_code_cells(notebook, _PIPELINE_CONFIG_RE, _PIPELINE_CONFIG_REPLACEMENT)
+    return _subn_code_cells(notebook, _PIPELINE_CONFIG_RE, _pipeline_config_replacement(depth))
 
 
 # ── README adaptation ─────────────────────────────────────────────────────────
@@ -226,15 +231,22 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
-def _copy_notebooks(src_dir: Path, dst_dir: Path, exclude: set = frozenset()) -> None:
-    for nb_path in sorted(src_dir.glob("*.ipynb")):
-        if nb_path.name in exclude:
+def _copy_notebooks(src_dir: Path, dst_dir: Path, exclude: set = frozenset(),
+                    recursive: bool = False) -> None:
+    """Copy `src_dir`'s notebooks to `dst_dir`, keeping subfolders when
+    `recursive` (after_imaging/'s own grouping)."""
+    nb_paths = src_dir.rglob("*.ipynb") if recursive else src_dir.glob("*.ipynb")
+    for nb_path in sorted(nb_paths):
+        rel = nb_path.relative_to(src_dir)
+        if nb_path.name in exclude or ".ipynb_checkpoints" in rel.parts:
             continue
+        depth = len(rel.parts) - 1
         notebook = json.loads(nb_path.read_text(encoding="utf-8"))
-        if not _rewrite_merci_dir_line(notebook):
+        if not _rewrite_merci_dir_line(notebook, depth):
             raise ValueError(f"No MERCI_DIR line found in {nb_path}")
-        _rewrite_pipeline_config_line(notebook)
-        (dst_dir / nb_path.name).write_text(
+        _rewrite_pipeline_config_line(notebook, depth)
+        (dst_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (dst_dir / rel).write_text(
             json.dumps(notebook, indent=1, ensure_ascii=False), encoding="utf-8"
         )
 
@@ -314,8 +326,8 @@ def export_pipeline_notebooks(
 
     has_pipeline_yaml = _copy_pipeline_config(merci_dir, pipeline_id, out_dir)
 
-    # after_imaging/ holds both backends' 14_create_*_files side by side --
-    # copy only the one matching this pipeline's analysis_backend.
+    # after_imaging/create_submit_files/ holds both backends' create_*_files
+    # side by side -- copy only the one matching this pipeline's analysis_backend.
     if has_pipeline_yaml:
         src_yaml_path = merci_dir / "data" / "pipelines" / f"{pipeline_id}_pipeline.yaml"
         backend = yaml.safe_load(src_yaml_path.read_text(encoding="utf-8"))["analysis_backend"]
@@ -326,7 +338,7 @@ def export_pipeline_notebooks(
     pipeline_src = notebooks_dir / PIPELINES[pipeline_id]
     _copy_notebooks(pipeline_src, out_before)
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
-    _copy_notebooks(notebooks_dir / "after_imaging", out_after, exclude=after_exclude)
+    _copy_notebooks(notebooks_dir / "after_imaging", out_after, exclude=after_exclude, recursive=True)
 
     (out_dir / "README.md").write_text(
         _adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml), encoding="utf-8"

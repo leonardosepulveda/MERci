@@ -6,7 +6,7 @@
 
 id: lineage_tracing_lineage
 label: "Lineage Tracing -- Lineage (fishtank)"
-analysis_backend: fishtank   # notebooks 05/07 use the fishtank variants
+analysis_backend: fishtank   # after_imaging/create_submit_files/ uses create_fishtank_files
 
 microscope: ST2
 objective: "60X"
@@ -41,7 +41,7 @@ imaging:
   transit_n_blank: 2    # blank frames per transit FOV
 
 # Imaging recipe only; fishtank's color_usage round tags are entered in
-# notebook 05.
+# create_fishtank_files.
 dataorganization:
   round_bit_color_csv: configs/round_bit_color_map/lineage_tracing_lineage.csv
 
@@ -50,7 +50,7 @@ fluidics:
   include_final_cleave: false   # no cleave after the last imaging round
   first_hyb_no_cleave: true     # first hyb after the cells round has no cleave
 
-# fishtank: color_usage colors (notebook 05) and decode targets (05/07).
+# fishtank: color_usage colors and decode targets (create_fishtank_files).
 # lineage_lib_version selects data/configs/fishtank/reference/<version>/;
 # `{lib_version}` in the file names below is replaced with it.
 fishtank:

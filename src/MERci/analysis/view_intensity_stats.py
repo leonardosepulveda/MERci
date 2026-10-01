@@ -1,8 +1,8 @@
 # MERci/analysis/view_intensity_stats.py
 """
-Logic behind ``notebooks/after_imaging/04_view_intensity_stats.ipynb`` --
+Logic behind ``notebooks/after_imaging/measure_stats/view_intensity_stats.ipynb`` --
 loading the per-FOV intensity stats CSVs the FOV scheduler
-(``01_fov_scheduler.ipynb``) writes, annotated with round/FOV/stage-position/
+(``fov_scheduler.ipynb``) writes, annotated with round/FOV/stage-position/
 z/color, into one DataFrame for plotting (see
 :mod:`MERci.plots.view_intensity_stats_plots`).
 """

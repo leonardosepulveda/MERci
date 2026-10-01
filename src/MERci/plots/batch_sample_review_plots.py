@@ -1,5 +1,5 @@
 # MERci/plots/batch_sample_review_plots.py
-"""Plotting for ``notebooks/after_imaging/05_batch_sample_review.ipynb`` (see
+"""Plotting for ``notebooks/after_imaging/batch_sample_review.ipynb`` (see
 :mod:`MERci.analysis.batch_sample_review` for the backfill/loading side)."""
 from __future__ import annotations
 

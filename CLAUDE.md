@@ -35,7 +35,8 @@ This repo is cloned into each experiment folder as `SAMPLE_DIR/MERci/`. No
 
 - `after_imaging/`, `during_imaging/`, `misc/`: 2 levels
   (`MERCI_DIR = Path(os.getcwd()).parent.parent`)
-- `before_imaging/{regular,multi_z}/` (3 levels): `.parent.parent.parent`
+- `before_imaging/{regular,multi_z}/` and `after_imaging/<group>/` (3 levels):
+  `.parent.parent.parent`
 - repo-root `tests/` (1 level, `.parent`) and `tests/<subfolder>/` (2 levels)
 
 `SAMPLE_DIR = MERCI_DIR.parent`. Never hardcode absolute paths in notebooks.
@@ -47,7 +48,8 @@ copies one pipeline's notebooks, flattened, plus the shared
 instead of inside it (`MERci/acquisition/pipeline_export.py`). There, `MERci`
 is a sibling rather than an ancestor, so every exported notebook resolves
 `MERCI_DIR = Path(os.getcwd()).parent.parent / "MERci"` — one fixed formula
-regardless of the original notebook's nesting depth. The export also copies
+regardless of the original notebook's nesting depth (plus one `.parent` in
+`after_imaging/<group>/`, whose subfolders the export keeps). The export also copies
 the chosen pipeline's `pipeline.yaml`+`round_bit_color.csv` (if it has one —
 every pipeline except `multi_z`) to `SAMPLE_DIR/notebooks/`, and rewrites
 every notebook that loads it to read *that* copy instead of the one under
@@ -64,15 +66,15 @@ targets) now lives entirely in that pipeline's own
 `data/pipelines/<id>_pipeline.yaml` (`acquisition/pipeline_config.py`); every
 notebook's second cell sets `PIPELINE_ID` and loads it into
 `PIPELINE_CONFIG`. Only steps 01-04 live here; the analysis inputs are
-`after_imaging/13_create_experiment_info` + `14_create_{merlin,fishtank}_files`
-(`analysis_backend: merlin` vs `fishtank`, side by side —
-`pipeline_export.py` copies only the matching one, and none of 13/14 for
-`multi_z`). See `regular/README.md`.
+`after_imaging/create_submit_files/`: `create_experiment_info`, then
+`create_{merlin,fishtank}_files` (`analysis_backend: merlin` vs `fishtank`,
+side by side — `pipeline_export.py` copies only the matching one, and none of
+these for `multi_z`). See `regular/README.md`.
 
 **`before_imaging/multi_z/`** — a separate pipeline (no `pipeline.yaml` yet)
 for a variable-z-per-FOV acquisition: images a full-depth DAPI (cells) round
 first, measures each FOV's real tissue thickness
-(`after_imaging/08_measure_tissue_thickness.ipynb`, since that step runs
+(`after_imaging/measure_thickness/measure_tissue_thickness.ipynb`, since that step runs
 mid-acquisition once the cells round exists), then generates one bits HAL
 config per z-depth tier. Own 9-notebook sequence — see `multi_z/README.md`.
 
@@ -131,8 +133,8 @@ src/MERci/
     cell_mapping.py        per-cell identity matching between two segmentations of one tissue
     fast_spot_quantification.py  per-bit hyb-reagent spot QC (during_imaging)
     imaged_fovs.py         which round a live acquisition-progress view watches
-    view_intensity_stats.py  load annotated per-FOV stats (after_imaging/04)
-    batch_sample_review.py backfill + combined stats across a batch of samples (after_imaging/05)
+    view_intensity_stats.py  load annotated per-FOV stats (after_imaging/measure_stats/view_intensity_stats)
+    batch_sample_review.py backfill + combined stats across a batch of samples (after_imaging/batch_sample_review)
     cli_*.py               standalone SLURM-array-task scripts (self-locating, no pip install
                            needed), one per cluster_submit builder; shared args in _cli_common.py
   live_round_mosaic.py     LiveRoundMosaicBuilder -- live quick-look mosaic (during_imaging/round_mosaics)
@@ -154,7 +156,7 @@ notebooks/
   before_imaging/    Pre-experiment, run in order. Two pipelines:
                      regular/ (tumor_epi, tumor_disk, lineage_tracing_merfish,
                      lineage_tracing_lineage -- one shared notebook set, see its own
-                     README.md; its analysis-input steps are after_imaging/13-14),
+                     README.md; its analysis-input steps are after_imaging/create_submit_files/),
                      multi_z/ (own 9-notebook sequence, see its own README.md)
     00  select_pipeline (opt.)               pick a pipeline, export it + after/during_imaging
                                               to SAMPLE_DIR/notebooks/ (sibling of MERci/)
@@ -163,30 +165,39 @@ notebooks/
     02b create_positions_from_boundaries     FOV scanning positions
     03  create_round_info                    round-bit-color map, round_info.csv
     04  create_dave_config                   Dave experiment-recipe XMLs; hybs recipe annotated with per-round bit/color XML comments
-  after_imaging/     Online analysis, run during the experiment
-    01  fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
-    02  round_scheduler            round-level scheduler (mosaics, optional transfer)
-    03  view_mosaics               display per-color mosaics
-    04  view_intensity_stats       per-frame intensity stats over rounds
-    05  batch_sample_review        post-acquisition: verify/backfill a batch, compare across it
-    06  map_cells_across_microscopes  cross-microscope cell-identity mapping between two experiments of the same sample (see its own intro cell for the staged plan)
-    07  cluster_submit_analysis    submit SLURM array jobs for QC (alternative to local 01/02)
-    08  measure_tissue_thickness   per-FOV tissue z-extent + thickness heatmap/mosaic/GIF (any pipeline)
-    09  multi_z_margin_export      multi_z only: margin/savings + trimmed-depth verify + z-table export, feeds multi_z's own notebook 04 -- continues 08's own state (see its own intro cell)
-    10  check_fov_completeness     per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
-    11  compare_tissue_thickness_merfish_lineage  lineage_tracing only: 08's heatmap/mosaic/movie for a
-                                              sample's merfish + lineage sibling acquisitions, side by
-                                              side (single colorbar/scale bar/z, depth-matched movie)
-    12  measure_intensity_percentiles  per-frame (frame, z, color, min, p25/p50/p75/p95, max)
-                                              intensity table, one SLURM array task per FOV movie file,
-                                              across every declared round plus any undeclared
-                                              "<round>_old[_N]" test-reimage folder (see
-                                              MERci.common.metadata.discover_ad_hoc_round_dirs);
-                                              cached as parquet
-    13  create_experiment_info     regular/ pipelines only: metadata/experiment_info.yaml
-    14  create_merlin_files        regular/, analysis_backend: merlin -- MERlin data-org CSV + SAMPLE_DIR/merlin/
-        create_fishtank_files      regular/, analysis_backend: fishtank -- color_usage/decoding_strategy +
-                                              SAMPLE_DIR/fishtank/
+  after_imaging/     Online analysis, run during the experiment (no run-order numbers)
+    measure_stats/
+      fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
+      round_scheduler            round-level scheduler (mosaics, optional transfer)
+      view_mosaics               display per-color mosaics
+      view_intensity_stats       per-frame intensity stats over rounds
+      measure_intensity_percentiles  per-frame (frame, z, color, min, p25/p50/p75/p95, max)
+                                 intensity table, one SLURM array task per FOV movie file,
+                                 across every declared round plus any undeclared
+                                 "<round>_old[_N]" test-reimage folder (see
+                                 MERci.common.metadata.discover_ad_hoc_round_dirs);
+                                 cached as parquet
+    measure_thickness/
+      measure_tissue_thickness   per-FOV tissue z-extent + thickness heatmap/mosaic/GIF (any pipeline)
+      compare_tissue_thickness_merfish_lineage  lineage_tracing only: measure_tissue_thickness's
+                                 heatmap/mosaic/movie for a sample's merfish + lineage sibling
+                                 acquisitions, side by side (single colorbar/scale bar/z,
+                                 depth-matched movie)
+    create_submit_files/
+      create_experiment_info     regular/ pipelines only: metadata/experiment_info.yaml
+      create_merlin_files        regular/, analysis_backend: merlin -- MERlin data-org CSV + SAMPLE_DIR/merlin/
+      create_fishtank_files      regular/, analysis_backend: fishtank -- color_usage/decoding_strategy +
+                                 SAMPLE_DIR/fishtank/
+    batch_sample_review          post-acquisition: verify/backfill a batch, compare across it
+    map_cells_across_microscopes cross-microscope cell-identity mapping between two experiments of the
+                                 same sample (see its own intro cell for the staged plan)
+    cluster_submit_analysis      submit SLURM array jobs for QC (alternative to local fov/round_scheduler)
+    multi_z_margin_export        multi_z only: margin/savings + trimmed-depth verify + z-table export,
+                                 feeds multi_z's own notebook 04 -- continues measure_tissue_thickness's
+                                 own state (see its own intro cell)
+    check_fov_completeness       per-FOV raw-file existence + zarr chunk-integrity check (catches truncated writes)
+    Cache folders under analysis/cache/ keep each notebook's original NOTEBOOK_NAME
+    (e.g. 12_measure_intensity_percentiles), so existing caches stay valid.
   during_imaging/    Live QC meant to be watched in real time
     stage_z_drift          stage-z drift from .off sidecars, one line per round
     imaged_fovs             live acquisition-progress map
@@ -210,8 +221,8 @@ analysis folder outside this repo and come back as `prompt_history/` handoffs.
 ## Architecture
 
 **Pre-experiment workflow**: run the 5 `regular/` notebooks, then
-`after_imaging/13`-`14` (or the 9 `multi_z/` ones, plus
-`after_imaging/08_measure_tissue_thickness.ipynb` mid-sequence) above in
+`after_imaging/create_submit_files/` (or the 9 `multi_z/` ones, plus
+`after_imaging/measure_thickness/measure_tissue_thickness.ipynb` mid-sequence) above in
 order for the acquisition being prepared. Each writes inputs the next one
 reads (HAL/shutter → positions → round_info → Dave config → experiment_info
 → merlin data-org + run files / fishtank color-usage + scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)
@@ -224,7 +235,7 @@ shared across HAL config, shutter file, and frame table for one round.
 `analysis/done/`. `FOVScheduler`/`RoundScheduler` run
 the continuous analysis loops (see `scheduler.py`'s own docstring for the
 full contract). QC analysis can instead run on a SLURM cluster via
-`07_cluster_submit_analysis.ipynb` + `cli_analyze_fov.py`/
+`cluster_submit_analysis.ipynb` + `cli_analyze_fov.py`/
 `cli_build_round_mosaic.py` + `cluster_submit.py`.
 
 **Key data files**: `round_info.csv` (`imaging_round`, `series` format

@@ -29,9 +29,9 @@ reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 | 02 | `02_create_positions_from_boundaries.ipynb` | either |
 | 03 | `03_create_round_info.ipynb` | either |
 | 04 | `04_create_dave_config.ipynb` | either |
-| -- | `after_imaging/13_create_experiment_info.ipynb` | either |
-| -- | `after_imaging/14_create_merlin_files.ipynb` | `analysis_backend: merlin` |
-| -- | `after_imaging/14_create_fishtank_files.ipynb` | `analysis_backend: fishtank` |
+| -- | `after_imaging/create_submit_files/create_experiment_info.ipynb` | either |
+| -- | `after_imaging/create_submit_files/create_merlin_files.ipynb` | `analysis_backend: merlin` |
+| -- | `after_imaging/create_submit_files/create_fishtank_files.ipynb` | `analysis_backend: fishtank` |
 
 Steps 01-04 are all that's needed before imaging. The analysis inputs
 (`experiment_info.yaml`, then the MERlin data organization + run files, or
