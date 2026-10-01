@@ -212,6 +212,38 @@ def add_frame_table_column(round_info: pd.DataFrame, settings_dir: Path, metadat
     return out
 
 
+def match_bits_hal_configs(round_bit_color: pd.DataFrame, bits_hal_configs: Sequence[Path],
+                           metadata_dir: Path) -> Dict[int, str]:
+    """
+    ``{hyb_round: hal_config file name}`` -- for each round in
+    *round_bit_color* (columns ``round``/``color``), the bits HAL config
+    whose frame table images every colour that round needs with the fewest
+    colours overall (so a 650-only round gets a 488+650 config, not
+    488+560+650, which would make MERlin expect frames that aren't there).
+    Raises ``ValueError`` if a round has no candidate or two candidates tie.
+    """
+    colors = {}
+    for p in bits_hal_configs:
+        ft = find_frame_table_for_hal_config(p, metadata_dir)
+        if ft is None:
+            log.warning("match_bits_hal_configs: no frame table for %s, skipped", p.name)
+            continue
+        colors[p.name] = set(pd.read_csv(ft)["color"].dropna().astype(int))
+
+    out = {}
+    for rnd, grp in round_bit_color.groupby("round"):
+        need = set(grp["color"].astype(int))
+        fits = sorted((len(c), name) for name, c in colors.items() if need <= c)
+        if not fits:
+            raise ValueError(f"No bits HAL config images round {rnd}'s colours {sorted(need)} "
+                             f"(available: { {n: sorted(c) for n, c in colors.items()} }).")
+        if len(fits) > 1 and fits[0][0] == fits[1][0]:
+            raise ValueError(f"Round {rnd}: configs {[n for k, n in fits if k == fits[0][0]]} fit "
+                             f"colours {sorted(need)} equally well -- set BITS_HAL_CONFIG by hand.")
+        out[int(rnd)] = fits[0][1]
+    return out
+
+
 def round_frame_tables(round_info: pd.DataFrame, settings_dir: Path, metadata_dir: Path
                        ) -> Tuple[Path, Dict[int, Path]]:
     """
@@ -348,7 +380,7 @@ def _expand_hyb_drive_groups(
 def create_round_info(
     microscope:       str,
     n_bits:           int,
-    bits_hal_config:  str,
+    bits_hal_config:  Union[str, Dict[int, str]],
     cells_hal_config: str,
     sample_dir:       Path,
     positions_txt:    Optional[Path] = None,
@@ -367,7 +399,9 @@ def create_round_info(
     ----------
     microscope        : microscope identifier in lowercase, e.g. ``"mf3"``
     n_bits            : number of bits (hybridisation) rounds
-    bits_hal_config   : HAL config filename for bits rounds (with ``.xml``)
+    bits_hal_config   : HAL config filename for bits rounds (with ``.xml``),
+                        or ``{bit_idx: filename}`` for one per round (see
+                        :func:`match_bits_hal_configs`)
     cells_hal_config  : HAL config filename for the cells round (with ``.xml``)
     sample_dir        : experiment root directory; used to build ``data_dir`` paths
     positions_txt     : the experiment's positions file, used to count real
@@ -454,7 +488,8 @@ def create_round_info(
             "imaging_round": bit_idx + 1,
             "imaging_type":  "bits",
             "series":        f"hal-{mic}_{bit_idx:02d}_{{fov:0{pad}d}}",
-            "hal_config":    bits_hal_config,
+            "hal_config":    (bits_hal_config[bit_idx] if isinstance(bits_hal_config, dict)
+                              else bits_hal_config),
             "data_dir":      str(bits_root / "data" / "hybs" / f"H{bit_idx:02d}"),
         })
 
