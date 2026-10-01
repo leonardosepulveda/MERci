@@ -50,11 +50,14 @@ PIPELINES: Dict[str, str] = {
     "multi_z":                         "before_imaging/multi_z",
 }
 
-# before_imaging/regular/ holds both backends' 05/07 side by side -- exactly
-# one pair is copied per export, picked by the chosen pipeline's
-# analysis_backend (see export_pipeline_notebooks).
-_MERLIN_ONLY_NAMES   = {"05_create_data_organization.ipynb", "07_create_merlin_scripts.ipynb"}
-_FISHTANK_ONLY_NAMES = {"05_create_color_usage.ipynb", "07_create_fishtank_scripts.ipynb"}
+# after_imaging/ holds both backends' 14_create_*_files side by side --
+# exactly one is copied per export, picked by the chosen pipeline's
+# analysis_backend (see export_pipeline_notebooks). These and
+# 13_create_experiment_info serve the before_imaging/regular/ pipelines only;
+# multi_z (no pipeline.yaml) has its own copies under before_imaging/multi_z/.
+_MERLIN_ONLY_NAMES   = {"14_create_merlin_files.ipynb"}
+_FISHTANK_ONLY_NAMES = {"14_create_fishtank_files.ipynb"}
+_REGULAR_ONLY_NAMES  = {"13_create_experiment_info.ipynb"} | _MERLIN_ONLY_NAMES | _FISHTANK_ONLY_NAMES
 
 
 class PipelineInfo(NamedTuple):
@@ -211,7 +214,8 @@ def _adapt_readme(pipeline_src: Path, pipeline_id: str, has_pipeline_yaml: bool)
         "notebooks/\n"
         "  before_imaging/   this pipeline's pre-experiment notebooks, run in order\n"
         "  during_imaging/   live QC notebooks, run during acquisition\n"
-        "  after_imaging/    online-analysis notebooks, run during/after acquisition\n"
+        "  after_imaging/    online-analysis notebooks, run during/after acquisition,\n"
+        "                    plus experiment_info + MERlin/fishtank file generation\n"
         f"{pipeline_yaml_line}"
         "```\n\n"
         "The `MERci/` clone this was exported from is untouched; re-run "
@@ -310,18 +314,19 @@ def export_pipeline_notebooks(
 
     has_pipeline_yaml = _copy_pipeline_config(merci_dir, pipeline_id, out_dir)
 
-    # before_imaging/regular/ holds both backends' 05/07 side by side --
-    # copy only the pair matching this pipeline's analysis_backend.
-    exclude = set()
+    # after_imaging/ holds both backends' 14_create_*_files side by side --
+    # copy only the one matching this pipeline's analysis_backend.
     if has_pipeline_yaml:
         src_yaml_path = merci_dir / "data" / "pipelines" / f"{pipeline_id}_pipeline.yaml"
         backend = yaml.safe_load(src_yaml_path.read_text(encoding="utf-8"))["analysis_backend"]
-        exclude = _FISHTANK_ONLY_NAMES if backend == "merlin" else _MERLIN_ONLY_NAMES
+        after_exclude = _FISHTANK_ONLY_NAMES if backend == "merlin" else _MERLIN_ONLY_NAMES
+    else:
+        after_exclude = _REGULAR_ONLY_NAMES
 
     pipeline_src = notebooks_dir / PIPELINES[pipeline_id]
-    _copy_notebooks(pipeline_src, out_before, exclude=exclude)
+    _copy_notebooks(pipeline_src, out_before)
     _copy_notebooks(notebooks_dir / "during_imaging", out_during)
-    _copy_notebooks(notebooks_dir / "after_imaging", out_after)
+    _copy_notebooks(notebooks_dir / "after_imaging", out_after, exclude=after_exclude)
 
     (out_dir / "README.md").write_text(
         _adapt_readme(pipeline_src, pipeline_id, has_pipeline_yaml), encoding="utf-8"

@@ -577,7 +577,7 @@ def resolve_cluster_sample_dir(sample_dir: Path, sample_name: str, imaging_dir: 
       (``sample_dir`` = e.g. ``.../LT058_sample_07/merfish``) and
       *sample_name* is really that subfolder's own local file-naming
       convention (``"merfish"``) rather than the true top-level experiment
-      id -- notebook 06 derives ``sample_name`` from ``SAMPLE_DIR.name``,
+      id -- the experiment-info notebook derives ``sample_name`` from ``SAMPLE_DIR.name``,
       which is only the parent experiment folder in the flat, unsplit
       layout. In that case the true experiment id is one level up
       (``sample_dir.parent.name``); if *that* contains a project token, it

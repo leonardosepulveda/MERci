@@ -20,7 +20,7 @@ Every notebook's second cell sets `PIPELINE_ID` (one of the ids in
 `pipeline.yaml` into `PIPELINE_CONFIG` -- everything else in the notebook
 reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 
-## Notebook sequence (10 notebooks, two pairs)
+## Notebook sequence (5 notebooks here + 2 in `after_imaging/`)
 
 | # | Notebook | Backend |
 |---|----------|---------|
@@ -29,15 +29,17 @@ reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 | 02 | `02_create_positions_from_boundaries.ipynb` | either |
 | 03 | `03_create_round_info.ipynb` | either |
 | 04 | `04_create_dave_config.ipynb` | either |
-| 05 | `05_create_data_organization.ipynb` | `analysis_backend: merlin` |
-| 05 | `05_create_color_usage.ipynb` | `analysis_backend: fishtank` |
-| 06 | `06_create_experiment_info.ipynb` | either |
-| 07 | `07_create_merlin_scripts.ipynb` | `analysis_backend: merlin` |
-| 07 | `07_create_fishtank_scripts.ipynb` | `analysis_backend: fishtank` |
+| -- | `after_imaging/13_create_experiment_info.ipynb` | either |
+| -- | `after_imaging/14_create_merlin_files.ipynb` | `analysis_backend: merlin` |
+| -- | `after_imaging/14_create_fishtank_files.ipynb` | `analysis_backend: fishtank` |
 
-Run steps 01-04 and 06 regardless of pipeline; for 05/07, run the file
-matching your pipeline's `analysis_backend` (`00_select_pipeline.ipynb`
-exports the right one automatically once you pick a pipeline).
+Steps 01-04 are all that's needed before imaging. The analysis inputs
+(`experiment_info.yaml`, then the MERlin data organization + run files, or
+fishtank's color usage/decoding strategy + run scripts) live in
+`after_imaging/`. They use the same `PIPELINE_ID`/`PIPELINE_CONFIG`. For 14,
+run the file matching your pipeline's `analysis_backend`
+(`00_select_pipeline.ipynb` exports only the right one once you pick a
+pipeline).
 
 ## What still isn't pipeline.yaml-driven
 
