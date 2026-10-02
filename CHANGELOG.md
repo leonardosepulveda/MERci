@@ -21,6 +21,15 @@ those lines under a new version heading, bumps `version` in
 
 - `CHANGELOG.md` and versioning via git tags (`vX.Y.Z`).
 
+### Changed
+
+- **Breaking:** `create_snakemake_parameters` writes MERlin's `-k` file as
+  `parameters_{SHORT_NAME}.yaml` (was `.json`), with a comment above `nodes`
+  recording the Slurm launch-delay measurement behind its value. Needs a
+  MERlin with YAML `-k` support (MERlin commit 43986a9).
+- `create_snakemake_parameters` default `nodes` lowered 1000 -> 150, to cap
+  per-run concurrent jobs (Slurm step-launch delays timed out short jobs).
+
 ## [0.1.0] - 2026-10-02
 
 First tagged version: a baseline snapshot of `master`, not a curated
