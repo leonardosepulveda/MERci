@@ -206,6 +206,9 @@ notebooks/
     hyb_spot_intensity_qc    experiment-wide spot-intensity overview, N FOVs evenly spaced across the tissue
     z_profile_spot_intensity per-z (no projection) foci detection for one hyb round + FOV, incl. custom image paths
     dave_timing_accuracy     actual vs. Dave-estimated block timing, real-data ETA for remaining blocks
+  monitor/           Command-line monitors (plain scripts, not notebooks)
+    merlin_progress.py     top-like done/total table per MERlin task across all running MERlin
+                           runs (auto-discovered from squeue), plus snakemake/SLURM status
   misc/              Ad-hoc utilities — see each notebook's own markdown cells for what it does
 ```
 
