@@ -309,6 +309,9 @@ Commit and push as you go — do not leave finished work uncommitted.
 - Don't batch unrelated changes into one commit; don't let edits pile up locally.
 - Standing authorization to commit and push without asking each time.
 - Never commit transient files (`*.tmp.*`, `__pycache__/`, `*.egg-info/` — gitignored).
+- Versioned with SemVer git tags (`vX.Y.Z`): every feature/fix branch adds a
+  line to `CHANGELOG.md`'s `[Unreleased]` section. Releases only on request
+  — see `CHANGELOG.md`'s header.
 - `tests/` is gitignored, so test-notebook work is never committed. A
   change a test investigation makes outside `tests/` (e.g. a function
   pulled out into `src/MERci/`) follows the normal push/merge rules above,
