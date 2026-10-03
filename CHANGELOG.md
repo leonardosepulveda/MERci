@@ -17,6 +17,11 @@ those lines under a new version heading, bumps `version` in
 
 ## [Unreleased]
 
+### Fixed
+
+- `notebooks/monitor/merlin_progress.py` is executable, so it runs
+  directly via its shebang (was `Permission denied`).
+
 ### Added
 
 - `CHANGELOG.md` and versioning via git tags (`vX.Y.Z`).
