@@ -23,6 +23,8 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- CLAUDE.md: when updating an experiment's clone, a task menu is not a
+  carried-over parameter (keep the current default, list differences).
 - **Breaking:** `create_snakemake_parameters` writes MERlin's `-k` file as
   `parameters_{SHORT_NAME}.yaml` (was `.json`), with a comment above `nodes`
   recording the Slurm launch-delay measurement behind its value. Needs a
