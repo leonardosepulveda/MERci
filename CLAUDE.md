@@ -58,6 +58,14 @@ touching `MERci/`. The shared (not per-experiment) per-microscope power
 table it also needs still comes from the live `MERci/` clone. The `MERci/`
 clone itself is only ever read from by the export, never modified.
 
+**Updating an experiment's clone, keeping its old parameters**: carry over
+per-experiment values (thresholds, microscope, boundary settings, ...), but
+a task menu is not a parameter. If the old run had a task off that the
+current pipeline default has on, keep the current default and list the
+difference for the user to decide. (A carried-over
+`default_no_segmentation` recipe once silently dropped BC553 epi's
+segmentation.)
+
 **`before_imaging/regular/`** — one shared notebook set for every pipeline
 except `multi_z`: `tumor_epi`, `tumor_disk`, `lineage_tracing_merfish`,
 `lineage_tracing_lineage`. What used to differ between per-pipeline notebook
