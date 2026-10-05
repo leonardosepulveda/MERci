@@ -51,7 +51,7 @@
         "mem": 10000
     },
     "CombineCleanedBoundaries": {
-        "mem": 100000
+        "mem": 32000
     },
     "CombineCleanedBoundariesDAPI": {
         "mem": 100000
@@ -87,7 +87,8 @@
         "mem": 5000
     },
     "ExportBarcodes": {
-        "mem": 100000
+        "mem": 32000,
+        "time": "4:00:00"
     },
     "ExportCellMetadata": {
         "mem": 20000

@@ -22,6 +22,9 @@ those lines under a new version heading, bumps `version` in
 - Cluster-resource template: `CellPoseSegmentSAMDone` renamed to
   `CellPoseSegmentSAMFigures` (32 GB, 6 h), matching MERlin's new
   per-task `<Task>Figures` rule that now draws the figures.
+- Cluster-resource template: `ExportBarcodes` 100 GB -> 32 GB with a 4 h
+  limit, `CombineCleanedBoundaries` 100 GB -> 32 GB (MERlin now streams
+  ExportBarcodes per fov and fixed CombineCleanedBoundaries' quadratic loops).
 - `notebooks/monitor/merlin_progress.py` is executable, so it runs
   directly via its shebang (was `Permission denied`).
 
@@ -31,6 +34,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- `export_barcodes` atom sets `format: parquet` explicitly (MERlin's new
+  default since af9e800: `ExportBarcodes/barcodes.parquet` instead of
+  `barcodes.csv`). Override with `format: csv` for the old file.
 - CLAUDE.md: when updating an experiment's clone, a task menu is not a
   carried-over parameter (keep the current default, list differences).
 - **Breaking:** `create_snakemake_parameters` writes MERlin's `-k` file as

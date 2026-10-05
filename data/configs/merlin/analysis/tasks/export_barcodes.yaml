@@ -1,4 +1,7 @@
 # Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# format: "parquet" writes ExportBarcodes/barcodes.parquet (read with
+# pandas.read_parquet); "csv" writes the old barcodes.csv instead.
 task: ExportBarcodes
 module: merlin.analysis.exportbarcodes
 parameters:
@@ -12,3 +15,4 @@ parameters:
   - fov
   - cell_index
   exclude_blanks: false
+  format: parquet
