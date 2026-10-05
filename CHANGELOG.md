@@ -19,6 +19,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- Cluster-resource template: `CellPoseSegmentSAMDone` renamed to
+  `CellPoseSegmentSAMFigures` (32 GB, 6 h), matching MERlin's new
+  per-task `<Task>Figures` rule that now draws the figures.
 - `notebooks/monitor/merlin_progress.py` is executable, so it runs
   directly via its shebang (was `Permission denied`).
 
