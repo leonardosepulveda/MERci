@@ -986,6 +986,10 @@ def build_merlin_analysis_parameters(
     gets that channel as its ``reference_channel``, so every round is
     registered into the same round the fov positions were measured in.
 
+    ``generate_mosaic`` with ``use_ffc`` true (its atom default) needs
+    ``create_ffc`` in the list too. Skip FFC via a ``use_ffc: false``
+    override, not by dropping ``create_ffc``.
+
     A recipe with no ``optimize_iteration``/``decode`` atom gets
     ``save_pixel_histogram: false`` on ``deconvolution_preprocess``.
 
@@ -1011,6 +1015,11 @@ def build_merlin_analysis_parameters(
             "z_index" not in mosaic_overrides or not mosaic_overrides.get("data_channels")):
         raise ValueError("generate_mosaic requires overrides={'generate_mosaic': "
                           "{'z_index': ..., 'data_channels': [...]}}.")
+    if "generate_mosaic" in task_names and "create_ffc" not in task_names and {
+            **_load_task_atom("generate_mosaic", tasks_dir).get("parameters", {}),
+            **mosaic_overrides}.get("use_ffc"):
+        raise ValueError("generate_mosaic with use_ffc requires create_ffc in the recipe "
+                          "-- GenerateMosaicTile depends on CreateFfc as its ffc_task.")
     if "sum_signal" in task_names and "cellpose_segment_3d" not in task_names and "cellpose_segment_sam" not in task_names:
         raise ValueError("sum_signal requires a segmentation atom (cellpose_segment_3d/cellpose_segment_sam) "
                           "in the recipe -- SumSignal needs a segment_task.")

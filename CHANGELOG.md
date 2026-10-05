@@ -25,6 +25,9 @@ those lines under a new version heading, bumps `version` in
 - Cluster-resource template: `ExportBarcodes` 100 GB -> 32 GB with a 4 h
   limit, `CombineCleanedBoundaries` 100 GB -> 32 GB (MERlin now streams
   ExportBarcodes per fov and fixed CombineCleanedBoundaries' quadratic loops).
+- `build_merlin_analysis_parameters` raises if `generate_mosaic` uses FFC
+  (`use_ffc`, on by default) but `create_ffc` is not in the task list. That
+  config used to fail only at MERlin run time.
 - `notebooks/monitor/merlin_progress.py` is executable, so it runs
   directly via its shebang (was `Permission denied`).
 
