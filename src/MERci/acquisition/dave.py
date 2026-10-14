@@ -895,8 +895,9 @@ class _RecipeWriter:
         Emit a ``<change_directory>`` (sets HAL's save dir for the FOLLOWING loop)
         from *dir_value*, and — when ``create_data_dirs`` — create that folder.
 
-        HAL rejects a directory that does not exist, and nothing in Dave/HAL makes
-        it, so the directory is created here. De-duplicated: emitting the directory
+        HAL rejects a directory that does not exist. An unpatched Dave does not
+        make it (the patched one creates it when the sequence is loaded), so the
+        directory is created here either way. De-duplicated: emitting the directory
         that is already active is a no-op. No-op when *dir_value* is
         missing/blank/NaN (e.g. round_info has no ``data_dir`` column).
         """
@@ -918,10 +919,23 @@ class _RecipeWriter:
                       f"{dpath!r}: {exc}. Create it on the acquisition computer "
                       f"before running Dave.")
 
-    def imaging_loop(self, name: str, positions_path: str) -> ET.Element:
-        """Append an imaging ``<loop>`` and its own same-named positions loop_variable."""
+    def _logged_loop(self, name: str) -> ET.Element:
+        """Append ``<log>name start</log>``, ``<loop name=...>``, ``<log>name end</log>``.
+
+        A patched Dave writes each ``<log>`` as a small file in the current
+        ``<change_directory>`` folder, so progress shows in a folder listing; an
+        unpatched one drops the tag. The logs sit outside the loop: inside an
+        imaging loop they would repeat once per FOV.
+        """
+        ET.SubElement(self.seq, "log").text = f"{name} start"
         loop = ET.SubElement(self.seq, "loop")
         loop.set("name", name)
+        ET.SubElement(self.seq, "log").text = f"{name} end"
+        return loop
+
+    def imaging_loop(self, name: str, positions_path: str) -> ET.Element:
+        """Append an imaging ``<loop>`` and its own same-named positions loop_variable."""
+        loop = self._logged_loop(name)
         self.imaging_loop_vars.append((name, positions_path))
         return loop
 
@@ -930,8 +944,7 @@ class _RecipeWriter:
         if block is None:
             return
         fl_name, fl_protocols = block
-        fl_loop = ET.SubElement(self.seq, "loop")
-        fl_loop.set("name", fl_name)
+        fl_loop = self._logged_loop(fl_name)
         ET.SubElement(fl_loop, "variable_entry").set("name", fl_name)
         self.fluidics_loop_vars.append((fl_name, fl_protocols))
 
@@ -1002,6 +1015,9 @@ def create_dave_config(
     ``v2Generator`` (``dave_fov_offset_patch``); stock Dave ignores the
     attributes and the names would collide.
 
+    **Logs.** Every loop is wrapped by ``<log><loop name> start</log>`` and
+    ``<log><loop name> end</log>`` (see ``_RecipeWriter._logged_loop``).
+
     **Fluidics.** Each fluidics loop is named by the hyb index of the NEXT
     imaging round ("Hyb 01 Fluidics" precedes "Hyb 01 Imaging"). The hyb index
     counts bits rounds, so a leading cells round shifts neither loop names nor
@@ -1011,8 +1027,11 @@ def create_dave_config(
     index. The last round has no fluidics unless *include_final_cleave*.
 
     **Save directory.** With a ``data_dir`` column, a ``<change_directory>``
-    goes right before each round's imaging loop (and before each extra
-    segment directory in the multi-boundary layout), skipped when unchanged.
+    goes right before the fluidics loop that precedes each round (so that
+    fluidics' ``<log>`` files land in the round's folder) and before each
+    imaging loop (and each extra segment directory in the multi-boundary
+    layout), skipped when unchanged. "Fluidics Final" stays in the last
+    folder. HAL takes no movies during fluidics, so this moves no images.
     HAL errors if the directory doesn't exist and nothing else creates it, so
     *create_data_dirs* creates them. (``change_directory`` is HAL's deprecated
     but working "Set Directory".)
@@ -1101,7 +1120,12 @@ def create_dave_config(
     )
     writer = _RecipeWriter(create_data_dirs)
 
+    def _first_data_dir(round_id):
+        # The round's first row: its single directory, or its first segment's.
+        return round_info[round_info["imaging_round"] == round_id].iloc[0].get("data_dir")
+
     if leading_fluidics and round_ids:
+        writer.change_directory(_first_data_dir(round_ids[0]))
         writer.fluidics_loop(_fluidics_after(round_ids[0] - 1, False, **fluidics_kw))
 
     for idx, round_id in enumerate(round_ids):
@@ -1130,7 +1154,10 @@ def create_dave_config(
             for _, row in rows.iterrows():
                 _add_movie(loop, row, label, settings_dir, num_focus_checks)
 
-        writer.fluidics_loop(_fluidics_after(round_id, is_last, **fluidics_kw))
+        fluidics = _fluidics_after(round_id, is_last, **fluidics_kw)
+        if fluidics is not None and not is_last:
+            writer.change_directory(_first_data_dir(round_ids[idx + 1]))
+        writer.fluidics_loop(fluidics)
 
     is_variable_z = ("tissue_thickness" in round_info.columns
                      and (round_info["tissue_thickness"] == "multi").any())
@@ -1221,7 +1248,8 @@ def create_focus_test_dave_config(
                        exists (same lookup as :func:`create_dave_config`,
                        including the ``multi_z/`` sibling)
     data_dir         : with ``n_test_frames > 0``, emit a ``<change_directory>``
-                       to it before the loop
+                       to it before the loop, and start/end ``<log>`` tags
+                       around the loop
     create_data_dir  : create *data_dir* when given (HAL requires it)
     movie_name       : base movie name (e.g. ``"hal-mf3-focustest"``), numbered
                        per FOV (``increment="Yes"``)
@@ -1263,13 +1291,19 @@ def create_focus_test_dave_config(
     root = ET.Element("recipe")
     seq  = ET.SubElement(root, "command_sequence")
 
-    if n_test_frames > 0 and data_dir is not None:
+    # The <log> files go to the <change_directory> folder, so they are only
+    # written when there is one.
+    with_logs = n_test_frames > 0 and data_dir is not None
+    if with_logs:
         ET.SubElement(seq, "change_directory").text = str(data_dir)
         if create_data_dir:
             Path(data_dir).mkdir(parents=True, exist_ok=True)
+        ET.SubElement(seq, "log").text = "Focus Test start"
 
     loop = ET.SubElement(seq, "loop")
     loop.set("name", "Focus Test")
+    if with_logs:
+        ET.SubElement(seq, "log").text = "Focus Test end"
 
     movie   = ET.SubElement(loop, "movie")
     name_el = ET.SubElement(movie, "name")
@@ -1310,11 +1344,12 @@ def annotate_dave_with_round_info(
     Insert XML comments into an existing Dave recipe XML describing which bits
     are imaged in each round.
 
-    For round 1: comment is placed before the ``<loop name="Cells Imaging">``
-    block.  For rounds 2+: comment is placed before the corresponding
-    ``<loop name="Hyb NN Fluidics">`` block (which precedes that imaging
-    round; hyb index NN = imaging-round index − 1).  A blank line is inserted
-    before each comment for readability.
+    For round 1: comment is placed before the ``Cells Imaging`` loop.  For
+    rounds 2+: comment is placed before the corresponding ``Hyb NN Fluidics``
+    loop (which precedes that imaging round; hyb index NN = imaging-round
+    index − 1).  The comment heads the whole block: it goes before the loop's
+    start ``<log>`` and the ``<change_directory>`` just before it, when
+    present.  A blank line is inserted before each comment for readability.
 
     In the default cells-first layout, imaging round 1 is the cells acquisition
     (no bits), so it normally has no entry here; the bits comments attach to the
@@ -1357,11 +1392,15 @@ def annotate_dave_with_round_info(
             # the loop naming it sits next to -- "Cells" for round 1, else
             # the hyb index (n - 1, since round 1 is always cells).
             label = "Cells" if n == 1 else f"Hyb {n - 1:02d}"
-            new_lines.append("")
-            new_lines.append(f"{indent}<!-- {label}:")
-            for s in round_comments[n]:
-                new_lines.append(f"{indent}        {s}")
-            new_lines.append(f"{indent}-->")
+            # Head the block: go above the start <log> and the round's
+            # <change_directory>, which precede the loop line.
+            at = len(new_lines)
+            for tag in ("<log>", "<change_directory>"):
+                if at and new_lines[at - 1].strip().startswith(tag):
+                    at -= 1
+            new_lines[at:at] = (["", f"{indent}<!-- {label}:"]
+                                + [f"{indent}        {s}" for s in round_comments[n]]
+                                + [f"{indent}-->"])
 
         # Round 1: insert before "Cells Imaging" loop
         if stripped == '<loop name="Cells Imaging">':

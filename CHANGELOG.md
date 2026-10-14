@@ -51,6 +51,12 @@ those lines under a new version heading, bumps `version` in
   lineage_tracing_merfish menus. Set `cellpose_eval_sam: false` for the
   one-task form; `create_cluster_resource_allocation(cellpose_eval=False)`
   then puts the GPU back on `CellPoseSegmentSAM`.
+- Dave recipes wrap every loop in `<log><loop> start</log>` /
+  `<log><loop> end</log>` (a patched Dave writes each as a small file in the
+  current folder; an unpatched one ignores the tag). Each round's
+  `<change_directory>` now comes before the fluidics that precedes it, so
+  those logs land in that round's folder. The round-info comments of
+  `annotate_dave_with_round_info` head that whole block.
 - `CHANGELOG.md` and versioning via git tags (`vX.Y.Z`).
 
 ### Changed
