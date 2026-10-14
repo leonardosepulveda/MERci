@@ -308,6 +308,18 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "LeastSquaresGlobalAlignment": ("mem", "time"),
     # 500 MB + 12 bytes per mosaic pixel (MERlin 9ad7a3e).
     "CombineMosaicTiles":      ("mem",),
+    # Fit to every completed job of LT066, BC553 d/e and BC555 d/e (MERlin
+    # 207196a, feature/data-based-resource-estimates).
+    "Decode":                  ("mem", "time"),
+    "SmfishSignal":            ("mem", "time"),
+    "SumSignal":               ("mem", "time"),
+    "CleanCellBoundaries":     ("mem", "time"),
+    "RefineCellDatabases":     ("mem", "time"),
+    "AdaptiveFilterBarcodes":  ("mem", "time"),
+    "GenerateMosaicTile":      ("mem", "time"),
+    # Every OptimizeIteration rule (Optimize01, Optimize02, ...), whose rule
+    # names are their analysis names -- see _estimate_fields.
+    "Optimize":                ("mem", "time"),
 }
 
 # Tasks that also opt into estimation but whose formula is not yet
@@ -316,9 +328,16 @@ _VALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
 # explicit value (the template's own, or __default__'s if the template has
 # none) and stays active.
 _UNVALIDATED_ESTIMATE_FIELDS: Dict[str, Tuple[str, ...]] = {
-    "Decode":         ("mem", "time"),
     "CAREPreprocess": ("mem", "time"),
 }
+
+
+def _estimate_fields(table: Dict[str, Tuple[str, ...]], name: str) -> Tuple[str, ...]:
+    """*table*'s fields for rule *name*; ``OptimizeNN`` rules share the
+    ``"Optimize"`` entry."""
+    if re.fullmatch(r"Optimize\d+", name):
+        name = "Optimize"
+    return table.get(name, ())
 
 
 def _yaml_scalar_line(key: str, value: Any) -> str:
@@ -348,8 +367,8 @@ def _render_task_block(name: str, entry: Dict[str, Any], default: Dict[str, Any]
     empty mapping, and MERlin's own ``dict.update(override)`` in
     ``snakewriter._cluster_resources_for_rule`` would raise on it.
     """
-    validated = _VALIDATED_ESTIMATE_FIELDS.get(name, ())
-    unvalidated = _UNVALIDATED_ESTIMATE_FIELDS.get(name, ())
+    validated = _estimate_fields(_VALIDATED_ESTIMATE_FIELDS, name)
+    unvalidated = _estimate_fields(_UNVALIDATED_ESTIMATE_FIELDS, name)
 
     body: List[str] = []
     has_active = False

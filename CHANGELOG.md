@@ -19,6 +19,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- Cluster-resource template: `Decode`, `SmfishSignal`, `SumSignal`,
+  `CleanCellBoundaries`, `RefineCellDatabases`, `AdaptiveFilterBarcodes`,
+  `GenerateMosaicTile` and every `OptimizeNN` rule no longer pin `mem`/`time`
+  (commented out), so MERlin's data-based estimates (MERlin 207196a) apply.
 - Cluster-resource template: `CellPoseSegmentSAMFigures` 32 GB / 6 h ->
   4 GB with the default 3 h, `CombineCleanedBoundaries` 32 GB -> 8 GB
   (measured max 2.2 GB / 100 min and 2.6 GB on LT066/BC553 runs).
