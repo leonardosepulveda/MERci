@@ -61,6 +61,14 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- **Breaking:** `LiveRoundMosaicBuilder` caches tiles as float32 `.npy`
+  (oriented and resized, before FFC and the contrast stretch) instead of
+  stretched `.png`, so a round re-renders with another contrast range or FFC
+  setting without raw reads (LT066: 9 s vs 88 s for 30 FOVs). Old `.png`
+  tiles are ignored and rebuilt. The contrast-range cache name now includes
+  the percentiles and FFC setting. New `set_contrast_range` for a hand-set
+  range; `stretch_to_uint8` now resizes before stretching (split into
+  `resize_tile` + `stretch_tile`).
 - `export_barcodes` atom sets `format: parquet` explicitly (MERlin's new
   default since af9e800: `ExportBarcodes/barcodes.parquet` instead of
   `barcodes.csv`). Override with `format: csv` for the old file.
