@@ -38,8 +38,7 @@
         "exclude" : ""
     },
     "CellPoseSegmentSAMFigures": {
-        "mem": 32000,
-        "time": "6:00:00"
+        "mem": 4000
     },
     "CleanCellBoundaries": {
         "mem": 10000
@@ -51,7 +50,7 @@
         "mem": 10000
     },
     "CombineCleanedBoundaries": {
-        "mem": 32000
+        "mem": 8000
     },
     "CombineCleanedBoundariesDAPI": {
         "mem": 100000
