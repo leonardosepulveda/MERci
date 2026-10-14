@@ -2,5 +2,8 @@
 flip_horizontal: true
 flip_vertical: false
 transpose: true
-microns_per_pixel: 0.1317
+# Placeholder until measured: 0.0878 x 5/3. The 60X (Olympus, 180 mm tube
+# lens, f = 3.0 mm) and 40X (Nikon, 200 mm tube lens, f = 5.0 mm) magnify in
+# a 5/3 ratio on one stand, not 60/40.
+microns_per_pixel: 0.1463
 image_dimensions: [2304, 2304]

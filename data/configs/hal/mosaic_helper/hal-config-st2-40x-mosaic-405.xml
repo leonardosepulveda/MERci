@@ -49,7 +49,8 @@
     <obj1 type="custom">60x,0.0878,0.0,0.0</obj1>
     <obj2 type="custom">10x,0.64,0.0,0.0</obj2>
 	  <obj3 type="custom">4x,4.0,0.0,0.0</obj3>
-    <obj4 type="custom">40x,0.1317,0.0,0.0</obj4>
+    <!-- 40x pixel size: placeholder 0.0878 x 5/3 (objective focal lengths 5.0/3.0 mm) until measured -->
+    <obj4 type="custom">40x,0.1463,0.0,0.0</obj4>
     <objective type="string">obj4</objective>
     <transpose type="boolean">True</transpose>
   </mosaic>

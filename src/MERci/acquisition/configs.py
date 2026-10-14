@@ -130,7 +130,7 @@ def get_fov_geometry(microscope: str, objective: Optional[str] = None) -> FOVGeo
 
     * ST2 (60X)       → ``(0.0893 µm/px, 2304 px)``
     * MFX (60X)       → ``(0.0893 µm/px, 2048 px)``
-    * ST2 (40X)       → ``(0.1317 µm/px, 2304 px)``
+    * ST2 (40X)       → ``(0.1463 µm/px, 2304 px)`` (placeholder, 0.0878 x 5/3, until measured)
     * MF3 (60X)       → ``(0.1074 µm/px, 2048 px)``
     * MF2, MF4, MF5 (60X) → ``(0.109 µm/px, 2048 px)``
 

@@ -19,6 +19,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- ST2 40X pixel size 0.1317 -> 0.1463 um/px (MERlin `STORM2_40X.yaml`,
+  both ST2 HAL configs). 0.1317 assumed a 60/40 ratio; the Olympus 60X and
+  Nikon 40X (f = 3.0 / 5.0 mm) give 5/3. Still a placeholder until measured.
 - Cluster-resource template: `CellPoseSegmentSAMDone` renamed to
   `CellPoseSegmentSAMFigures` (32 GB, 6 h), matching MERlin's new
   per-task `<Task>Figures` rule that now draws the figures.
