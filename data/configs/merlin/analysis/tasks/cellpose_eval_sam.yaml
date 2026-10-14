@@ -1,0 +1,16 @@
+# Atomic MERlin task -- see ./README.md for the shared convention (never hardcode structural cross-references here).
+#
+# GPU half of two-task CellPose (merlin.analysis.segment.CellPoseEvalSAM):
+# runs only cellpose, for fovs_per_job fovs per job, and saves each fov's
+# masks. CellPoseSegmentSAM (eval_task set by the assembly) then does the
+# rest on a CPU. Leave this atom out of the recipe for the one-task form
+# (one GPU job per fov).
+#
+# Its cellpose parameters are cellpose_segment_sam.yaml's (parameters_from),
+# with cellpose_segment_sam's overrides applied, so the two tasks always
+# agree. Tune them there, not here.
+task: CellPoseEvalSAM
+module: merlin.analysis.segment
+parameters_from: cellpose_segment_sam
+parameters:
+  fovs_per_job: 50               # MERlin default: 50; fovs per GPU job (fragments = ceil(n_fovs / fovs_per_job))

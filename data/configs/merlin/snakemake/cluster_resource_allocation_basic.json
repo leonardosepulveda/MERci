@@ -30,13 +30,12 @@
     "CellposeSegmentationSingleChannel3D": {
         "mem": 10000
     },
-    "CellPoseSegmentSAM" : {
-        "mem" : 32000,
-        "partition" : "gpu_requeue,gpu",
-        "gres" : "gpu:1",
-        "time" : "0:10:00",
-        "exclude" : ""
+    "CellPoseEvalSAM": {
+        "partition": "gpu_requeue",
+        "gres": "gpu:1",
+        "constraint": "h200|h100|rtx6000pro|a100"
     },
+    "CellPoseSegmentSAM": {},
     "CellPoseSegmentSAMFigures": {
         "mem": 4000
     },

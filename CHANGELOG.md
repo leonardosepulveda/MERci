@@ -40,6 +40,14 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- Two-task CellPose (MERlin 3323ebc): new `cellpose_eval_sam` atom
+  (`CellPoseEvalSAM`, batched on `gpu_requeue`, full GPU cards only) whose
+  cellpose parameters come from `cellpose_segment_sam` (`parameters_from`);
+  with it, `CellPoseSegmentSAM` gets `eval_task` and runs on a CPU. On in
+  `default_with_segmentation` and the tumor_epi/tumor_disk/
+  lineage_tracing_merfish menus. Set `cellpose_eval_sam: false` for the
+  one-task form; `create_cluster_resource_allocation(cellpose_eval=False)`
+  then puts the GPU back on `CellPoseSegmentSAM`.
 - `CHANGELOG.md` and versioning via git tags (`vX.Y.Z`).
 
 ### Changed

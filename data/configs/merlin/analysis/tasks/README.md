@@ -16,3 +16,7 @@ stitching, decoding, segmentation, ...; `_TASK_GROUPS` in
 `merlin_config.py`), so a new atom must also be added to one group there. Each atom's own file documents its own
 parameters (defaults, any per-parameter notes); this README only covers
 the convention shared by all of them.
+
+An atom may set `parameters_from: <other atom>`: its parameters then start
+from that atom's parameters and overrides, with its own on top. Used by
+`cellpose_eval_sam`, so the two CellPose tasks never disagree.

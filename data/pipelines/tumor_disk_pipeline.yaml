@@ -92,6 +92,7 @@ merlin:
       combine_mosaic_tiles:        true
       # Segmentation
       cellpose_segment_3d:         false
+      cellpose_eval_sam:           true    # GPU half of two-task CellPose; false = one GPU job per fov
       cellpose_segment_sam:        true
       clean_cell_boundaries:       true
       combine_cleaned_boundaries:  true

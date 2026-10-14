@@ -16,6 +16,7 @@ tasks:
 - create_ffc
 - generate_mosaic
 - combine_mosaic_tiles
+- cellpose_eval_sam
 - cellpose_segment_sam
 - clean_cell_boundaries
 - combine_cleaned_boundaries
