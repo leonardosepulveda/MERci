@@ -19,6 +19,8 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- Cluster-resource template: `CellPoseEvalSAM` asks for 2 CPUs (`cpus: 2`,
+  needs MERlin fc012d8), so reading the next fov overlaps the GPU eval.
 - Cluster-resource template: `Decode`, `SmfishSignal`, `SumSignal`,
   `CleanCellBoundaries`, `RefineCellDatabases`, `AdaptiveFilterBarcodes`,
   `GenerateMosaicTile` and every `OptimizeNN` rule no longer pin `mem`/`time`
