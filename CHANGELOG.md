@@ -19,6 +19,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- fishtank cellpose scripts pass `--anisotropy` (full-resolution z step /
+  pixel size, from each acquisition's DAPI frame table; new
+  `cellpose_anisotropy`). Without it 3D cellpose treated z like xy (LT066:
+  5.6 at full resolution, 1.4 after fishtank's /4 downsample).
 - Cluster-resource template: `CellPoseEvalSAM` asks for 2 CPUs (`cpus: 2`,
   needs MERlin fc012d8), so reading the next fov overlaps the GPU eval.
 - Cluster-resource template: `Decode`, `SmfishSignal`, `SumSignal`,

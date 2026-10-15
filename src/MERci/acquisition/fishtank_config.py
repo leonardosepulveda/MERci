@@ -42,10 +42,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+import pandas as pd
 import yaml
 
 from . import cluster_submit
 from .cluster_submit import _write_script
+from .configs import get_camera_pixel_size_um
 
 _COLORS_DEFAULT = ("650", "560", "488", "405")
 
@@ -198,6 +201,7 @@ _CELLPOSE_LINEAGE_DEFAULTS = {
     "color_usage": None,   # filled in by create_fishtank_scripts
     "model": "nuclei", "channels": "DAPI,DAPI", "downsample": 4,
     "min_size": 5000, "do_3D": "True", "gpu": "True",
+    "anisotropy": None,    # full-resolution z step / pixel size; see cellpose_anisotropy
 }
 _CELLPOSE_MERFISH_DEFAULTS = {
     **_CELLPOSE_LINEAGE_DEFAULTS,
@@ -265,6 +269,27 @@ class FishtankScriptsSpec:
         return cls(**data)
 
 
+def cellpose_anisotropy(frame_table_path: Path, color: float, microscope: str,
+                        objective: Optional[str] = None) -> float:
+    """
+    Full-resolution ``--anisotropy`` for 3D ``fishtank cellpose``: the z step
+    of *color*'s planes in *frame_table_path* divided by the sample-plane
+    pixel size. ``fishtank cellpose`` divides it by ``--downsample`` itself,
+    so the full-resolution value is the right one to pass. Raises if the
+    planes are not evenly spaced. If ``--z_slices`` ever keeps only some
+    planes, the step must be that of the planes kept.
+    """
+    table = pd.read_csv(frame_table_path, index_col=0)
+    z = table.loc[table["color"] == float(color), "z"].to_numpy(dtype=float)
+    if len(z) < 2:
+        raise ValueError(f"{frame_table_path}: fewer than 2 planes at {color} nm.")
+    steps = np.abs(np.diff(z))
+    if not np.allclose(steps, steps[0], atol=1e-3):
+        raise ValueError(f"{frame_table_path}: {color} nm planes are not evenly spaced "
+                         f"(steps {sorted(set(np.round(steps, 3).tolist()))}).")
+    return float(steps[0]) / get_camera_pixel_size_um(microscope, objective)
+
+
 def _sbatch_header(job_name: str, mem: str, time: str, output_log: str,
                    partition: str, cpus_per_task: int = 1,
                    gres: Optional[str] = None, array: Optional[str] = None) -> str:
@@ -294,7 +319,8 @@ def _create_cellpose_script(output_path: Path, params: dict, input_dir: str,
         f"        --downsample {p['downsample']} \\\n"
         f"        --min_size {p['min_size']} \\\n"
         f"        --do_3D {p['do_3D']} \\\n"
-        f"        --gpu {p['gpu']}\n"
+        + (f"        --anisotropy {p['anisotropy']:.4g} \\\n" if p["anisotropy"] is not None else "")
+        + f"        --gpu {p['gpu']}\n"
     )
     _write_script(output_path, header + "\n" + body)
     return Path(output_path)
