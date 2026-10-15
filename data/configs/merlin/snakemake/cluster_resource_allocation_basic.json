@@ -33,7 +33,8 @@
     "CellPoseEvalSAM": {
         "partition": "gpu_requeue",
         "gres": "gpu:1",
-        "constraint": "h200|h100|rtx6000pro|a100"
+        "constraint": "h200|h100|rtx6000pro|a100",
+        "cpus": 2
     },
     "CellPoseSegmentSAM": {},
     "CellPoseSegmentSAMFigures": {
