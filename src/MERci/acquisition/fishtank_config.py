@@ -199,7 +199,9 @@ _CELLPOSE_LINEAGE_DEFAULTS = {
     "gres": "gpu:1", "partition": "zhuang_gpu", "array_concurrency": 20,
     "output_subdir": "cellpose_polygons",
     "color_usage": None,   # filled in by create_fishtank_scripts
-    "model": "nuclei", "channels": "DAPI,DAPI", "downsample": 4,
+    # cellpose 4 has no "nuclei" model and silently falls back to cpsam, which
+    # the reference scripts therefore already ran.
+    "model": "cpsam", "channels": "DAPI,DAPI", "downsample": 4,
     "min_size": 5000, "do_3D": "True", "gpu": "True",
     "anisotropy": None,    # full-resolution z step / pixel size; see cellpose_anisotropy
 }

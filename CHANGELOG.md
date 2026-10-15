@@ -19,6 +19,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- fishtank cellpose scripts default to `--model cpsam` instead of `nuclei`,
+  which cellpose 4 does not have (it fell back to `cpsam`, so results don't
+  change; the script now says what runs).
 - fishtank cellpose scripts pass `--anisotropy` (full-resolution z step /
   pixel size, from each acquisition's DAPI frame table; new
   `cellpose_anisotropy`). Without it 3D cellpose treated z like xy (LT066:
