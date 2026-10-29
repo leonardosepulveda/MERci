@@ -29,6 +29,9 @@ create_decoding_strategy_csv  — fishtank's ``decoding_strategy`` CSV (per-targ
                                  decode method + reference file)
 resolve_fishtank_reference_dir — library-version -> shared reference dir
                                  (dispatch only, mirrors resolve_codebook_filename)
+resolve_fishtank_microscope_file / copy_fishtank_microscope_file — the
+                                 ``--microscope`` YAML (orientation, pixel size)
+                                 for a (microscope, objective), into params/
 create_fishtank_folder_skeleton — pre-creates params/reference/scripts/output/log
                                  and copies the shared static utility scripts
 FishtankScriptsSpec / create_fishtank_scripts — build every fishtank run
@@ -189,6 +192,41 @@ def copy_fishtank_reference_files(lib_version: str, merci_dir: Path, fishtank_di
     return copied
 
 
+# ── Microscope settings (fishtank --microscope) ──────────────────────────────
+
+# (microscope, objective) -> file under MERci/data/configs/fishtank/microscope/.
+# Each file overrides the orientation and pixel size HAL writes into the
+# image XML (wrong on ST2); its own comments say how it was measured.
+_MICROSCOPE_FILE = {
+    ("ST2", "60X"): "storm2_60x.yaml",
+}
+
+
+def resolve_fishtank_microscope_file(microscope: str, objective: str) -> str:
+    """Return the fishtank microscope-settings YAML name for
+    (*microscope*, *objective*), raising if there is none."""
+    try:
+        return _MICROSCOPE_FILE[(microscope, objective)]
+    except KeyError:
+        raise ValueError(
+            f"No fishtank microscope file for ({microscope!r}, {objective!r}). "
+            f"Known: {sorted(_MICROSCOPE_FILE)}"
+        ) from None
+
+
+def copy_fishtank_microscope_file(microscope: str, objective: str, merci_dir: Path,
+                                  fishtank_dir: Path) -> Path:
+    """Copy the microscope-settings YAML for (*microscope*, *objective*) into
+    ``fishtank_dir/params/`` and return the destination path. Scripts point
+    at it as ``../params/<name>``."""
+    name = resolve_fishtank_microscope_file(microscope, objective)
+    src = Path(merci_dir) / "data" / "configs" / "fishtank" / "microscope" / name
+    dst = Path(fishtank_dir) / "params" / name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
 # ── Fishtank run scripts ─────────────────────────────────────────────────────
 # Every default below is copied verbatim from the reference experiment's
 # scripts (cellpose_ft.slurm, cellpose_ft_mf.slurm, detect_spots_ft.slurm,
@@ -204,6 +242,7 @@ _CELLPOSE_LINEAGE_DEFAULTS = {
     "model": "cpsam", "channels": "DAPI,DAPI", "downsample": 4,
     "min_size": 5000, "do_3D": "True", "gpu": "True",
     "anisotropy": None,    # full-resolution z step / pixel size; see cellpose_anisotropy
+    "microscope": None,    # --microscope YAML (see resolve_fishtank_microscope_file)
 }
 _CELLPOSE_MERFISH_DEFAULTS = {
     **_CELLPOSE_LINEAGE_DEFAULTS,
@@ -217,6 +256,17 @@ _DETECT_SPOTS_DEFAULTS = {
     "reg_min_intensity": 10, "filter": "unsharp_mask", "exclude_bits": "empty",
     "filter_args": "sigma=10", "spot_min_sigma": 2, "spot_max_sigma": 10,
     "spot_threshold": 100, "spot_radius": 5, "scale_factor": 0.09,
+    # The three below are emitted only when they differ from these values
+    # (fishtank's own defaults), so scripts that don't set them are unchanged.
+    # on_the_fly "True": the first pass detects spots on the reference and
+    # common bits and quantifies the rounds on disk; rerunning the script
+    # appends rounds that arrived since. Memory per pass, LT066 lineage
+    # (25 rounds): first pass peaked at 48.2 GB / 17 min (request 64gb);
+    # later passes ~8 GB / 10-11 min per 11-12 rounds (submit them with
+    # --mem=10G on the command line, which overrides the script's header).
+    "on_the_fly": "False",
+    "max_drift": 100,      # px; LT066 drift from H01 is ~(-69, -92) and needs 300
+    "microscope": None,    # set -> --microscope, and --scale_factor is left out
 }
 _AGGREGATE_POLYGONS_DEFAULTS = {"min_size": 100, "z_column": "global_z", "save_union": "True"}
 _DECODE_SPOTS_DEFAULTS = {
@@ -229,6 +279,7 @@ _ASSIGN_SPOTS_DEFAULTS = {"max_dist": 2, "z_column": "global_z", "cell_fill": 0}
 _MOSAIC_DEFAULTS = {
     "colors": "405", "z": 3, "flip_vertical": "False", "flip_horizontal": "False",
     "downsample": 8, "scale_factor": 0.09,
+    "microscope": None,    # set -> --microscope, and --scale_factor is left out
 }
 
 
@@ -301,6 +352,12 @@ def _sbatch_header(job_name: str, mem: str, time: str, output_log: str,
     )
 
 
+def _optional_flags(flags) -> str:
+    """Continue a command with each (name, value, emit) flag whose emit is
+    true, one per line, then end the command."""
+    return "".join(f" \\\n    --{name} {value}" for name, value, emit in flags if emit) + "\n"
+
+
 def _create_cellpose_script(output_path: Path, params: dict, input_dir: str,
                              color_usage: str, n_fovs: int) -> Path:
     p = {**_CELLPOSE_LINEAGE_DEFAULTS, **params}
@@ -322,6 +379,7 @@ def _create_cellpose_script(output_path: Path, params: dict, input_dir: str,
         f"        --min_size {p['min_size']} \\\n"
         f"        --do_3D {p['do_3D']} \\\n"
         + (f"        --anisotropy {p['anisotropy']:.4g} \\\n" if p["anisotropy"] is not None else "")
+        + (f"        --microscope {p['microscope']} \\\n" if p["microscope"] is not None else "")
         + f"        --gpu {p['gpu']}\n"
     )
     _write_script(output_path, header + "\n" + body)
@@ -349,7 +407,8 @@ def _create_detect_spots_script(output_path: Path, params: dict, input_dir: str,
         f"    --reg_bit {p['reg_bit']} \\\n"
         f"    --reg_z_slice {p['reg_z_slice']} \\\n"
         f"    --reg_min_intensity {p['reg_min_intensity']} \\\n"
-        f"    --ref_series {ref_series} \\\n"
+        + (f"    --max_drift {p['max_drift']} \\\n" if p["max_drift"] != 100 else "")
+        + f"    --ref_series {ref_series} \\\n"
         "    --file_pattern {series} \\\n"
         f"    --filter {p['filter']} \\\n"
         f"    --exclude_bits {p['exclude_bits']} \\\n"
@@ -357,8 +416,13 @@ def _create_detect_spots_script(output_path: Path, params: dict, input_dir: str,
         f"    --spot_min_sigma {p['spot_min_sigma']} \\\n"
         f"    --spot_max_sigma {p['spot_max_sigma']} \\\n"
         f"    --spot_threshold {p['spot_threshold']} \\\n"
-        f"    --spot_radius {p['spot_radius']} \\\n"
-        f"    --scale_factor {p['scale_factor']}\n"
+        f"    --spot_radius {p['spot_radius']}"
+        + _optional_flags([
+            ("microscope", p["microscope"], p["microscope"] is not None),
+            ("on_the_fly", p["on_the_fly"], p["on_the_fly"] != "False"),
+            # an explicit --scale_factor would replace the YAML's micron_per_pixel
+            ("scale_factor", p["scale_factor"], p["microscope"] is None),
+        ])
     )
     qc_guard = (
         "\n"
@@ -448,8 +512,11 @@ def _create_mosaic_script(output_path: Path, lineage_params: dict, merfish_param
             f"    --z {p['z']} \\\n"
             f"    --flip_vertical {p['flip_vertical']} \\\n"
             f"    --flip_horizontal {p['flip_horizontal']} \\\n"
-            f"    --downsample {p['downsample']} \\\n"
-            f"    --scale_factor {p['scale_factor']}\n"
+            f"    --downsample {p['downsample']}"
+            + _optional_flags([
+                ("microscope", p["microscope"], p["microscope"] is not None),
+                ("scale_factor", p["scale_factor"], p["microscope"] is None),
+            ])
         )
 
     body = (

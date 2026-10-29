@@ -1,0 +1,17 @@
+# Microscope settings for STORM2 (ST2), 60X objective, for fishtank --microscope.
+# They override the values HAL writes into every image XML, which are wrong on
+# ST2: the XML says transpose + flip_vertical and 0.1 um/px.
+#
+# Orientation: with these flags, stage +x runs along image +columns and stage +y
+# along image +rows. Measured on LT066_sample_01 lineage (PL009 G3): all four
+# neighbours of FOV 500 sit on these sides (DAPI overlap Pearson 0.78-0.88).
+# Same as MERlin's STORM2_60X.json, which is applied in the same order.
+transpose: true
+flip_horizontal: true
+flip_vertical: false
+
+# Pixel size from stitching a 5x5 block of the same sample (PL009 G3): affine
+# scale 0.9998 (x) / 0.9982 (y) relative to 0.0893, so 0.0893 / 0.9990 = 0.0894.
+# PL004 measured 0.0887-0.0894 on ST2 across samples. HAL and MERlin's JSON say
+# 0.0878 or 0.1. Not yet confirmed with a ruler slide.
+micron_per_pixel: 0.0894

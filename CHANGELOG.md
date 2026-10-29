@@ -17,6 +17,15 @@ those lines under a new version heading, bumps `version` in
 
 ## [Unreleased]
 
+### Added
+
+- fishtank scripts: detect-spots takes `on_the_fly` and `max_drift`;
+  detect-spots, cellpose and mosaic take `microscope` (a settings YAML that
+  overrides the image XML; `--scale_factor` is then left out). ST2 60X YAML
+  shipped in `data/configs/fishtank/microscope/`. `create_fishtank_files`
+  sets them (on-the-fly, max_drift 300, 64gb first pass). Default output
+  unchanged.
+
 ### Fixed
 
 - fishtank cellpose scripts default to `--model cpsam` instead of `nuclei`,
