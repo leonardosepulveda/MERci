@@ -1,0 +1,19 @@
+# Microscope settings for MERFISH-X (MFX), 60X objective, for fishtank --microscope.
+# They override the values HAL writes into every image XML. On MFX the XML's
+# flags are right for fishtank, but its pixel size (0.109 um) is not.
+#
+# Orientation: with these flags, stage +x runs along image +columns and stage +y
+# along image +rows. Measured on LT056_sample_04 slice4 (2026-10-29): of the 8
+# orientations, only this one makes neighbouring FOVs' overlap bands match
+# (DAPI band Pearson median 0.959, 83% of 303 edges > 0.5; next best 0.343).
+# MFX movies are .tif, which fishtank flips BEFORE transposing (.dax/.zarr:
+# transpose first). So these flags give the same pixels as MERlin's MFX_60X
+# file (transpose + flip_vertical, transpose applied first): img.T[::-1, :].
+transpose: true
+flip_horizontal: true
+flip_vertical: false
+
+# Pixel size: MERlin's MFX_60X value, 2015.9 px per 180 um neighbouring-FOV
+# step, measured on this same sample (LT074). Not yet confirmed with a ruler
+# slide.
+micron_per_pixel: 0.0893

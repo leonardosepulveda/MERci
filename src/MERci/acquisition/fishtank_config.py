@@ -199,6 +199,7 @@ def copy_fishtank_reference_files(lib_version: str, merci_dir: Path, fishtank_di
 # image XML (wrong on ST2); its own comments say how it was measured.
 _MICROSCOPE_FILE = {
     ("ST2", "60X"): "storm2_60x.yaml",
+    ("MFX", "60X"): "mfx_60x.yaml",
 }
 
 

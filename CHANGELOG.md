@@ -19,6 +19,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- fishtank microscope file for MFX 60X (`mfx_60x.yaml`: transpose +
+  flip_horizontal, 0.0893 µm/px), checked on LT056_sample_04 overlaps.
+  fishtank flips .tif movies before transposing, so these flags are not
+  MERlin's MFX flags but give the same pixels.
 - fishtank scripts: detect-spots takes `on_the_fly` and `max_drift`;
   detect-spots, cellpose and mosaic take `microscope` (a settings YAML that
   overrides the image XML; `--scale_factor` is then left out). ST2 60X YAML
