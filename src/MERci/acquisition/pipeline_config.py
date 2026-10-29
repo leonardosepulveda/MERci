@@ -110,6 +110,7 @@ class PipelineConfig:
     cells_round:      ImagingRoundRecipe
     bits_round:       ImagingRoundRecipe
     focus_test_z:     float
+    focus_test_frames: int   # 0 = focus check only; >0 = movie length (notebook 02c)
     transit_n_blank:  int
 
     # ── Round/bit/color (notebook 03) -- backend-agnostic ────────────────
@@ -257,6 +258,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         cells_round      = _recipe(imaging["cells_round"]),
         bits_round       = _recipe(imaging["bits_round"]),
         focus_test_z     = imaging["focus_test_z"],
+        focus_test_frames = imaging.get("focus_test_frames", 0),
         transit_n_blank  = imaging["transit_n_blank"],
 
         round_bit_color  = round_bit_color,
