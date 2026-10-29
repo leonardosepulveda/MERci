@@ -52,6 +52,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- create_merlin_files sets `create_ffc`'s `dark_frame_indices` to the
+  blank frames of the movie MERlin's CreateFfc reads its dark frame from
+  (`merlin_config.ffc_dark_frame_indices`). Left out when there are none.
 - Two-task CellPose (MERlin 3323ebc): new `cellpose_eval_sam` atom
   (`CellPoseEvalSAM`, batched on `gpu_requeue`, full GPU cards only) whose
   cellpose parameters come from `cellpose_segment_sam` (`parameters_from`);

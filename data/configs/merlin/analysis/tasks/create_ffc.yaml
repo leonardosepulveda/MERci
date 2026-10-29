@@ -4,6 +4,7 @@
 # fovs' raw frames. No dependencies, no parameters set: MERlin's own defaults
 # (fov_count=10, smooth_sigma=50, normalize_percentile=99.99,
 # minimum_value=0.1) are used as-is. Consumed by generate_mosaic as its
-# ffc_task.
+# ffc_task. dark_frame_indices is set per experiment by create_merlin_files
+# (ffc_dark_frame_indices: the frame table's blank frames).
 task: CreateFfc
 module: merlin.analysis.createffc

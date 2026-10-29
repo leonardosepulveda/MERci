@@ -1156,6 +1156,26 @@ def build_merlin_analysis_parameters(
     return output_path
 
 
+def ffc_dark_frame_indices(data_org, bits_frame_tables: dict, cells_frame_table) -> List[int]:
+    """
+    Blank-frame indices for ``create_ffc``'s ``dark_frame_indices``.
+
+    MERlin's CreateFfc estimates the dark frame from the movie of one data
+    channel: the first channel of the lowest color, colors compared as
+    strings (``DataOrganization.get_data_channel_color``). This picks the
+    same channel in *data_org* and returns the frame-table rows with no
+    color (blank, laser-off frames, z-return frames included) of that
+    channel's movie. Empty list when the movie has none.
+
+    *bits_frame_tables* is ``{round_1indexed: DataFrame}`` as passed to
+    ``create_data_organization``; ``imagingRound`` -1 is the cells movie.
+    """
+    color = min(data_org["color"].astype(str))
+    row = data_org[data_org["color"].astype(str) == color].iloc[0]
+    ft = cells_frame_table if row["imagingRound"] == -1 else bits_frame_tables[row["imagingRound"]]
+    return [int(i) for i in ft.index[ft["color"].isna()]]
+
+
 def __getattr__(name):
     # Orientation moved to acquisition.configs; keep old imports working
     # (e.g. notebooks already exported into an experiment folder).
