@@ -12,6 +12,8 @@ dependencies:
     - shapely
     - pillow
     - scikit-image
+    - scikit-learn
+    - joblib
     - scipy
     - jupyterlab
     - ipykernel

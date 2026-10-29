@@ -38,6 +38,7 @@ imaging:
     return_step: 5
 
   focus_test_z: 3       # z (um above bead_z) of the focus-test sequence
+  focus_test_frames: 2  # focus-test movie length (405 + blank, for 02d's tissue filter); 0 = focus check only
   transit_n_blank: 2    # blank frames per transit FOV
 
 fluidics:

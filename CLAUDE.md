@@ -139,6 +139,8 @@ src/MERci/
     completeness.py         per-FOV raw-file existence + zarr chunk-integrity checks (no decompression)
     elevation.py           per-pixel tissue elevation/thickness, FFC from interior FOVs, GIF/movie/z-mosaic
     cell_mapping.py        per-cell identity matching between two segmentations of one tissue
+    tissue_quality/        BC561 tissue-quality model: P(damaged) of DAPI windows, FOV damaged %,
+                           51 um removal map, nucleus flags (02d; reusable on segmented data)
     fast_spot_quantification.py  per-bit hyb-reagent spot QC (during_imaging)
     imaged_fovs.py         which round a live acquisition-progress view watches
     view_intensity_stats.py  load annotated per-FOV stats (after_imaging/measure_stats/view_intensity_stats)
@@ -171,8 +173,12 @@ notebooks/
     01  create_hal_config_and_shutters       imaging sequence, HAL/shutter XML, transit config
     02a create_boundary_from_mosaic (opt.)   derive tissue boundary from a Steve mosaic
     02b create_positions_from_boundaries     FOV scanning positions
+    02c create_focus_test_dave_config        focus-lock test Dave recipe (runs on the scope first;
+                                              tumor_disk: 405 + blank movie per FOV)
+    02d filter_positions_by_tissue_quality   tumor_disk: drop damaged-tissue FOVs from the focus test;
+                                              original kept as positions_<tag>_all.txt
     03  create_round_info                    round-bit-color map, round_info.csv
-    04  create_dave_config                   Dave experiment-recipe XMLs; hybs recipe annotated with per-round bit/color XML comments
+    04  create_dave_config                   cells/hybs Dave recipe XMLs; hybs recipe annotated with per-round bit/color XML comments
   after_imaging/     Online analysis, run during the experiment (no run-order numbers)
     measure_stats/
       fov_scheduler              FOV-level scheduler (thumbnails, stats, histograms)
@@ -231,11 +237,11 @@ analysis folder outside this repo and come back as `prompt_history/` handoffs.
 
 ## Architecture
 
-**Pre-experiment workflow**: run the 5 `regular/` notebooks, then
+**Pre-experiment workflow**: run the `regular/` notebooks (7, two optional), then
 `after_imaging/create_submit_files/` (or the 9 `multi_z/` ones, plus
 `after_imaging/measure_thickness/measure_tissue_thickness.ipynb` mid-sequence) above in
 order for the acquisition being prepared. Each writes inputs the next one
-reads (HAL/shutter → positions → round_info → Dave config → experiment_info
+reads (HAL/shutter → positions → focus test [→ tissue filter] → round_info → Dave config → experiment_info
 → merlin data-org + run files / fishtank color-usage + scripts). Naming convention: `{kind}-{name}` stems (`bits`/`cells`/`transit`)
 shared across HAL config, shutter file, and frame table for one round.
 

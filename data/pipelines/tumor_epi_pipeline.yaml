@@ -37,6 +37,7 @@ imaging:
     return_step: 5
 
   focus_test_z: 0.5     # z (um above bead_z) of the focus-test sequence
+  focus_test_frames: 0  # focus-test movie length; 0 = focus check only, no movie
   transit_n_blank: 2    # blank frames per transit FOV
 
 fluidics:
