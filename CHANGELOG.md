@@ -52,6 +52,14 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- `MERci.analysis.tissue_quality` (BC561's tissue-quality model):
+  P(damaged) of 103 µm DAPI windows, a FOV's damaged %, a 51 µm removal map
+  and per-nucleus flags; image-only or v2 + nuclei. Fit at first use from
+  `data/tissue_quality/training_windows.parquet` and cached. New
+  dependencies: scikit-learn, joblib.
+- `before_imaging/regular/02d_filter_positions_by_tissue_quality`: drops
+  FOVs with damaged tissue (focus-test DAPI) before the full acquisition;
+  the original positions are kept as `positions_<tag>_all.txt`.
 - create_merlin_files sets `create_ffc`'s `dark_frame_indices` to the
   blank frames of the movie MERlin's CreateFfc reads its dark frame from
   (`merlin_config.ffc_dark_frame_indices`). Left out when there are none.
@@ -73,6 +81,11 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- The focus-lock test recipe moved from notebook 04 to a new
+  `02c_create_focus_test_dave_config`, so it can run before 02d filters
+  the positions; its movie length comes from pipeline.yaml's
+  `focus_test_frames` (tumor_disk: 2, a 405 + blank movie). 04 builds the
+  cells and hybs recipes only.
 - **Breaking:** `LiveRoundMosaicBuilder` caches tiles as float32 `.npy`
   (oriented and resized, before FFC and the contrast stretch) instead of
   stretched `.png`, so a round re-renders with another contrast range or FFC

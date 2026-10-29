@@ -20,20 +20,27 @@ Every notebook's second cell sets `PIPELINE_ID` (one of the ids in
 `pipeline.yaml` into `PIPELINE_CONFIG` -- everything else in the notebook
 reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 
-## Notebook sequence (5 notebooks here + 2 in `after_imaging/`)
+## Notebook sequence (7 notebooks here + 2 in `after_imaging/`)
 
 | # | Notebook | Backend |
 |---|----------|---------|
 | 01 | `01_create_hal_config_and_shutters.ipynb` | either |
 | 02 | `02_create_boundary_from_mosaic.ipynb` (optional) | either |
 | 02 | `02_create_positions_from_boundaries.ipynb` | either |
+| 02c | `02c_create_focus_test_dave_config.ipynb` | either |
+| 02d | `02d_filter_positions_by_tissue_quality.ipynb` (`tumor_disk`) | either |
 | 03 | `03_create_round_info.ipynb` | either |
 | 04 | `04_create_dave_config.ipynb` | either |
 | -- | `after_imaging/create_submit_files/create_experiment_info.ipynb` | either |
 | -- | `after_imaging/create_submit_files/create_merlin_files.ipynb` | `analysis_backend: merlin` |
 | -- | `after_imaging/create_submit_files/create_fishtank_files.ipynb` | `analysis_backend: fishtank` |
 
-Steps 01-04 are all that's needed before imaging. The analysis inputs
+Steps 01-04 are all that's needed before imaging. 02c's focus-test recipe
+runs on the microscope before the cells/hybs recipes. In `tumor_disk` it
+takes a 405 + blank movie per FOV (`focus_test_frames` in pipeline.yaml),
+and 02d then drops FOVs with damaged tissue: it keeps the original list as
+`positions_<tag>_all.txt` and writes the kept FOVs to `positions_<tag>.txt`,
+so 03, 04 and everything after use them unchanged. The analysis inputs
 (`experiment_info.yaml`, then the MERlin data organization + run files, or
 fishtank's color usage/decoding strategy + run scripts) live in
 `after_imaging/`. They use the same `PIPELINE_ID`/`PIPELINE_CONFIG`. For 14,
