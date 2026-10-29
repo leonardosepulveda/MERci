@@ -13,6 +13,8 @@ dependencies = [
     "numpy",
     "pandas",
     "scikit-image",
+    "scikit-learn",
+    "joblib",
     "Pillow",
     "shapely",
     "matplotlib",
