@@ -8,6 +8,7 @@ import html
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from IPython.display import HTML, display
 
@@ -16,23 +17,16 @@ from IPython.display import HTML, display
 
 def _infer_scan_mode(frame_table: pd.DataFrame) -> str:
     """
-    Return ``'interleaved'`` or ``'sequential'`` by inspecting the first two
-    consecutive data frames (those not at the bead z-position).
-
-    - If the first two data frames share the same z → color is the fast axis
-      → ``'interleaved'``
-    - If they share the same color (or both blank) → z is the fast axis
-      → ``'sequential'``
+    Return ``'interleaved'`` or ``'sequential'`` from how often consecutive
+    frames share z: in an interleaved stack of k colours that is (k-1)/k of
+    the pairs, in a sequential one almost none. Counting over the whole table
+    makes no assumption about the bead frames (one z or several).
+    A single-colour stack reads as sequential; the two are identical then.
     """
-    bead_z = frame_table["z"].iloc[0]
-    data   = frame_table[frame_table["z"] != bead_z]
-    if len(data) < 2:
+    z = frame_table["z"].to_numpy()
+    if len(z) < 2:
         return "interleaved"
-    if data["z"].iloc[0] == data["z"].iloc[1]:
-        return "interleaved"
-    c0, c1     = data["color"].iloc[0], data["color"].iloc[1]
-    same_color = (c0 == c1) or (pd.isna(c0) and pd.isna(c1))
-    return "sequential" if same_color else "interleaved"
+    return "interleaved" if np.mean(z[1:] == z[:-1]) >= 0.25 else "sequential"
 
 
 def _split_groups(frame_table: pd.DataFrame, scan_mode: str):

@@ -20,6 +20,7 @@ imaging:
     z_max: 50
     z_step: 0.5
     bead_seq: [488]
+    bead_z: 0
     color_seq: [405, 560]
     end_seq: [488]
     scan_mode: interleaved
@@ -31,6 +32,7 @@ imaging:
     z_max: 50
     z_step: 0.5
     bead_seq: [488]
+    bead_z: 0
     color_seq: [650, 560]
     end_seq: [488]
     scan_mode: interleaved

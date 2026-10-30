@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 import yaml
@@ -37,6 +37,7 @@ class ImagingRoundRecipe:
     scan_mode:      str   = "interleaved"
     z_return_mode:  str   = "progressive"
     return_step:    float = 5
+    bead_z:         Union[float, List[float]] = 0   # one z, or one z per bead_seq entry
 
 
 @dataclass
