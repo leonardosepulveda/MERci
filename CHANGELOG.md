@@ -19,6 +19,12 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- Beads at several z: `bead_z` in a pipeline.yaml round recipe (and
+  `get_frame_table`) may be a list with one z per `bead_seq` entry, e.g.
+  `bead_seq: [488, 488, 488]`, `bead_z: [-0.5, 0, 0.5]`, for ST2's focal
+  plane tilted against the coverslip. The z return and `end_seq` go to the
+  first bead z. A scalar (default 0) behaves as before. MERlin still reads
+  one fiducial frame (the 488 one at z = 0).
 - fishtank microscope file for MFX 60X (`mfx_60x.yaml`: transpose +
   flip_horizontal, 0.0893 µm/px), checked on LT056_sample_04 overlaps.
   fishtank flips .tif movies before transposing, so these flags are not

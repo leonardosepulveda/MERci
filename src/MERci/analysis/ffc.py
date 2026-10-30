@@ -132,7 +132,7 @@ def select_all_frames_of_fov(
     fov_path: Path,
     frame_table: pd.DataFrame,
     color: float,
-    bead_z: float = 0.0,
+    bead_z: "float | List[float]" = 0.0,
 ) -> List[Tuple[Path, int]]:
     """
     Every z-frame of *color* within one FOV file, as independent FFC samples

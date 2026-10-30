@@ -13,7 +13,8 @@ microscope YAML.
 
 Typical round structure
 -----------------------
-  [bead_seq]   at z=bead_z           ← fiducial images (e.g. 488)
+  [bead_seq]   at z=bead_z           ← fiducial images (e.g. 488); bead_z may be
+                                       a list, one z per bead_seq entry
   [color_seq]  at z=z_pos[0]
   [color_seq]  at z=z_pos[1]
   …
@@ -40,7 +41,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
@@ -299,7 +300,7 @@ def power_dict_to_channel_list(
 # ── Frame table ───────────────────────────────────────────────────────────────
 
 def get_frame_table(
-    bead_z:        float,
+    bead_z:        Union[float, List[float]],
     bead_seq:      List,
     color_seq:     List,
     end_seq:       List,
@@ -314,7 +315,12 @@ def get_frame_table(
 
     Parameters
     ----------
-    bead_z     : z position (µm above coverslip) for fiducial bead frames
+    bead_z     : z position (µm above coverslip) for fiducial bead frames, or
+                 a list with one z per *bead_seq* entry (e.g. ``[-0.5, 0, 0.5]``
+                 with ``bead_seq=[488, 488, 488]``: beads at several z, for a
+                 focal plane tilted against the coverslip). With a list, the
+                 z return and *end_seq* go to ``bead_z[0]``, where the next
+                 round's bead frames start.
     bead_seq   : ordered list of colours (nm) or ``np.nan`` for blank frames,
                  acquired at *bead_z* **before** the z-stack
     color_seq  : colours to acquire across the z-stack
@@ -373,11 +379,22 @@ def get_frame_table(
     if z_return_mode == "progressive" and return_step <= 0:
         raise ValueError(f"return_step must be > 0, got {return_step!r}.")
 
+    if np.ndim(bead_z) == 0:
+        bead_zs = [bead_z] * len(bead_seq)
+    else:
+        bead_zs = list(bead_z)
+        if len(bead_zs) != len(bead_seq):
+            raise ValueError(f"bead_z has {len(bead_zs)} values but bead_seq has "
+                             f"{len(bead_seq)}; give one z per bead_seq entry.")
+        if not bead_zs:
+            raise ValueError("bead_z is an empty list; pass a scalar for no bead frames.")
+        bead_z = bead_zs[0]   # z return and end_seq land here
+
     ch_map = get_color_to_channel_dict(microscope)
     rows: List[Dict] = []
 
-    for color in bead_seq:
-        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
+    for color, z in zip(bead_seq, bead_zs):
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
 
     if scan_mode == "interleaved":
         for z in z_pos:
@@ -783,7 +800,7 @@ def load_round_frame_table(round_id: int, config, metadata) -> pd.DataFrame:
 
 def get_color_frame_indices(
     frame_table: pd.DataFrame,
-    bead_z:      float = 0.0,
+    bead_z:      Union[float, List[float]] = 0.0,
 ) -> "Dict[float, int]":
     """
     For each non-blank, non-bead color in *frame_table* return the frame index
@@ -793,8 +810,8 @@ def get_color_frame_indices(
     ----------
     frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
                   integer index equal to the camera frame number
-    bead_z      : z value used for fiducial (bead) frames; those rows are
-                  excluded from the search
+    bead_z      : z value (or list of z values) used for fiducial (bead)
+                  frames; those rows are excluded from the search
 
     Returns
     -------
@@ -805,7 +822,7 @@ def get_color_frame_indices(
     df["frame_idx"] = df.index
 
     # Keep only data frames (not bead/end frames at bead_z) with real colors
-    data = df[(df["z"] != bead_z) & df["color"].notna()].copy()
+    data = df[~df["z"].isin(np.atleast_1d(bead_z)) & df["color"].notna()].copy()
     if data.empty:
         return {}
 
@@ -825,7 +842,7 @@ def get_color_frame_indices(
 def get_all_color_frame_indices(
     frame_table: pd.DataFrame,
     color:       float,
-    bead_z:      float = 0.0,
+    bead_z:      Union[float, List[float]] = 0.0,
 ) -> List[int]:
     """
     Return every frame index for *color* in *frame_table* (every z-plane),
@@ -840,8 +857,8 @@ def get_all_color_frame_indices(
     frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
                   integer index equal to the camera frame number
     color       : excitation wavelength (nm) to match
-    bead_z      : z value used for fiducial (bead) frames; those rows are
-                  excluded
+    bead_z      : z value (or list of z values) used for fiducial (bead)
+                  frames; those rows are excluded
 
     Returns
     -------
@@ -850,7 +867,7 @@ def get_all_color_frame_indices(
     df = frame_table.copy()
     df["frame_idx"] = df.index
 
-    data = df[(df["z"] != bead_z) & (df["color"] == color)].copy()
+    data = df[~df["z"].isin(np.atleast_1d(bead_z)) & (df["color"] == color)].copy()
     if data.empty:
         return []
 

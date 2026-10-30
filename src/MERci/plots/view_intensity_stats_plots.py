@@ -11,7 +11,7 @@ from ..analysis.stage_z import positions_to_grid_indices
 from .experiment_plots import DEFAULT_COLOUR, WAVELENGTH_COLOUR
 
 
-def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead_z: float = 0.0, bead_color: float = 488.0) -> None:
+def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead_z: "float | list" = 0.0, bead_color: float = 488.0) -> None:
     """
     Z-profile plot for one bit (round_id x color_nm).
     One line per FOV; all lines share the same color, alpha = 0.5.
@@ -23,7 +23,7 @@ def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead
     data = stats_df[
         (stats_df["round_id"] == round_id)
         & (stats_df["color"].round() == round(color_nm))
-        & (stats_df["z"] != bead_z)
+        & ~stats_df["z"].isin(np.atleast_1d(bead_z))
     ].copy()
 
     if data.empty:
@@ -46,7 +46,7 @@ def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead
     plt.show()
 
 
-def plot_fov_heatmap(stats_df: pd.DataFrame, meta, round_id: int, color_nm: float, bead_z: float = 0.0, bead_color: float = 488.0) -> None:
+def plot_fov_heatmap(stats_df: pd.DataFrame, meta, round_id: int, color_nm: float, bead_z: "float | list" = 0.0, bead_color: float = 488.0) -> None:
     """
     Heatmap of per-FOV median intensity (median over z) for one bit.
 
@@ -62,7 +62,7 @@ def plot_fov_heatmap(stats_df: pd.DataFrame, meta, round_id: int, color_nm: floa
     data = stats_df[
         (stats_df["round_id"] == round_id)
         & (stats_df["color"].round() == round(color_nm))
-        & (stats_df["z"] != bead_z)
+        & ~stats_df["z"].isin(np.atleast_1d(bead_z))
     ]
 
     if data.empty:
