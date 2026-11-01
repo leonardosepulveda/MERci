@@ -44,8 +44,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
-- ST2 HAL template: `bright_field_bypass` is `False` (confocal); `True`
-  sent light around the spinning disk.
+- ST2 HAL templates (main and 10x/40x/60x mosaic helpers):
+  `bright_field_bypass` is `False` (confocal); `True` sent light around the
+  spinning disk.
 - fishtank cellpose scripts default to `--model cpsam` instead of `nuclei`,
   which cellpose 4 does not have (it fell back to `cpsam`, so results don't
   change; the script now says what runs).
