@@ -57,6 +57,9 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- create_positions_from_boundaries (regular 02, multi_z 03): the FOV-over-
+  mosaic check runs whenever a `.msc` mosaic is in `data/mosaic10x/`, for
+  manual boundaries too, not only for `from_mosaic` ones.
 - ST2 HAL templates (main and 10x/40x/60x mosaic helpers):
   `bright_field_bypass` is `False` (confocal); `True` sent light around the
   spinning disk.
