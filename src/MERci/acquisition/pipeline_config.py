@@ -38,6 +38,7 @@ class ImagingRoundRecipe:
     z_return_mode:  str   = "progressive"
     return_step:    float = 5
     bead_z:         Union[float, List[float]] = 0   # one z, or one z per bead_seq entry
+    end_z:          Union[float, List[float], None] = None  # one z, or one per end_seq entry; None: bead_z (or bead_z[0])
 
 
 @dataclass

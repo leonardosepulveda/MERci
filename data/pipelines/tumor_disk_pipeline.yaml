@@ -23,6 +23,7 @@ imaging:
     bead_z: 0
     color_seq: [405,488]
     end_seq: [488]
+    end_z: 0
     scan_mode: interleaved
     z_return_mode: progressive
     return_step: 5
@@ -35,6 +36,7 @@ imaging:
     bead_z: 0
     color_seq: [650, 560]
     end_seq: [488]
+    end_z: 0
     scan_mode: interleaved
     z_return_mode: progressive
     return_step: 5

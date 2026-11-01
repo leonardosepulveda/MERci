@@ -409,6 +409,11 @@ def bead_frame_indices(
     bead colour is auto-detected as the non-blank colour whose frames all sit at
     one z value (preferring the one with the fewest frames when several qualify).
 
+    With a ``segment`` column (``get_frame_table``), the bead frames are the
+    *bead_color* frames of the ``bead`` and ``end`` segments, and the
+    auto-detected colour is the non-blank ``bead``-segment colour with the
+    fewest frames, at any number of z.
+
     Parameters
     ----------
     frame_table : DataFrame with ``color`` and ``z`` columns
@@ -422,7 +427,15 @@ def bead_frame_indices(
     if "color" not in ft.columns or "z" not in ft.columns:
         raise ValueError("frame_table must have 'color' and 'z' columns.")
 
-    if bead_color is None:
+    if "segment" in ft.columns:
+        if bead_color is None:
+            counts = ft.loc[ft["segment"] == "bead", "color"].dropna().value_counts()
+            if counts.empty:
+                raise ValueError("No non-blank bead-segment frame in frame table; "
+                                 "pass bead_color explicitly.")
+            bead_color = counts.idxmin()
+        ft = ft[ft["segment"].isin(["bead", "end"])]
+    elif bead_color is None:
         single_plane = []  # (n_frames, color)
         for color, g in ft.dropna(subset=["color"]).groupby("color"):
             if g["z"].nunique() == 1:

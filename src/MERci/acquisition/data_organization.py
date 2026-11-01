@@ -212,7 +212,14 @@ def _zpos_for_color(ft: pd.DataFrame, color_nm: int) -> list:
 
 
 def _fiducial_frame(ft: pd.DataFrame) -> int:
-    """Index of the first 488-nm bead frame (z == 0)."""
+    """Index of the 488-nm bead frame MERlin registers on: the middle one of
+    the ``segment == "bead"`` 488 frames (the only one for a single bead z).
+    Frame tables without a ``segment`` column: the first 488 frame at z == 0."""
+    if "segment" in ft.columns:
+        idx = ft.index[(ft["color"] == 488) & (ft["segment"] == "bead")]
+        if len(idx) == 0:
+            raise ValueError("No 488-nm bead frame (segment 'bead') found in frame table.")
+        return int(idx[len(idx) // 2])
     mask = (ft["color"] == 488) & (ft["z"] == 0)
     idx  = ft.index[mask]
     if len(idx) == 0:

@@ -65,7 +65,7 @@
   <!-- DO NOT USE SPINNING DISK -->
   <spinning_disk validate="True">
     <aperture type="int">3</aperture>
-    <bright_field_bypass type="boolean">True</bright_field_bypass>
+    <bright_field_bypass type="boolean">False</bright_field_bypass>
     <camera_dichroic_mirror type="string">1:100% Pass</camera_dichroic_mirror>
     <dichroic_mirror type="string">1:405/488/561/640</dichroic_mirror>
     <disk type="string">40-micron pinholes</disk>

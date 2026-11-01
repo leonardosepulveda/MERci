@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from ..acquisition.configs import data_frame_mask
 from ..analysis.stage_z import positions_to_grid_indices
 from .experiment_plots import DEFAULT_COLOUR, WAVELENGTH_COLOUR
 
@@ -23,7 +24,7 @@ def plot_z_profiles(stats_df: pd.DataFrame, round_id: int, color_nm: float, bead
     data = stats_df[
         (stats_df["round_id"] == round_id)
         & (stats_df["color"].round() == round(color_nm))
-        & ~stats_df["z"].isin(np.atleast_1d(bead_z))
+        & data_frame_mask(stats_df, bead_z)
     ].copy()
 
     if data.empty:
@@ -62,7 +63,7 @@ def plot_fov_heatmap(stats_df: pd.DataFrame, meta, round_id: int, color_nm: floa
     data = stats_df[
         (stats_df["round_id"] == round_id)
         & (stats_df["color"].round() == round(color_nm))
-        & ~stats_df["z"].isin(np.atleast_1d(bead_z))
+        & data_frame_mask(stats_df, bead_z)
     ]
 
     if data.empty:

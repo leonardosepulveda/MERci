@@ -17,6 +17,7 @@ from .configs import (
     copy_mosaic_helper_configs,
     get_color_frame_indices,
     get_all_color_frame_indices,
+    data_frame_mask,
 )
 from .positions import (
     create_grid_positions,
