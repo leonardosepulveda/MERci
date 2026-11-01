@@ -90,7 +90,7 @@ def visualize_shutter_sequence(
     The shape of the trajectory makes the acquisition order obvious: an
     interleaved scan shows a rising staircase (all colours per z before
     stepping), a sequential scan shows full z-sweeps per colour, and a
-    progressive z-return shows the descending tail back to ``bead_z``.
+    progressive z-return shows the descending tail back to ``end_z``.
 
     Parameters
     ----------

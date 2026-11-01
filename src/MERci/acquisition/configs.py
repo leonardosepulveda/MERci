@@ -18,13 +18,17 @@ Typical round structure
   [color_seq]  at z=z_pos[0]
   [color_seq]  at z=z_pos[1]
   …
-  [z return]   z_pos[-1] → z_bead    ← how the objective travels back to the coverslip
-  [end_seq]    at z=bead_z           ← frames acquired at z_bead before the next round
+  [z return]   z_pos[-1] → end_z     ← how the objective travels back to the coverslip
+  [end_seq]    at z=end_z            ← frames acquired before the next round
+                                       (end_z defaults to bead_z, or bead_z[0])
 
 The z return is controlled by ``z_return_mode``:
   • ``"progressive"`` *(default)* — blank (laser-off) frames step the objective
-    down from the last stack position to z_bead in increments of ``return_step``.
-  • ``"instant"`` — the objective jumps straight to z_bead (no intermediate frames).
+    down from the last stack position to end_z in increments of ``return_step``.
+  • ``"instant"`` — the objective jumps straight to end_z (no intermediate frames).
+
+Each frame's part of the round is kept in the frame table's ``segment`` column
+(``bead``/``data``/``return``/``end``); ``<z_offsets>`` uses it for its layout.
 
 Usage
 -----
@@ -309,6 +313,7 @@ def get_frame_table(
     scan_mode:     str   = "interleaved",
     z_return_mode: str   = "progressive",
     return_step:   float = 5,
+    end_z:         Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Build the frame table describing one imaging round.
@@ -318,27 +323,28 @@ def get_frame_table(
     bead_z     : z position (µm above coverslip) for fiducial bead frames, or
                  a list with one z per *bead_seq* entry (e.g. ``[-0.5, 0, 0.5]``
                  with ``bead_seq=[488, 488, 488]``: beads at several z, for a
-                 focal plane tilted against the coverslip). With a list, the
-                 z return and *end_seq* go to ``bead_z[0]``, where the next
-                 round's bead frames start.
+                 focal plane tilted against the coverslip).
     bead_seq   : ordered list of colours (nm) or ``np.nan`` for blank frames,
                  acquired at *bead_z* **before** the z-stack
     color_seq  : colours to acquire across the z-stack
-    end_seq    : colours acquired at *bead_z* **after** the z-stack (and after
+    end_seq    : colours acquired at *end_z* **after** the z-stack (and after
                  the z return); typically blank frames (``[np.nan, np.nan]``)
+    end_z      : z position of the z return's last frame and of every *end_seq*
+                 frame. ``None`` (default) means *bead_z*, or ``bead_z[0]``
+                 when *bead_z* is a list (where the next round's beads start).
     z_pos      : 1-D array of z positions for data frames
     microscope : used to resolve hardware channel indices
-    z_return_mode : how the objective travels back to *bead_z* after the z-stack:
+    z_return_mode : how the objective travels back to *end_z* after the z-stack:
 
                  ``"progressive"`` *(default)* — blank (laser-off) frames step
-                 the objective down from the last stack position to *bead_z* in
+                 the objective down from the last stack position to *end_z* in
                  increments of *return_step*, so the Z-nanopositioner descends in
                  controlled steps rather than one large jump. For example, a stack
-                 ending at z=25 with ``bead_z=0`` and ``return_step=5`` adds blank
+                 ending at z=25 with ``end_z=0`` and ``return_step=5`` adds blank
                  frames at z = 20, 15, 10, 5, 0 before *end_seq*.
 
                  ``"instant"`` — no intermediate frames; the objective returns to
-                 *bead_z* in a single jump (only the *end_seq* frames follow the
+                 *end_z* in a single jump (only the *end_seq* frames follow the
                  z-stack). This was the previous behaviour.
     return_step : z decrement (µm) between blank frames in ``"progressive"`` mode;
                   ignored when ``z_return_mode="instant"``. Must be > 0.
@@ -364,8 +370,9 @@ def get_frame_table(
 
     Returns
     -------
-    pd.DataFrame with columns ``["color", "channel", "z"]`` and an integer
-    index equal to the camera frame number (0-based).
+    pd.DataFrame with columns ``["color", "channel", "z", "segment"]`` and an
+    integer index equal to the camera frame number (0-based). ``segment`` is
+    ``"bead"``, ``"data"``, ``"return"`` or ``"end"``.
     """
     if scan_mode not in ("interleaved", "sequential"):
         raise ValueError(
@@ -388,39 +395,45 @@ def get_frame_table(
                              f"{len(bead_seq)}; give one z per bead_seq entry.")
         if not bead_zs:
             raise ValueError("bead_z is an empty list; pass a scalar for no bead frames.")
-        bead_z = bead_zs[0]   # z return and end_seq land here
+        bead_z = bead_zs[0]
+    if end_z is None:
+        end_z = bead_z
 
     ch_map = get_color_to_channel_dict(microscope)
     rows: List[Dict] = []
 
+    def _add(color, z, segment):
+        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z,
+                     "segment": segment})
+
     for color, z in zip(bead_seq, bead_zs):
-        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
+        _add(color, z, "bead")
 
     if scan_mode == "interleaved":
         for z in z_pos:
             for color in color_seq:
-                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
+                _add(color, z, "data")
     else:  # "sequential"
         for i, color in enumerate(color_seq):
             z_sweep = z_pos if i % 2 == 0 else z_pos[::-1]
             for z in z_sweep:
-                rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": z})
+                _add(color, z, "data")
 
     if z_return_mode == "progressive":
         # Step the objective back toward the coverslip with blank (laser-off)
-        # frames, descending from the last stack position to bead_z in
-        # increments of return_step. The final blank lands exactly on bead_z.
-        last_z = rows[-1]["z"] if rows else bead_z
+        # frames, descending from the last stack position to end_z in
+        # increments of return_step. The final blank lands exactly on end_z.
+        last_z = rows[-1]["z"] if rows else end_z
         z = last_z - return_step
-        while z > bead_z + 1e-9:
-            rows.append({"color": np.nan, "channel": np.nan, "z": z})
+        while z > end_z + 1e-9:
+            _add(np.nan, z, "return")
             z -= return_step
-        rows.append({"color": np.nan, "channel": np.nan, "z": bead_z})
+        _add(np.nan, end_z, "return")
 
     for color in end_seq:
-        rows.append({"color": color, "channel": _channel_for(ch_map, color), "z": bead_z})
+        _add(color, end_z, "end")
 
-    return pd.DataFrame(rows, columns=["color", "channel", "z"])
+    return pd.DataFrame(rows, columns=["color", "channel", "z", "segment"])
 
 
 def get_transit_frame_table(
@@ -681,26 +694,42 @@ def format_z_offsets_from_frame_table(frame_table: pd.DataFrame) -> str:
     Build the text content of the ``<z_offsets>`` XML element from
     ``frame_table["z"]``.
 
-    One row per colour sequence (row width = the most common run length of
-    equal consecutive z values), a comma after every value but the last.
-    Values keep their full precision (``1.25`` stays ``1.25``; HAL moves the
-    stage to exactly what is written here).
+    With a ``segment`` column (:func:`get_frame_table`): bead, z-return and
+    end frames one per line, and data frames one line per z (all colours
+    acquired at that z on the same line). Without it (an older frame table):
+    rows as wide as the most common run length of equal consecutive z values.
+    A comma after every value but the last. Values keep their full precision
+    (``1.25`` stays ``1.25``; HAL moves the stage to exactly what is written
+    here).
     """
     from collections import Counter
     from itertools import groupby
 
     z_vals = frame_table["z"].astype(float).tolist()
-    run_lengths = [len(list(g)) for _, g in groupby(z_vals)]
-    counts = Counter(run_lengths)
-    group_size = max(counts, key=lambda k: (counts[k], k)) if counts else 1
 
     def _fmt(v: float) -> str:
         t = f"{v:.4f}".rstrip("0")
         return t + "0" if t.endswith(".") else t
 
     items = [_fmt(v) + ("," if i < len(z_vals) - 1 else "") for i, v in enumerate(z_vals)]
+
+    if "segment" in frame_table.columns:
+        # A new line wherever the segment changes, and within data frames
+        # wherever z changes; every non-data frame starts its own line.
+        keys = [(seg, z if seg == "data" else i)
+                for i, (seg, z) in enumerate(zip(frame_table["segment"], z_vals))]
+        row_sizes = [len(list(g)) for _, g in groupby(keys)]
+    else:
+        run_lengths = [len(list(g)) for _, g in groupby(z_vals)]
+        counts = Counter(run_lengths)
+        group_size = max(counts, key=lambda k: (counts[k], k)) if counts else 1
+        row_sizes = [group_size] * -(-len(items) // group_size)
+
     indent = "         "
-    lines = [indent + "  ".join(items[i:i + group_size]) for i in range(0, len(items), group_size)]
+    lines, start = [], 0
+    for n in row_sizes:
+        lines.append(indent + "  ".join(items[start:start + n]))
+        start += n
     return "\n" + "\n".join(lines) + "\n      "
 
 
