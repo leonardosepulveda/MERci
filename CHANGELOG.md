@@ -25,12 +25,25 @@ those lines under a new version heading, bumps `version` in
   plane tilted against the coverslip. A scalar (default 0) behaves as
   before. MERlin still reads one fiducial frame (the 488 one at z = 0).
 - `end_z` in a pipeline.yaml round recipe (and `get_frame_table`): the z of
-  the z return's last frame and of every `end_seq` frame, so several bead z
-  no longer move the end sequence. Default: `bead_z` (its first value for a
+  the `end_seq` frames, one value or one per entry, so several bead z no
+  longer move the end sequence. Default: `bead_z` (its first value for a
   list). Shipped pipelines set `end_z: 0`.
 - Frame tables get a `segment` column (`bead`/`data`/`return`/`end`). HAL
   `<z_offsets>` uses it: bead, z-return and end frames one per line, data
   frames one line per z. Older frame tables keep the old layout.
+- Colour (z-stack) frames are found from `segment` (`data_frame_mask`), not
+  by `z` not in `bead_z`, so data frames may sit at a bead z. Used by
+  `get_color_frame_indices`, `get_all_color_frame_indices`, the
+  view_intensity_stats plots, `bead_frame_indices` (now also works with
+  several bead z) and MERlin's `fiducialFrame` (middle 488 bead frame).
+  Older frame tables keep the z rule.
+
+### Changed
+
+- Breaking: the progressive z return no longer adds a blank frame at the
+  end z; it stops one `return_step` above it. Rounds have one frame fewer
+  (e.g. `blkf6_...` becomes `blkf5_...`). For the old settling frame, put a
+  blank first in `end_seq` (`end_seq: [.nan, 488]`, `end_z: [0, 0]`).
 - fishtank microscope file for MFX 60X (`mfx_60x.yaml`: transpose +
   flip_horizontal, 0.0893 µm/px), checked on LT056_sample_04 overlaps.
   fishtank flips .tif movies before transposing, so these flags are not

@@ -22,7 +22,7 @@ def load_stats_with_annotations(
 ) -> pd.DataFrame:
     """
     Load all completed stats CSVs and annotate with round_id, fov_id,
-    stage position, z, and color.
+    stage position, z, color, and (frame tables that have it) segment.
     """
     frame_info = {}   # round_id -> frame/color/z table (or None)
     records = []
@@ -30,7 +30,7 @@ def load_stats_with_annotations(
         if round_id not in frame_info:
             ft = next((ft for _, ft in iter_round_frame_tables(round_id, config, metadata)), None)
             frame_info[round_id] = None if ft is None else (
-                ft[["color", "z"]]
+                ft[[c for c in ("color", "z", "segment") if c in ft.columns]]
                 .reset_index()
                 .rename(columns={ft.index.name or "index": "frame"})
             )

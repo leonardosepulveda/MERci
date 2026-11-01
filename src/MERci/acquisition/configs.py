@@ -19,16 +19,19 @@ Typical round structure
   [color_seq]  at z=z_pos[1]
   …
   [z return]   z_pos[-1] → end_z     ← how the objective travels back to the coverslip
-  [end_seq]    at z=end_z            ← frames acquired before the next round
-                                       (end_z defaults to bead_z, or bead_z[0])
+  [end_seq]    at z=end_z            ← frames acquired before the next round; end_z
+                                       may be a list, one z per end_seq entry
+                                       (default: bead_z, or bead_z[0])
 
 The z return is controlled by ``z_return_mode``:
   • ``"progressive"`` *(default)* — blank (laser-off) frames step the objective
-    down from the last stack position to end_z in increments of ``return_step``.
+    down from the last stack position toward end_z in steps of ``return_step``,
+    stopping above it (the first end_seq frame is the one at end_z).
   • ``"instant"`` — the objective jumps straight to end_z (no intermediate frames).
 
 Each frame's part of the round is kept in the frame table's ``segment`` column
-(``bead``/``data``/``return``/``end``); ``<z_offsets>`` uses it for its layout.
+(``bead``/``data``/``return``/``end``). ``<z_offsets>`` uses it for its layout, and
+:func:`data_frame_mask` uses it to find the colour (data) frames.
 
 Usage
 -----
@@ -313,7 +316,7 @@ def get_frame_table(
     scan_mode:     str   = "interleaved",
     z_return_mode: str   = "progressive",
     return_step:   float = 5,
-    end_z:         Optional[float] = None,
+    end_z:         Optional[Union[float, List[float]]] = None,
 ) -> pd.DataFrame:
     """
     Build the frame table describing one imaging round.
@@ -329,19 +332,22 @@ def get_frame_table(
     color_seq  : colours to acquire across the z-stack
     end_seq    : colours acquired at *end_z* **after** the z-stack (and after
                  the z return); typically blank frames (``[np.nan, np.nan]``)
-    end_z      : z position of the z return's last frame and of every *end_seq*
-                 frame. ``None`` (default) means *bead_z*, or ``bead_z[0]``
-                 when *bead_z* is a list (where the next round's beads start).
+    end_z      : z position of the *end_seq* frames, or a list with one z per
+                 *end_seq* entry. ``None`` (default) means *bead_z*, or
+                 ``bead_z[0]`` when *bead_z* is a list (where the next round's
+                 beads start). The z return heads for the first end z.
     z_pos      : 1-D array of z positions for data frames
     microscope : used to resolve hardware channel indices
     z_return_mode : how the objective travels back to *end_z* after the z-stack:
 
                  ``"progressive"`` *(default)* — blank (laser-off) frames step
-                 the objective down from the last stack position to *end_z* in
-                 increments of *return_step*, so the Z-nanopositioner descends in
-                 controlled steps rather than one large jump. For example, a stack
-                 ending at z=25 with ``end_z=0`` and ``return_step=5`` adds blank
-                 frames at z = 20, 15, 10, 5, 0 before *end_seq*.
+                 the objective down from the last stack position toward *end_z*
+                 in increments of *return_step*, so the Z-nanopositioner descends
+                 in controlled steps rather than one large jump. The steps stop
+                 above *end_z*; nothing is added at *end_z* itself (put a blank
+                 first in *end_seq* for a settling frame there). For example, a
+                 stack ending at z=25 with ``end_z=0`` and ``return_step=5`` adds
+                 blank frames at z = 20, 15, 10, 5 before *end_seq*.
 
                  ``"instant"`` — no intermediate frames; the objective returns to
                  *end_z* in a single jump (only the *end_seq* frames follow the
@@ -398,6 +404,14 @@ def get_frame_table(
         bead_z = bead_zs[0]
     if end_z is None:
         end_z = bead_z
+    if np.ndim(end_z) == 0:
+        end_zs = [end_z] * len(end_seq)
+    else:
+        end_zs = list(end_z)
+        if len(end_zs) != len(end_seq):
+            raise ValueError(f"end_z has {len(end_zs)} values but end_seq has "
+                             f"{len(end_seq)}; give one z per end_seq entry.")
+        end_z = end_zs[0] if end_zs else bead_z   # the z return heads here
 
     ch_map = get_color_to_channel_dict(microscope)
     rows: List[Dict] = []
@@ -421,17 +435,16 @@ def get_frame_table(
 
     if z_return_mode == "progressive":
         # Step the objective back toward the coverslip with blank (laser-off)
-        # frames, descending from the last stack position to end_z in
-        # increments of return_step. The final blank lands exactly on end_z.
+        # frames, descending from the last stack position toward end_z in
+        # increments of return_step, stopping above it.
         last_z = rows[-1]["z"] if rows else end_z
         z = last_z - return_step
         while z > end_z + 1e-9:
             _add(np.nan, z, "return")
             z -= return_step
-        _add(np.nan, end_z, "return")
 
-    for color in end_seq:
-        _add(color, end_z, "end")
+    for color, z in zip(end_seq, end_zs):
+        _add(color, z, "end")
 
     return pd.DataFrame(rows, columns=["color", "channel", "z", "segment"])
 
@@ -827,6 +840,24 @@ def load_round_frame_table(round_id: int, config, metadata) -> pd.DataFrame:
     raise FileNotFoundError(f"No frame table found for round {round_id}")
 
 
+def data_frame_mask(
+    df:     pd.DataFrame,
+    bead_z: Union[float, List[float]] = 0.0,
+) -> pd.Series:
+    """
+    Boolean mask of the z-stack (data) frames in *df*: a frame table, or any
+    table with its ``z``/``segment`` columns (e.g. per-frame stats).
+
+    Rows with a ``segment`` (:func:`get_frame_table`) are data frames when it
+    is ``"data"``, whatever their z. Rows without one (frame tables written
+    before that column) fall back to ``z`` not in *bead_z*.
+    """
+    by_z = ~df["z"].isin(np.atleast_1d(bead_z))
+    if "segment" not in df.columns:
+        return by_z
+    return (df["segment"] == "data").where(df["segment"].notna(), by_z).astype(bool)
+
+
 def get_color_frame_indices(
     frame_table: pd.DataFrame,
     bead_z:      Union[float, List[float]] = 0.0,
@@ -839,8 +870,9 @@ def get_color_frame_indices(
     ----------
     frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
                   integer index equal to the camera frame number
-    bead_z      : z value (or list of z values) used for fiducial (bead)
-                  frames; those rows are excluded from the search
+    bead_z      : z value (or list of z values) of the bead frames; used only
+                  for a frame table without a ``segment`` column
+                  (:func:`data_frame_mask`)
 
     Returns
     -------
@@ -850,8 +882,8 @@ def get_color_frame_indices(
     df = frame_table.copy()
     df["frame_idx"] = df.index
 
-    # Keep only data frames (not bead/end frames at bead_z) with real colors
-    data = df[~df["z"].isin(np.atleast_1d(bead_z)) & df["color"].notna()].copy()
+    # Keep only data frames (not bead/return/end frames) with real colors
+    data = df[data_frame_mask(df, bead_z) & df["color"].notna()].copy()
     if data.empty:
         return {}
 
@@ -886,8 +918,9 @@ def get_all_color_frame_indices(
     frame_table : DataFrame with columns ``["color", "channel", "z"]`` and
                   integer index equal to the camera frame number
     color       : excitation wavelength (nm) to match
-    bead_z      : z value (or list of z values) used for fiducial (bead)
-                  frames; those rows are excluded
+    bead_z      : z value (or list of z values) of the bead frames; used only
+                  for a frame table without a ``segment`` column
+                  (:func:`data_frame_mask`)
 
     Returns
     -------
@@ -896,7 +929,7 @@ def get_all_color_frame_indices(
     df = frame_table.copy()
     df["frame_idx"] = df.index
 
-    data = df[~df["z"].isin(np.atleast_1d(bead_z)) & (df["color"] == color)].copy()
+    data = df[data_frame_mask(df, bead_z) & (df["color"] == color)].copy()
     if data.empty:
         return []
 
