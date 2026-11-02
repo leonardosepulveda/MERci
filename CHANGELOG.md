@@ -57,6 +57,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Fixed
 
+- Focus-test HAL config (notebook 01, regular and multi_z) had one frame
+  too few after the z return stopped adding a blank at the end z: tumor_disk
+  got a 1-frame movie for its 2-frame focus test. The blanks are now
+  explicit: one 405 frame plus blanks up to `focus_test_frames`.
 - create_positions_from_boundaries (regular 02, multi_z 03): the FOV-over-
   mosaic check runs whenever a `.msc` mosaic is in `data/mosaic10x/`, for
   manual boundaries too, not only for `from_mosaic` ones.
