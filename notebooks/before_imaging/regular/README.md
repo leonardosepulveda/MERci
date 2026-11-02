@@ -25,8 +25,8 @@ reads from there. Set the same `PIPELINE_ID` in every notebook for one run.
 | # | Notebook | Backend |
 |---|----------|---------|
 | 01 | `01_create_hal_config_and_shutters.ipynb` | either |
-| 02 | `02_create_boundary_from_mosaic.ipynb` (optional) | either |
-| 02 | `02_create_positions_from_boundaries.ipynb` | either |
+| 02a | `02a_create_boundary_from_mosaic.ipynb` (optional) | either |
+| 02b | `02b_create_positions_from_boundaries.ipynb` | either |
 | 02c | `02c_create_focus_test_dave_config.ipynb` | either |
 | 02d | `02d_filter_positions_by_tissue_quality.ipynb` (`tumor_disk`) | either |
 | 03 | `03_create_round_info.ipynb` | either |
@@ -50,7 +50,7 @@ pipeline).
 
 ## What still isn't pipeline.yaml-driven
 
-`02_create_boundary_from_mosaic.ipynb`/`02_create_positions_from_boundaries.ipynb`
+`02a_create_boundary_from_mosaic.ipynb`/`02b_create_positions_from_boundaries.ipynb`
 are genuinely per-experiment (tissue-segmentation thresholds, boundary/grid
 choices) -- they don't read `PIPELINE_CONFIG` and aren't expected to; set
 `MICROSCOPE` there to match `PIPELINE_CONFIG.microscope` by hand (see each

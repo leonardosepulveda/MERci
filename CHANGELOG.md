@@ -40,6 +40,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- `before_imaging/regular/` notebooks renamed
+  `02_create_boundary_from_mosaic` -> `02a_...` and
+  `02_create_positions_from_boundaries` -> `02b_...`. Their cache and figures
+  folder names are unchanged.
 - Breaking: the progressive z return no longer adds a blank frame at the
   end z; it stops one `return_step` above it. Rounds have one frame fewer
   (e.g. `blkf6_...` becomes `blkf5_...`). For the old settling frame, put a
