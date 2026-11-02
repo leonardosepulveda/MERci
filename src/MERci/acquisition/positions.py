@@ -1133,11 +1133,11 @@ def resolve_boundaries_source_dir(
     boundaries from.
 
     Boundary inputs live under two possible sources: ``manual`` (hand-drawn)
-    or ``from_mosaic`` (auto-derived by ``02_create_boundary_from_mosaic
+    or ``from_mosaic`` (auto-derived by ``02a_create_boundary_from_mosaic
     .ipynb``) — both write/read the same ``boundary_positions*.txt``/
     ``hole*.txt`` file convention, just from different subfolders, so this
     is the single place that decides which one a downstream notebook
-    (``02_create_positions_from_boundaries.ipynb``, ``03_create_round_info
+    (``02b_create_positions_from_boundaries.ipynb``, ``03_create_round_info
     .ipynb``) actually uses, keeping both in agreement without needing to
     pass state between separate notebook runs.
 

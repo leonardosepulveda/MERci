@@ -3,7 +3,7 @@
 Derive tissue-boundary / hole polygons from a Steve low-mag mosaic instead
 of drawing ``boundary_positions*.txt``/``hole*.txt`` by hand.
 
-Workflow (``02_create_boundary_from_mosaic.ipynb``)
+Workflow (``02a_create_boundary_from_mosaic.ipynb``)
 ---------------------------------------------------
 1. ``load_steve_mosaic`` -- read a Steve ``.msc`` manifest and its ``.stv``
    tiles (each carries its stage position, pixel size and stacking order).
@@ -622,7 +622,7 @@ def save_boundary_from_mosaic(segmentation: MosaicSegmentation, positions_dir: P
     Write ``segmentation``'s polygons as ``boundary_positions*.txt``/``hole*.txt``,
     in the exact convention :func:`MERci.acquisition.positions.discover_boundary_files`
     and :func:`MERci.acquisition.positions.load_hole_polygons` expect -- so
-    ``02_create_positions_from_boundaries.ipynb`` picks them up unchanged.
+    ``02b_create_positions_from_boundaries.ipynb`` picks them up unchanged.
 
     A single detected tissue polygon is written as the legacy
     ``boundary_positions.txt``; several disjoint tissue polygons (e.g. genuinely
@@ -689,7 +689,7 @@ def save_mosaic_canvas(canvas: MosaicCanvas, path: Path) -> None:
     Save a :class:`MosaicCanvas` to a single compressed ``.npz`` file.
 
     Generalizes the ad-hoc ``image``/``covered``/``origin_um``/``pixel_size_um``
-    round-trip that ``02_create_positions_from_boundaries.ipynb``'s own local
+    round-trip that ``02b_create_positions_from_boundaries.ipynb``'s own local
     cache cell already builds by hand -- one shared implementation, reused by
     that per-experiment cache and by bundled example canvases under
     ``MERci/data/mosaic_canvas_examples/`` (see :func:`load_mosaic_canvas`).
