@@ -19,6 +19,11 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- ST2 Kilroy config `...-261112.xml` (adds "HC" adaptor-hyb/readout
+  protocols and `Cleave Adaptors Test`). Dave protocol resolution now picks
+  the plain name when a step has suffixed variants; pipeline.yaml
+  `fluidics.kilroy_variant: HC` opts into the HC ones.
+
 - `tumor_mf_disk` pipeline (ST2): tumor MERFISH only, no antibody rounds.
   C3 library on lineage_tracing_merfish's 13-round 650/560 layout (bits
   17-26 sequential). Cells round 405 at z 0.25-25 um (0.25 um step), hyb

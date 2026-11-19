@@ -978,6 +978,7 @@ def create_dave_config(
     use_adaptors:         bool = False,
     include_final_cleave: bool = False,
     first_hyb_no_cleave:  bool = True,
+    kilroy_variant:       Optional[str] = None,
     leading_fluidics:     bool = False,
     num_focus_checks:     int  = 50,
     fluidics_protocols:   Optional[Sequence[str]] = None,
@@ -1065,6 +1066,9 @@ def create_dave_config(
     first_hyb_no_cleave   : omit the cleave before the FIRST bits round (a cells
                             round was imaged first on a fresh sample). Ignored
                             with *fluidics_protocols*.
+    kilroy_variant        : pick the Kilroy protocols with this suffix word
+                            (e.g. "HC") where the config has them; None = the
+                            plain ones. See ``KilroyProtocolResolver``.
     leading_fluidics      : also emit a fluidics block before the first round,
                             as if round ``round_ids[0] - 1`` had just been
                             imaged. Makes a hybs-only recipe runnable on its own.
@@ -1108,7 +1112,7 @@ def create_dave_config(
     # Resolve fluidic protocol names against the Kilroy config that will run this
     # experiment, so every protocol written here exists as a Kilroy <protocol>.
     resolver = (
-        KilroyProtocolResolver(load_kilroy_protocols(kilroy_config))
+        KilroyProtocolResolver(load_kilroy_protocols(kilroy_config), variant=kilroy_variant)
         if kilroy_config is not None else None
     )
     bits_round_ids   = [rid for rid in round_ids if _round_has_bits(round_info, rid)]

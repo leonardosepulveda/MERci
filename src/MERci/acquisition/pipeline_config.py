@@ -126,6 +126,7 @@ class PipelineConfig:
     use_adaptors:           bool
     include_final_cleave:   bool
     first_hyb_no_cleave:    bool
+    kilroy_variant:         Optional[str] = None   # e.g. "HC": Kilroy protocol suffix to prefer
 
     # ── Backend-specific (create_submit_files) -- exactly one populated ─
     merlin:    Optional[MerlinConfig]   = None
@@ -269,6 +270,7 @@ def load_pipeline_config(yaml_path: Path, data_dir: Path = None) -> PipelineConf
         use_adaptors           = fluidics["use_adaptors"],
         include_final_cleave   = fluidics["include_final_cleave"],
         first_hyb_no_cleave    = fluidics["first_hyb_no_cleave"],
+        kilroy_variant         = fluidics.get("kilroy_variant"),
 
         merlin    = merlin_config,
         fishtank   = fishtank_config,

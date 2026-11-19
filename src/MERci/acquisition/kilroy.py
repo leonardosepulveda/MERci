@@ -222,16 +222,34 @@ class KilroyProtocolResolver:
     ``load_kilroy_protocols``).  Each resolver method returns the single Kilroy
     protocol whose name matches the requested step, raising ``ValueError`` if
     none match or if the match is ambiguous.
+
+    A config can define suffixed variants of a step (e.g. ``Hybridize Adaptors
+    1`` and ``Hybridize Adaptors 1 HC``, or ``Cleave Adaptors Test``). With
+    *variant* (e.g. ``"HC"``), a step that has a protocol with that word uses
+    it. Otherwise, or for a step without that variant, the plain name wins: the
+    match whose words are contained in every other match's.
     """
 
-    def __init__(self, protocols: Sequence[str]):
+    def __init__(self, protocols: Sequence[str], variant: Optional[str] = None):
         self.protocols: List[str] = list(protocols)
         self._tokensets = {p: set(_tokens(p)) for p in self.protocols}
+        self.variant: Optional[str] = _tokens(variant)[0] if variant else None
 
     # -- internal --------------------------------------------------------------
 
     def _unique(self, predicate: Callable[[Set[str], str], bool], role: str) -> str:
         matches = [p for p in self.protocols if predicate(self._tokensets[p], p)]
+        if len(matches) > 1:
+            with_variant = [p for p in matches if self.variant in self._tokensets[p]]
+            if with_variant:
+                matches = with_variant
+            elif self.variant is not None:
+                matches = [p for p in matches if self.variant not in self._tokensets[p]]
+        if len(matches) > 1:
+            plain = [p for p in matches
+                     if all(self._tokensets[p] < self._tokensets[q] for q in matches if q != p)]
+            if len(plain) == 1:
+                matches = plain
         if len(matches) == 1:
             return matches[0]
         if not matches:
