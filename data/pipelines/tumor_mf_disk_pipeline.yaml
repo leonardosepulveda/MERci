@@ -49,6 +49,7 @@ fluidics:
   use_adaptors: true            # adaptor-based fluidics, as tumor_epi
   include_final_cleave: false   # no cleave after the last imaging round
   first_hyb_no_cleave: false    # first hyb after the cells round is cleaved as usual
+  kilroy_variant: null          # "HC" = use the Kilroy config's "... HC" protocols where present
 
 dataorganization:
   # Same 13 rounds x 650/560 layout as lineage_tracing_merfish. With C3,
