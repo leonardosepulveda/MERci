@@ -2,7 +2,7 @@
 task: OptimizeIteration
 module: merlin.analysis.optimize
 parameters:
-  area_threshold: 4
+  area_threshold: 3
   fov_per_iteration: 50
   optimize_chromatic_correction: true
   distance_threshold: 0.65
