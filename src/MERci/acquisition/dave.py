@@ -47,7 +47,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 from xml.dom import minidom
@@ -1756,16 +1756,29 @@ def format_experiment_estimate(
     return "\n".join(lines)
 
 
-def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime) -> pd.DataFrame:
+def experiment_day(dt: datetime, day1: date) -> str:
+    """``"Day N"`` for *dt*, counting calendar days: *day1* (the date the
+    experiment starts) is Day 1, and each midnight after it starts the next
+    day. Lets the user see which day's buffers each hyb uses."""
+    return f"Day {(dt.date() - day1).days + 1}"
+
+
+def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime,
+                              day1: Optional[date] = None) -> pd.DataFrame:
     """
     Per-round fluidics/imaging breakdown as a dataframe, one row per phase,
     chained off ``start_time`` in run order -- the tabular counterpart of
     :func:`format_experiment_estimate`'s own "Per round:" text section
     (``dave_timing_accuracy.ipynb``'s block-by-block table uses this same
-    style). Columns: ``block``, ``kind`` ("fluidics"/"imaging"), ``start``,
-    ``end``, ``duration`` (the latter three pre-formatted via ``_fmt_dt``/
-    ``_fmt_duration``, ready to ``display()`` as-is).
+    style). Columns: ``block``, ``kind`` ("fluidics"/"imaging"), ``day``
+    (the block's start, see :func:`experiment_day`), ``start``, ``end``,
+    ``duration`` (the latter three pre-formatted via ``_fmt_dt``/
+    ``_fmt_duration``, ready to ``display()`` as-is). *day1* defaults to
+    ``start_time``'s date; pass the first recipe's date when concatenating
+    the tables of several recipes.
     """
+    if day1 is None:
+        day1 = start_time.date()
     rows: List[dict] = []
     for r, phases in _round_phases(est, start_time):
         # A "Hyb NN" label (r["hyb"] is not None) is a bare number needing a
@@ -1778,9 +1791,10 @@ def experiment_estimate_table(est: ExperimentEstimate, start_time: datetime) -> 
             fluidics_label = imaging_label = r["label"]
         for kind, dur, start, end in phases:
             rows.append({"block": fluidics_label if kind == "fluidics" else imaging_label,
-                         "kind": kind, "start": _fmt_dt(start), "end": _fmt_dt(end),
+                         "kind": kind, "day": experiment_day(start, day1),
+                         "start": _fmt_dt(start), "end": _fmt_dt(end),
                          "duration": _fmt_duration(dur)})
-    return pd.DataFrame(rows, columns=["block", "kind", "start", "end", "duration"])
+    return pd.DataFrame(rows, columns=["block", "kind", "day", "start", "end", "duration"])
 
 
 def _round_phases(est: ExperimentEstimate, start_time: Optional[datetime]):

@@ -25,6 +25,10 @@ those lines under a new version heading, bumps `version` in
   rounds z 1-25 um (1 um step), beads 488 at z 0, focus test 2 frames at
   z 10 um.
 
+- `day` column (Day 1, Day 2, ...: calendar day each block starts on) in
+  the Dave timing tables of 04_create_dave_config and dave_timing_accuracy,
+  via `dave.experiment_day`, to plan which buffers to prepare each day.
+
 - Beads at several z: `bead_z` in a pipeline.yaml round recipe (and
   `get_frame_table`) may be a list with one z per `bead_seq` entry, e.g.
   `bead_seq: [488, 488, 488]`, `bead_z: [-0.5, 0, 0.5]`, for ST2's focal
