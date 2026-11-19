@@ -1,0 +1,113 @@
+# Tumor, MERFISH only, spinning-disk confocal (ST2): combinatorial barcode
+# plus sequential RNA bits, no antibody rounds. Loaded by
+# MERci.acquisition.pipeline_config.load_pipeline_config. Per-experiment
+# values (thresholds, boundaries, sequential_genes.csv, ...) are set in the
+# notebooks, not here.
+
+id: tumor_mf_disk
+label: "Tumor MERFISH -- Spinning-disk confocal"
+analysis_backend: merlin   # after_imaging/create_submit_files/ uses create_merlin_files
+
+microscope: ST2            # no 750 nm channel
+objective: "60X"
+
+imaging:
+  file_type: ".zarr"
+  exposure_time: 0.15   # seconds; laser power comes from data/configs/power/, per microscope
+
+  cells_round:          # round 1: DAPI (segmentation) + beads
+    z_min: 0.25
+    z_max: 25
+    z_step: 0.25
+    bead_seq: [488]
+    bead_z: 0
+    color_seq: [405]
+    end_seq: [488]
+    end_z: 0
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  bits_round:           # every barcode/sequential round
+    z_min: 1
+    z_max: 25
+    z_step: 1
+    bead_seq: [488]
+    bead_z: 0
+    color_seq: [650, 560]
+    end_seq: [488]
+    end_z: 0
+    scan_mode: interleaved
+    z_return_mode: progressive
+    return_step: 5
+
+  focus_test_z: 10      # z (um above bead_z) of the focus-test sequence
+  focus_test_frames: 2  # focus-test movie length (405 + blank); 0 = focus check only
+  transit_n_blank: 2    # blank frames per transit FOV
+
+fluidics:
+  use_adaptors: true            # adaptor-based fluidics, as tumor_epi
+  include_final_cleave: false   # no cleave after the last imaging round
+  first_hyb_no_cleave: false    # first hyb after the cells round is cleaved as usual
+
+dataorganization:
+  # Same 13 rounds x 650/560 layout as lineage_tracing_merfish. With C3,
+  # bits 1-16 are the barcode, 17-26 the sequential genes.
+  round_bit_color_csv: configs/round_bit_color_map/lineage_tracing_merfish.csv   # bits index data/readouts.csv
+
+merlin:
+  project: bc     # "bc" | "lt" | "mf"
+  lib_name: C3    # same library as tumor_epi
+  # Sequential bits' gene names: C3v1_codebook_sequential.csv.
+  sequential_kind: sequential
+
+  analysis:
+    n_optimize_iterations: 10
+
+    # Full task menu (data/configs/merlin/analysis/tasks/), in the order the
+    # analysis YAML writes them.
+    tasks:
+      # Registration between rounds
+      fiducial_template:           false
+      fiducial_correlation_warp:   true
+      # Stitching
+      register_fov_neighbors:      true
+      global_align_least_squares:  true
+      global_align_simple:         false
+      # Registration QC (report only)
+      registration_diagnostics:    true
+      # Preprocessing
+      deconvolution_preprocess:    true
+      # Decoding
+      optimize_iteration:          true
+      decode:                      true
+      generate_adaptive_threshold: true
+      adaptive_filter_barcodes:    true
+      export_barcodes:             true
+      plot_performance:            true
+      slurm_report:                true
+      # Mosaic
+      create_ffc:                  true
+      generate_mosaic:             true
+      combine_mosaic_tiles:        true
+      # Segmentation
+      cellpose_segment_3d:         false
+      cellpose_eval_sam:           true    # GPU half of two-task CellPose; false = one GPU job per fov
+      cellpose_segment_sam:        true
+      clean_cell_boundaries:       true
+      combine_cleaned_boundaries:  true
+      refine_cell_databases:       true
+      export_cell_metadata:        true
+      # Barcode-to-cell assignment
+      partition_barcodes:          true
+      export_partitioned_barcodes: true
+      # Sequential signal per cell (create_merlin_files sets smfish_signal's
+      # channels from the imaged sequential bits)
+      smfish_signal:               true
+      sum_signal:                  true    # needs a segmentation task
+      export_sum_signals:          true
+
+    # {task: {param: value}}, merged over the task's own YAML.
+    overrides:
+      sum_signal:
+        channel_names: ["DAPI"]

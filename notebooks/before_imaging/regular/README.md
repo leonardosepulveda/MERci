@@ -2,7 +2,8 @@
 
 Pre-experiment notebooks shared by every pipeline **except** `multi_z`
 (variable-z-per-FOV, its own sequence -- see `../multi_z/README.md`):
-`tumor_epi`, `tumor_disk`, `lineage_tracing_merfish`, `lineage_tracing_lineage`.
+`tumor_epi`, `tumor_disk`, `tumor_mf_disk`, `lineage_tracing_merfish`,
+`lineage_tracing_lineage`.
 One notebook set instead of one copy per pipeline -- what used to differ
 between them (microscope, imaging recipe, fluidics, codebook/task menu or
 fishtank targets) now lives entirely in each pipeline's own

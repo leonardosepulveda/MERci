@@ -47,6 +47,7 @@ import yaml
 PIPELINES: Dict[str, str] = {
     "tumor_epi":                       "before_imaging/regular",
     "tumor_disk":                      "before_imaging/regular",
+    "tumor_mf_disk":                   "before_imaging/regular",
     "lineage_tracing_merfish":         "before_imaging/regular",
     "lineage_tracing_lineage":         "before_imaging/regular",
     "multi_z":                         "before_imaging/multi_z",

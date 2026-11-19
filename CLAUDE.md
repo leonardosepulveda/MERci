@@ -67,7 +67,7 @@ difference for the user to decide. (A carried-over
 segmentation.)
 
 **`before_imaging/regular/`** — one shared notebook set for every pipeline
-except `multi_z`: `tumor_epi`, `tumor_disk`, `lineage_tracing_merfish`,
+except `multi_z`: `tumor_epi`, `tumor_disk`, `tumor_mf_disk`, `lineage_tracing_merfish`,
 `lineage_tracing_lineage`. What used to differ between per-pipeline notebook
 copies (microscope, imaging recipe, fluidics, codebook/task menu or fishtank
 targets) now lives entirely in that pipeline's own
@@ -164,7 +164,7 @@ src/MERci/
 ```
 notebooks/
   before_imaging/    Pre-experiment, run in order. Two pipelines:
-                     regular/ (tumor_epi, tumor_disk, lineage_tracing_merfish,
+                     regular/ (tumor_epi, tumor_disk, tumor_mf_disk, lineage_tracing_merfish,
                      lineage_tracing_lineage -- one shared notebook set, see its own
                      README.md; its analysis-input steps are after_imaging/create_submit_files/),
                      multi_z/ (own 9-notebook sequence, see its own README.md)

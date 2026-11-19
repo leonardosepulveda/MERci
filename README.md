@@ -76,7 +76,7 @@ inputs (experiment_info, then the MERlin or fishtank files) are generated
 later by `after_imaging/create_submit_files/`.
 
 - `before_imaging/regular/`: the shared notebook set for `tumor_epi`,
-  `tumor_disk`, `lineage_tracing_merfish` and `lineage_tracing_lineage`.
+  `tumor_disk`, `tumor_mf_disk`, `lineage_tracing_merfish` and `lineage_tracing_lineage`.
   Each pipeline's settings live in `data/pipelines/<id>_pipeline.yaml`.
   See [`notebooks/before_imaging/regular/README.md`](notebooks/before_imaging/regular/README.md).
 
