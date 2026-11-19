@@ -40,6 +40,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Changed
 
+- MERlin template: `optimize_iteration.yaml` now writes `area_threshold: 3`
+  (was 4), matching `decode.yaml`'s `minimum_area: 3`. Since MERlin 6ed6f4e
+  both mean "spots of N px or more".
+
 - `before_imaging/regular/` notebooks renamed
   `02_create_boundary_from_mosaic` -> `02a_...` and
   `02_create_positions_from_boundaries` -> `02b_...`. Their cache and figures
