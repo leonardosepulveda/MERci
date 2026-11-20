@@ -19,6 +19,10 @@ those lines under a new version heading, bumps `version` in
 
 ### Added
 
+- 02b `TISSUE_PATH_MODE` parameter (`"legacy"` default, or `"union"`: one
+  shared grid and snake over all of a tissue's boundaries). Its plots now
+  draw a union boundary (MultiPolygon) instead of failing on `.exterior`.
+
 - ST2 Kilroy config `...-261112.xml` (adds "HC" adaptor-hyb/readout
   protocols and `Cleave Adaptors Test`). Dave protocol resolution now picks
   the plain name when a step has suffixed variants; pipeline.yaml
